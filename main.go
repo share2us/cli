@@ -33,7 +33,7 @@ import (
 	clicore "github.com/share2us/cli-core"
 	"github.com/share2us/cli-core/p2p"
 	"github.com/share2us/cli/tui"
-	localmcp "github.com/hassankhurram/share2us-mcp-local/mcp"
+	localmcp "github.com/share2us/mcp/mcp"
 	"golang.org/x/sys/unix"
 )
 

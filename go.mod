@@ -3,7 +3,7 @@ module github.com/share2us/cli
 go 1.25.0
 
 require (
-	github.com/hassankhurram/share2us-mcp-local v0.0.0
+	github.com/share2us/mcp v0.1.0
 	github.com/share2us/cli-core v0.2.1
 )
 
@@ -120,4 +120,3 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/hassankhurram/share2us-mcp-local => ../share2us-mcp-local
