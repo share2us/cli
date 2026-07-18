@@ -17,7 +17,18 @@ saved to ./rca.md
 
 ## Install
 
-Requires **Go 1.25+**.
+**One-liner (Linux / macOS)** — downloads the prebuilt binary to `~/.local/bin`,
+symlinks `s2u`, and adds it to your PATH:
+
+```sh
+curl -fsSL https://share2.us/install.sh | sh
+```
+
+The script ([`scripts/install.sh`](scripts/install.sh)) verifies a CRC32 checksum
+and falls back to GitHub Releases. Tune it with env vars: `SHARE2US_INSTALL_DIR`
+(default `~/.local/bin`), `SHARE2US_VERSION` (default `latest`).
+
+**From source** (requires **Go 1.25+**):
 
 ```sh
 git clone https://github.com/share2us/cli
@@ -29,7 +40,17 @@ sudo mv s2u /usr/local/bin/        # or anywhere on your PATH
 `go install github.com/share2us/cli@latest` also works, but it installs the
 binary as `cli` — rename it to `s2u` (or `share2us`) afterwards.
 
-Once installed, `s2u update` keeps it current from prebuilt releases.
+Once installed, **`s2u update`** keeps it current from prebuilt releases.
+
+### Uninstall
+
+```sh
+curl -fsSL https://share2.us/uninstall.sh | sh
+```
+
+[`scripts/uninstall.sh`](scripts/uninstall.sh) removes the binary + `s2u` symlink,
+undoes the PATH edit, and deletes your config + credentials. Keep your config with
+`SHARE2US_KEEP_CONFIG=1 sh` (append to the pipe).
 
 ## Quick start
 
@@ -104,19 +125,28 @@ Run `s2u help` for the complete, always-current command reference.
 
 ## Configuration
 
-Set standing defaults for safe upload options (explicit flags always override):
+Config and credentials live under **`~/.config/share2us/`** (`config.json` +
+`credentials.json`; override the directory with `XDG_CONFIG_HOME`). Manage it with
+`s2u config`:
 
 ```sh
-s2u config set-default expires 30d
-s2u config set-default encrypt true
-s2u config defaults                # show current defaults and where each came from
+s2u config show                    # current base URL, API/share hosts, and their source
+s2u config defaults                # standing upload defaults and where each came from
+s2u config set-base-url example.com   # point at a self-hosted / different environment
 ```
 
-Point the CLI at a different environment (e.g. self-hosted or staging):
+**Standing upload defaults** — apply automatically when you omit the flag; an
+explicit flag always wins (use `--no-encrypt` / `--scan` to override a `true` default):
 
 ```sh
-s2u config set-base-url example.com
+s2u config set-default expires 30d      # keys: expires, reshare, encrypt, max-views,
+s2u config set-default encrypt true      #       no-scan, allow-domains, deny-domains
+s2u config unset-default encrypt         # clear one (falls back to the built-in default)
 ```
+
+Only *safe* options are defaultable. Footguns — `--password`, `--one-time`,
+recipients, visibility, `--allow-secrets`, `--device`/`--contact` — are deliberately
+per-command and can't be set as a default.
 
 ### Environment variables
 
