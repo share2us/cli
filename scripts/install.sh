@@ -140,7 +140,9 @@ tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT INT TERM
 
 log "Downloading Share2Us CLI for $os/$arch..."
-download_verified "$tmpdir/$archive" "$tmpdir/$archive.crc32" "$hosted_url" "$github_url" || fail "could not download and verify $archive"
+# GitHub Releases is the source of truth (built by CI for every platform); the
+# hosted mirror on share2.us/downloads is a fallback.
+download_verified "$tmpdir/$archive" "$tmpdir/$archive.crc32" "$github_url" "$hosted_url" || fail "could not download and verify $archive"
 
 tar -xzf "$tmpdir/$archive" -C "$tmpdir"
 if [ -f "$tmpdir/$binary_name" ]; then
