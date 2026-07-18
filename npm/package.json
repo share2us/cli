@@ -1,6 +1,7 @@
 {
   "name": "@share2us/cli",
   "version": "0.1.0",
+  "share2usCliVersion": "latest",
   "description": "Share2Us CLI (s2u) — share files and text from your terminal, browser, or AI agent via one opaque, expiring link.",
   "keywords": ["share2us", "s2u", "file-sharing", "share", "cli", "p2p", "qr", "mcp", "e2e"],
   "homepage": "https://share2.us",

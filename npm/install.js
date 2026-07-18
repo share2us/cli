@@ -11,7 +11,18 @@ const https = require("https");
 const { execFileSync } = require("child_process");
 
 const REPO = process.env.SHARE2US_INSTALL_REPO || "share2us/cli";
-const VERSION = process.env.SHARE2US_VERSION || "latest";
+
+// The release this npm version maps to. CI pins `share2usCliVersion` in
+// package.json to the matching release tag at publish time, so a given npm
+// version always installs the same binary. Falls back to the latest release.
+function pinnedVersion() {
+  try {
+    return require("./package.json").share2usCliVersion || "latest";
+  } catch (e) {
+    return "latest";
+  }
+}
+const VERSION = process.env.SHARE2US_VERSION || pinnedVersion();
 
 function fail(msg) {
   console.error("share2us install: " + msg);
