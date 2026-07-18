@@ -1,0 +1,31 @@
+{
+  "name": "@share2us/cli",
+  "version": "0.1.0",
+  "description": "Share2Us CLI (s2u) — share files and text from your terminal, browser, or AI agent via one opaque, expiring link.",
+  "keywords": ["share2us", "s2u", "file-sharing", "share", "cli", "p2p", "qr", "mcp", "e2e"],
+  "homepage": "https://share2.us",
+  "bugs": "https://github.com/share2us/cli/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/share2us/cli.git",
+    "directory": "npm"
+  },
+  "license": "MIT",
+  "author": "Share2Us",
+  "bin": {
+    "s2u": "bin/s2u.js",
+    "share2us": "bin/s2u.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin/s2u.js",
+    "install.js"
+  ],
+  "os": ["linux", "darwin"],
+  "cpu": ["x64", "arm64"],
+  "engines": {
+    "node": ">=16"
+  }
+}
