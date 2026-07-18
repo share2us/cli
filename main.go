@@ -2981,16 +2981,16 @@ func readPasswordNoEcho(prompt string, stderr io.Writer) (string, error) {
 		fmt.Fprint(stderr, prompt)
 	}
 	fd := int(syscall.Stdin)
-	original, err := unix.IoctlGetTermios(fd, unix.TCGETS)
+	original, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
 	if err != nil {
 		return "", err
 	}
 	noEcho := *original
 	noEcho.Lflag &^= unix.ECHO
-	if err := unix.IoctlSetTermios(fd, unix.TCSETS, &noEcho); err != nil {
+	if err := unix.IoctlSetTermios(fd, ioctlWriteTermios, &noEcho); err != nil {
 		return "", err
 	}
-	defer unix.IoctlSetTermios(fd, unix.TCSETS, original)
+	defer unix.IoctlSetTermios(fd, ioctlWriteTermios, original)
 
 	var builder strings.Builder
 	buffer := make([]byte, 1)
