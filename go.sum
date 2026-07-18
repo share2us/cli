@@ -256,8 +256,8 @@ github.com/schollz/pake/v3 v3.1.1 h1:lyoU5uNQ3thfjEzrahgxWWBm6+pbI1F2KAZ3gs6LIV8
 github.com/schollz/pake/v3 v3.1.1/go.mod h1:420+m3AakXcS0n7Uwc7eRs2CosQ2YfE/vKcIkilvqZc=
 github.com/sethvargo/go-diceware v0.5.0 h1:exrQ7GpaBo00GqRVM1N8ChXSsi3oS7tjQiIehsD+yR0=
 github.com/sethvargo/go-diceware v0.5.0/go.mod h1:Lg1SyPS7yQO6BBgTN5r4f2MUDkqGfLWsOjHPY0kA8iw=
-github.com/share2us/cli-core v0.2.0 h1:hWu+XVoFxgps1hq4iRqb8khh98b23tc7CxF3Y94f2Xs=
-github.com/share2us/cli-core v0.2.0/go.mod h1:sgi4qWmvrgLG7sUqUxMNRdrT2uoeB8kiC5UNC/iUvBE=
+github.com/share2us/cli-core v0.2.1 h1:ebpm2pSlSBELnqEq8jGAjkaXjU+WBPxV677mV1MWpjw=
+github.com/share2us/cli-core v0.2.1/go.mod h1:sgi4qWmvrgLG7sUqUxMNRdrT2uoeB8kiC5UNC/iUvBE=
 github.com/shopspring/decimal v1.4.0 h1:bxl37RwXBklmTi0C79JfXCEBD1cqqHt0bbgBAGFp81k=
 github.com/shopspring/decimal v1.4.0/go.mod h1:gawqmDU56v4yIKSwfBSFip1HdCCXN8/+DMd9qYNcwME=
 github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e h1:MRM5ITcdelLK2j1vwZ3Je0FKVCfqOLp5zO6trqMLYs0=
