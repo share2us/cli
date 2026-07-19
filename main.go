@@ -1426,29 +1426,11 @@ func (a app) upload(ctx context.Context, args []string) int {
 	}
 	var teammateDevices []clicore.TeammateDevice
 	teammateMode := ""
-	explicitTeammate := opts.teammate != ""
-	// Smart routing: a single --email/--to recipient who is a teammate (registered,
-	// accepting, with a key-registered device) is delivered E2E to their device(s);
-	// otherwise it stays a recipient-restricted email-share link.
-	if !explicitTeammate && opts.device == "" && len(opts.recipients) == 1 &&
-		!opts.encrypt && !opts.live && !opts.watch {
-		list, err := client.TeammateDevices(ctx, opts.recipients[0])
-		if err != nil {
-			var apiErr *clicore.APIError
-			if errors.As(err, &apiErr) && apiErr.Code == "recipient_not_accepting" {
-				// recipient EXPLICITLY blocked this sender - honor it, don't downgrade to a link
-				fmt.Fprintf(a.stderr, "%s is not accepting files from you.\n", opts.recipients[0])
-				return 1
-			}
-			// other errors (sender not entitled, transient) -> fall back to email-share
-		} else if list.Code != "recipient_not_registered" && len(list.Devices) > 0 {
-			opts.teammate = opts.recipients[0]
-			opts.recipients = nil
-			teammateDevices = list.Devices
-			teammateMode = list.Mode
-		}
-		// not-registered / no-devices -> keep as email-share link
-	}
+	// --email / --to always creates a recipient-restricted LINK that opens in the
+	// browser after the recipient verifies their identity. Device end-to-end
+	// delivery is opt-in only, via --contact or --device, so a plain --email is
+	// never silently upgraded to a device-sealed share whose emailed link would
+	// 404 in a browser (the recipient can't open a device-E2E share on the web).
 	if opts.teammate != "" {
 		if opts.device != "" {
 			fmt.Fprintln(a.stderr, "--contact and --device cannot be combined")
