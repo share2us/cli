@@ -797,43 +797,39 @@ func TestUploadTeammateFansOutToDevices(t *testing.T) {
 	}
 }
 
-func TestEmailRoutesToTeammateWhenEligible(t *testing.T) {
-	key1, err := clicore.NewDeviceKeyPair()
-	if err != nil {
-		t.Fatalf("keypair: %v", err)
-	}
+func TestEmailAlwaysCreatesLinkNeverTeammate(t *testing.T) {
+	// A plain --email is a recipient-restricted LINK even when the recipient is a
+	// registered contact with a device. Device end-to-end is opt-in (--contact /
+	// --device) only, so --email must not probe contact devices or route to E2E.
 	file := writeTempFile(t, "doc.pdf", "%PDF-1.4 hello")
 	var sawCreate bool
 	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/contacts/devices":
-			writeTestJSON(w, map[string]any{
-				"mode":    "auto",
-				"devices": []map[string]any{{"device_id": "d1", "public_key": key1.PublicKey}},
-			})
+			t.Fatalf("--email must not probe contact devices; got %s", r.URL.Path)
 		case "/v1/uploads":
 			sawCreate = true
 			var req clicore.UploadCreateRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode: %v", err)
 			}
-			if req.RecipientEmail != "alice@corp.com" || len(req.Targets) != 1 {
-				t.Fatalf("expected teammate E2E routing, got recipient=%q targets=%+v recipients=%+v", req.RecipientEmail, req.Targets, req.Recipients)
+			if req.RecipientEmail != "" || len(req.Targets) != 0 {
+				t.Fatalf("--email must not route to teammate: recipient=%q targets=%+v", req.RecipientEmail, req.Targets)
 			}
-			if len(req.Recipients) != 0 {
-				t.Fatalf("recipients should be empty when routed to teammate: %+v", req.Recipients)
+			if len(req.Recipients) != 1 || req.Recipients[0] != "alice@corp.com" {
+				t.Fatalf("email-share recipients = %+v", req.Recipients)
 			}
 			writeTestJSON(w, map[string]any{
 				"upload":            map[string]any{"url": "https://upload.example.test/put", "method": "PUT", "headers": map[string]string{"X-Test": "yes"}},
-				"share":             map[string]any{"public_id": "pub-e", "targeted": true},
-				"upload_session_id": "up-e",
+				"share":             map[string]any{"public_id": "pub-l", "link": "https://s.example.test/pub-l"},
+				"upload_session_id": "up-l",
 				"expires_at":        "2026-07-03T00:00:00Z",
 			})
 		case "/put":
 			io.ReadAll(r.Body)
 			w.WriteHeader(http.StatusOK)
-		case "/v1/uploads/up-e/complete":
-			writeTestJSON(w, map[string]string{"public_id": "pub-e", "status": "ready", "expires_at": "2026-07-03T00:00:00Z"})
+		case "/v1/uploads/up-l/complete":
+			writeTestJSON(w, map[string]string{"public_id": "pub-l", "status": "ready", "expires_at": "2026-07-03T00:00:00Z"})
 		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
@@ -847,8 +843,8 @@ func TestEmailRoutesToTeammateWhenEligible(t *testing.T) {
 	if !sawCreate {
 		t.Fatal("create not sent")
 	}
-	if !strings.Contains(stdout.String(), "Sent doc.pdf to alice@corp.com") {
-		t.Fatalf("stdout missing teammate sent message:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), "Uploaded successfully") {
+		t.Fatalf("stdout missing link-share message:\n%s", stdout.String())
 	}
 }
 
@@ -900,23 +896,48 @@ func TestEmailFallsBackToLinkShareWhenNotTeammate(t *testing.T) {
 	}
 }
 
-func TestEmailBlockedRecipientStopsSend(t *testing.T) {
+func TestEmailToBlockingRecipientStillCreatesLink(t *testing.T) {
+	// A recipient's inbound policy governs device end-to-end sends, not
+	// recipient-restricted links. So --email to someone who blocks device sends
+	// still produces a link (and never probes their devices).
 	file := writeTempFile(t, "doc.pdf", "%PDF-1.4 hello")
+	var sawCreate bool
 	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/contacts/devices" {
-			t.Fatalf("blocked recipient must not proceed to upload; got %s", r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/contacts/devices":
+			t.Fatalf("--email must not probe contact devices; got %s", r.URL.Path)
+		case "/v1/uploads":
+			sawCreate = true
+			var req clicore.UploadCreateRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(req.Recipients) != 1 || req.Recipients[0] != "blocked@corp.com" {
+				t.Fatalf("email-share recipients = %+v", req.Recipients)
+			}
+			writeTestJSON(w, map[string]any{
+				"upload":            map[string]any{"url": "https://upload.example.test/put", "method": "PUT", "headers": map[string]string{"X-Test": "yes"}},
+				"share":             map[string]any{"public_id": "pub-l", "link": "https://s.example.test/pub-l"},
+				"upload_session_id": "up-l",
+				"expires_at":        "2026-07-03T00:00:00Z",
+			})
+		case "/put":
+			io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusOK)
+		case "/v1/uploads/up-l/complete":
+			writeTestJSON(w, map[string]string{"public_id": "pub-l", "status": "ready", "expires_at": "2026-07-03T00:00:00Z"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
-		w.WriteHeader(http.StatusForbidden)
-		writeTestJSON(w, map[string]any{"error": map[string]string{"code": "recipient_not_accepting", "message": "blocked"}})
 	}))
 	withCredential(t, "https://api.example.test")
 	var stdout, stderr bytes.Buffer
 	code := run([]string{file, "--email", "blocked@corp.com", "--no-scan"}, &stdout, &stderr)
-	if code == 0 {
-		t.Fatalf("want non-zero, got 0")
+	if code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "not accepting files from you") {
-		t.Fatalf("stderr missing block message:\n%s", stderr.String())
+	if !sawCreate {
+		t.Fatal("create not sent")
 	}
 }
 
