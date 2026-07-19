@@ -456,6 +456,15 @@ func (a app) lanServe(ctx context.Context, args []string) int {
 		return 1
 	}
 
+	// `s2u --serve` publishes a directory over unauthenticated HTTP on the LAN,
+	// so refuse to expose the home directory or known credential stores (~/.ssh,
+	// ~/.aws, ~/.config, /etc, ...) even if the user points --serve there by
+	// mistake. Serving a specific project subfolder is still fine.
+	if serr := guardServePath(abs); serr != nil {
+		fmt.Fprintln(a.stderr, serr)
+		return 1
+	}
+
 	var handler http.Handler
 	if info.IsDir() {
 		// http.FileServer cleans paths and rejects traversal; index.html is
@@ -508,6 +517,69 @@ func (a app) lanServe(ctx context.Context, args []string) int {
 		}
 		return 0
 	}
+}
+
+// guardServePath refuses to serve a path that would expose secrets over the
+// LAN: the home directory itself (or any ancestor of it, e.g. / or /home), and
+// anything at or under a known credential store. Symlinks are resolved first so
+// a link into a sensitive location cannot slip past. It intentionally allows a
+// normal subfolder of home (e.g. ~/Downloads, ~/projects/site).
+func guardServePath(abs string) error {
+	real := filepath.Clean(abs)
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		real = filepath.Clean(resolved)
+	}
+
+	home := ""
+	if h, err := os.UserHomeDir(); err == nil && h != "" {
+		home = filepath.Clean(h)
+	}
+
+	// Serving home (or a directory that contains home, like / or /home) would
+	// expose every dotfile and credential store under it.
+	if home != "" && pathAtOrUnder(home, real) {
+		return fmt.Errorf("refusing to serve %s: it is (or contains) your home directory, which holds credentials and dotfiles; point --serve at a specific subfolder instead", real)
+	}
+
+	for _, s := range sensitiveServeRoots(home) {
+		if pathAtOrUnder(real, s) {
+			return fmt.Errorf("refusing to serve %s: it is inside a sensitive location (%s); s2u will not expose credentials over the network", real, s)
+		}
+	}
+	return nil
+}
+
+// sensitiveServeRoots lists credential stores and system directories that must
+// never be published. Home-relative entries are skipped when home is unknown.
+func sensitiveServeRoots(home string) []string {
+	var roots []string
+	if home != "" {
+		for _, rel := range []string{
+			".ssh", ".aws", ".gnupg", ".config", ".kube", ".docker", ".azure",
+			".password-store", ".mozilla", ".local/share/keyrings",
+			".netrc", ".git-credentials", ".pgpass", ".npmrc",
+		} {
+			roots = append(roots, filepath.Join(home, rel))
+		}
+	}
+	for _, sys := range []string{"/etc", "/root", "/var", "/proc", "/sys", "/dev", "/boot"} {
+		roots = append(roots, sys)
+	}
+	return roots
+}
+
+// pathAtOrUnder reports whether path is base or a descendant of base. Both are
+// expected to be cleaned absolute paths; the separator check stops /etc from
+// matching /etchings.
+func pathAtOrUnder(path, base string) bool {
+	if path == base {
+		return true
+	}
+	sep := string(filepath.Separator)
+	if base == sep { // filesystem root: every absolute path is under it
+		return strings.HasPrefix(path, sep)
+	}
+	return strings.HasPrefix(path, base+sep)
 }
 
 func (a app) printServeBanner(abs string, isDir bool, bind string, port int, qr bool) {
