@@ -1265,14 +1265,21 @@ func replaceExecutable(target, source string) error {
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(filepath.Dir(target), "."+filepath.Base(target)+".new")
 	in, err := os.Open(source)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm()|0o111)
+	// Stage via a random-named O_CREATE|O_EXCL file (os.CreateTemp) so a symlink
+	// pre-planted at a predictable ".<name>.new" path cannot redirect the write.
+	out, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".new-*")
 	if err != nil {
+		return err
+	}
+	tmp := out.Name()
+	if err := out.Chmod(info.Mode().Perm() | 0o111); err != nil {
+		out.Close()
+		os.Remove(tmp)
 		return err
 	}
 	if _, err := io.Copy(out, in); err != nil {
@@ -4150,11 +4157,14 @@ func receiveInboxOnce(ctx context.Context, client *clicore.Client, credential cl
 		if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
 			return count, err
 		}
-		tmp := outPath + ".tmp"
-		out, err := os.OpenFile(tmp, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+		// Stage via a random-named O_CREATE|O_EXCL file (os.CreateTemp, mode 0600)
+		// so a symlink pre-planted at the predictable ".tmp" path cannot redirect
+		// the decrypted write.
+		out, err := os.CreateTemp(filepath.Dir(outPath), "."+filepath.Base(outPath)+".tmp-*")
 		if err != nil {
 			return count, err
 		}
+		tmp := out.Name()
 		decryptErr := clicore.DecryptStream(out, bytes.NewReader(encrypted.Bytes()), contentKey)
 		closeErr := out.Close()
 		if decryptErr != nil {
