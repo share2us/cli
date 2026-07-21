@@ -6,7 +6,10 @@ const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 
-const bin = path.join(__dirname, "share2us-bin");
+const bin = path.join(
+  __dirname,
+  process.platform === "win32" ? "share2us-bin.exe" : "share2us-bin"
+);
 
 if (!fs.existsSync(bin)) {
   console.error("share2us: the CLI binary is missing (install scripts may have been skipped).");

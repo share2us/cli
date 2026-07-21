@@ -30,7 +30,7 @@ function fail(msg) {
 }
 
 function platform() {
-  const osName = { linux: "linux", darwin: "darwin" }[process.platform];
+  const osName = { linux: "linux", darwin: "darwin", win32: "windows" }[process.platform];
   const arch = { x64: "amd64", arm64: "arm64" }[process.arch];
   if (!osName || !arch) {
     fail(
@@ -38,7 +38,15 @@ function platform() {
         "Build from source (https://github.com/share2us/cli) or use https://share2.us/install.sh"
     );
   }
-  return { archive: `share2us_${osName}_${arch}.tar.gz` };
+  // Windows releases ship share2us.exe in a .zip; every other platform ships a
+  // bare binary in a .tar.gz.
+  const isWindows = osName === "windows";
+  return {
+    archive: `share2us_${osName}_${arch}.${isWindows ? "zip" : "tar.gz"}`,
+    binaryInArchive: isWindows ? "share2us.exe" : "share2us",
+    binaryOnDisk: isWindows ? "share2us-bin.exe" : "share2us-bin",
+    isWindows,
+  };
 }
 
 function assetURL(archive) {
@@ -71,38 +79,68 @@ function download(url, dest, redirects = 0) {
   });
 }
 
+// Integrity check. Unix mirrors install.sh (system cksum + .crc32 sidecar);
+// Windows has no cksum, so it verifies the .sha256 sidecar with Node's crypto.
+async function verifyIntegrity(archivePath, base, isWindows) {
+  try {
+    if (isWindows) {
+      const sidecar = archivePath + ".sha256";
+      await download(base + ".sha256", sidecar);
+      const crypto = require("crypto");
+      const got = crypto
+        .createHash("sha256")
+        .update(fs.readFileSync(archivePath))
+        .digest("hex");
+      const want = fs.readFileSync(sidecar, "utf8").trim().split(/\s+/)[0];
+      if (got.toLowerCase() !== String(want).toLowerCase()) {
+        fail(`SHA-256 check failed for ${path.basename(archivePath)}`);
+      }
+    } else {
+      const crc = archivePath + ".crc32";
+      await download(base + ".crc32", crc);
+      const got = execFileSync("cksum", [archivePath]).toString().trim().split(/\s+/);
+      const want = fs.readFileSync(crc, "utf8").trim().split(/\s+/);
+      if (got[0] !== want[0] || got[1] !== want[1]) {
+        fail(`CRC check failed for ${path.basename(archivePath)}`);
+      }
+    }
+  } catch (e) {
+    if (String(e && e.message).includes("check failed")) throw e;
+    // sidecar/tool unavailable: HTTPS already protects the transfer.
+  }
+}
+
 async function main() {
-  const { archive } = platform();
+  const { archive, binaryInArchive, binaryOnDisk, isWindows } = platform();
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "s2u-install-"));
-  const tgz = path.join(tmp, archive);
-  const crc = tgz + ".crc32";
+  const archivePath = path.join(tmp, archive);
   const base = assetURL(archive);
 
   console.log(`share2us: downloading ${archive} (${VERSION})...`);
-  await download(base, tgz);
+  await download(base, archivePath);
 
-  // Integrity: system cksum against the .crc32 sidecar (same as install.sh).
-  try {
-    await download(base + ".crc32", crc);
-    const got = execFileSync("cksum", [tgz]).toString().trim().split(/\s+/);
-    const want = fs.readFileSync(crc, "utf8").trim().split(/\s+/);
-    if (got[0] !== want[0] || got[1] !== want[1]) {
-      fail(`CRC check failed for ${archive}`);
-    }
-  } catch (e) {
-    if (String(e && e.message).includes("CRC check failed")) throw e;
-    // sidecar/cksum unavailable: HTTPS already protects the transfer.
+  await verifyIntegrity(archivePath, base, isWindows);
+
+  // Extract the binary and place it beside the shim. Unix uses system tar on
+  // the .tar.gz; Windows uses PowerShell's Expand-Archive on the .zip (always
+  // present, unlike a modern bsdtar).
+  if (isWindows) {
+    execFileSync("powershell", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `Expand-Archive -Force -LiteralPath '${archivePath}' -DestinationPath '${tmp}'`,
+    ]);
+  } else {
+    execFileSync("tar", ["-xf", archivePath, "-C", tmp]);
   }
-
-  // Extract the `share2us` binary and place it beside the shim.
-  execFileSync("tar", ["-xzf", tgz, "-C", tmp]);
-  const src = path.join(tmp, "share2us");
-  if (!fs.existsSync(src)) fail("archive did not contain the share2us binary");
+  const src = path.join(tmp, binaryInArchive);
+  if (!fs.existsSync(src)) fail(`archive did not contain ${binaryInArchive}`);
   const binDir = path.join(__dirname, "bin");
   fs.mkdirSync(binDir, { recursive: true });
-  const out = path.join(binDir, "share2us-bin");
+  const out = path.join(binDir, binaryOnDisk);
   fs.copyFileSync(src, out);
-  fs.chmodSync(out, 0o755);
+  if (!isWindows) fs.chmodSync(out, 0o755);
   fs.rmSync(tmp, { recursive: true, force: true });
 
   console.log("share2us: installed. Run `s2u login` to get started.");

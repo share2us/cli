@@ -38,15 +38,28 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           mkdir -p dist
           export CGO_ENABLED=0
-          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64; do
+          for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os="${platform%/*}"; arch="${platform#*/}"
             echo "==> building $os/$arch"
+            # Windows ships share2us.exe in a .zip; everything else a bare
+            # binary in a .tar.gz.
+            if [ "$os" = windows ]; then bin=share2us.exe; else bin=share2us; fi
             GOOS="$os" GOARCH="$arch" go build -trimpath \
               -ldflags "-s -w -X github.com/share2us/cli-core.BuildVersion=$VERSION" \
-              -o dist/share2us .
-            tar -C dist -czf "dist/share2us_${os}_${arch}.tar.gz" share2us
-            rm -f dist/share2us
-            ( cd dist && cksum "share2us_${os}_${arch}.tar.gz" > "share2us_${os}_${arch}.tar.gz.crc32" )
+              -o "dist/$bin" .
+            if [ "$os" = windows ]; then
+              archive="share2us_${os}_${arch}.zip"
+              ( cd dist && zip -q -X "$archive" "$bin" )
+            else
+              archive="share2us_${os}_${arch}.tar.gz"
+              tar -C dist -czf "dist/$archive" "$bin"
+            fi
+            rm -f "dist/$bin"
+            # crc32 sidecar for install.sh and the `s2u update` manifest;
+            # sha256 for install.ps1 (Windows has no cksum, but has Get-FileHash).
+            ( cd dist \
+              && cksum "$archive" > "$archive.crc32" \
+              && sha256sum "$archive" | awk '{print $1}' > "$archive.sha256" )
           done
           ls -la dist
 
@@ -55,7 +68,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "v${VERSION}" dist/*.tar.gz dist/*.crc32 \
+          gh release create "v${VERSION}" dist/*.tar.gz dist/*.zip dist/*.crc32 dist/*.sha256 \
             --title "Share2Us CLI ${VERSION}" \
             --notes "Automated build from ${GITHUB_SHA}. Install: \`curl -fsSL https://share2.us/install.sh | sh\`" \
             --latest

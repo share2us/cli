@@ -12,8 +12,8 @@ transfers with no account and no cloud.
 npm install -g @share2us/cli
 ```
 
-This downloads the prebuilt binary for your platform (linux/macOS, x64/arm64) from
-[GitHub Releases](https://github.com/share2us/cli/releases). Then:
+This downloads the prebuilt binary for your platform (Linux, macOS, and Windows;
+x64/arm64) from [GitHub Releases](https://github.com/share2us/cli/releases). Then:
 
 ```sh
 s2u login
@@ -22,7 +22,9 @@ s2u get s.share2.us/7Kf9aQ2m
 s2u help              # full command reference
 ```
 
-Prefer a script installer instead? `curl -fsSL https://share2.us/install.sh | sh`
+Prefer a script installer instead?
+- Linux / macOS: `curl -fsSL https://share2.us/install.sh | sh`
+- Windows (PowerShell): `irm https://share2.us/install.ps1 | iex`
 
 ## Notes
 

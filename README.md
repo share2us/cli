@@ -28,6 +28,17 @@ The script ([`scripts/install.sh`](scripts/install.sh)) verifies a CRC32 checksu
 and falls back to GitHub Releases. Tune it with env vars: `SHARE2US_INSTALL_DIR`
 (default `~/.local/bin`), `SHARE2US_VERSION` (default `latest`).
 
+**One-liner (Windows, PowerShell)** — downloads `share2us.exe`, installs `s2u` +
+`share2us` under `%LOCALAPPDATA%\Share2Us\bin`, and adds it to your PATH:
+
+```powershell
+irm https://share2.us/install.ps1 | iex
+```
+
+The script ([`scripts/install.ps1`](scripts/install.ps1)) verifies a SHA-256
+checksum and falls back to GitHub Releases. Tune it with the same env vars
+(`SHARE2US_INSTALL_DIR`, `SHARE2US_VERSION`).
+
 **From source** (requires **Go 1.25+**):
 
 ```sh
