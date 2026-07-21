@@ -1732,7 +1732,7 @@ func (a app) upload(ctx context.Context, args []string) int {
 		if opts.encrypt {
 			fmt.Fprintln(a.stdout, "Encryption key is only in the URL fragment and was never sent to the server.")
 		}
-		fmt.Fprintf(a.stdout, "Expires: %s\n", expiresAt)
+		fmt.Fprintf(a.stdout, "Expires: %s\n", expiryDisplay(expiresAt))
 		if len(opts.recipients) > 0 {
 			fmt.Fprintf(a.stdout, "Shared with %d recipient(s). They can only open it after signing in as that email - the link is safe to send directly.\n", len(opts.recipients))
 			if created.EmailSharesRemaining != nil {
@@ -1949,6 +1949,15 @@ func resolveAllowReshare(opts uploadOptions) *bool {
 		return cfg.ResolvedReshareDefault() // Defaults.Reshare, else legacy Reshare (O-C1)
 	}
 	return nil
+}
+
+// expiryDisplay renders a share's expiry for humans: "Never" for a kept
+// (no-expiry) share, whose API expires_at is null/empty.
+func expiryDisplay(expiresAt string) string {
+	if strings.TrimSpace(expiresAt) == "" {
+		return "Never"
+	}
+	return expiresAt
 }
 
 // resolveDefaultExpiry picks the standing expiry: env SHARE2US_DEFAULT_EXPIRY wins,
@@ -3038,7 +3047,7 @@ func (a app) list(ctx context.Context, args []string) int {
 	}
 	fmt.Fprintf(a.stdout, "%-3s %-18s %-24s %-10s %10s %-11s %-20s %-18s %-6s %-4s %-34s\n", "#", "PUBLIC_ID", "NAME", "STATUS", "SIZE", "VIEWS", "EXPIRES", "ORIGIN", "CACHE", "LIVE", "PATH")
 	for _, row := range rows {
-		fmt.Fprintf(a.stdout, "%-3d %-18s %-24s %-10s %10d %-11s %-20s %-18s %-6s %-4s %-34s\n", row.Serial, truncate(row.PublicID, 18), truncate(row.FileName, 24), shareStatus(row.Share), row.SizeBytes, viewsUsage(row.Share), row.ExpiresAt, truncate(row.OriginDevice, 18), row.Availability, liveIndicator(row.LiveUpdate), truncateLeft(row.Path, 34))
+		fmt.Fprintf(a.stdout, "%-3d %-18s %-24s %-10s %10d %-11s %-20s %-18s %-6s %-4s %-34s\n", row.Serial, truncate(row.PublicID, 18), truncate(row.FileName, 24), shareStatus(row.Share), row.SizeBytes, viewsUsage(row.Share), expiryDisplay(row.ExpiresAt), truncate(row.OriginDevice, 18), row.Availability, liveIndicator(row.LiveUpdate), truncateLeft(row.Path, 34))
 	}
 	return 0
 }
