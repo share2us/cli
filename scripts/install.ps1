@@ -9,6 +9,11 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Windows PowerShell 5.1 on older builds can default to TLS 1.0/1.1; GitHub and
+# share2.us require TLS 1.2+. Add it without dropping anything already enabled.
+[Net.ServicePointManager]::SecurityProtocol =
+  [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
 $Repo       = if ($env:SHARE2US_INSTALL_REPO)     { $env:SHARE2US_INSTALL_REPO }     else { 'share2us/cli' }
 $Version    = if ($env:SHARE2US_VERSION)          { $env:SHARE2US_VERSION }          else { 'latest' }
 $BaseUrl    = if ($env:SHARE2US_INSTALL_BASE_URL) { $env:SHARE2US_INSTALL_BASE_URL }  else { 'https://share2.us' }
@@ -99,7 +104,7 @@ if (-not $onPath) {
 }
 
 Log ""
-Log "Installed the Share2Us CLI to $InstallDir:"
+Log "Installed the Share2Us CLI to ${InstallDir}:"
 Log "  s2u          <- short command (use this)"
 Log "  share2us     (same tool, long name)"
 if (-not $onPath) {
