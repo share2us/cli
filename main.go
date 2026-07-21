@@ -1369,7 +1369,17 @@ func (a app) upload(ctx context.Context, args []string) int {
 	if fileName == "" {
 		fileName = filepath.Base(path)
 	}
-	apiExpiry, err := clicore.DurationForAPI(opts.expires)
+	expiresInput := opts.expires
+	if opts.keep {
+		// --keep wins; reject an explicit finite --expires to avoid ambiguity.
+		if opts.expiresSet {
+			if _, ne, _ := clicore.ExpiryForAPI(opts.expires); !ne {
+				return a.fail("parse expiry", errors.New("use --keep or a finite --expires, not both"))
+			}
+		}
+		expiresInput = "none"
+	}
+	apiExpiry, noExpiry, err := clicore.ExpiryForAPI(expiresInput)
 	if err != nil {
 		return a.fail("parse expiry", err)
 	}
@@ -1562,6 +1572,7 @@ func (a app) upload(ctx context.Context, args []string) int {
 		SizeBytes:   uint64(uploadSize),
 		ContentType: contentType,
 		ExpiresIn:   apiExpiry,
+		NoExpiry:    noExpiry,
 		SHA256:      sum,
 		SourceRef:   sourceRef,
 		New:         opts.newShare,
@@ -1739,6 +1750,8 @@ func (a app) upload(ctx context.Context, args []string) int {
 type uploadOptions struct {
 	path           string
 	expires        string
+	expiresSet     bool
+	keep           bool
 	name           string
 	password       string
 	promptPassword bool
@@ -1796,8 +1809,13 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 				return uploadOptions{}, errors.New("--expires requires a value")
 			}
 			opts.expires = args[i]
+			opts.expiresSet = true
 		case strings.HasPrefix(arg, "--expires="):
 			opts.expires = strings.TrimPrefix(arg, "--expires=")
+			opts.expiresSet = true
+		case arg == "--keep" || arg == "-k":
+			// Keep the share indefinitely (no expiry). Equivalent to --expires=none.
+			opts.keep = true
 		case arg == "--name":
 			i++
 			if i >= len(args) {
