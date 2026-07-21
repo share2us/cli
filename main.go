@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -34,7 +35,6 @@ import (
 	"github.com/share2us/cli-core/p2p"
 	"github.com/share2us/cli/tui"
 	localmcp "github.com/share2us/mcp/mcp"
-	"golang.org/x/sys/unix"
 )
 
 const commandName = "share2us"
@@ -1020,7 +1020,7 @@ func (a app) update(ctx context.Context, args []string) int {
 	}
 	fmt.Fprintln(a.stdout, "CRC check passed")
 
-	binPath, err := extractBinaryFromArchive(archivePath, tmpDir, commandName)
+	binPath, err := extractBinaryFromArchive(archivePath, tmpDir, binaryFileName())
 	if err != nil {
 		return a.fail("extract update", err)
 	}
@@ -1217,7 +1217,57 @@ func posixCKSUMUpdate(crc uint32, b byte) uint32 {
 	return crc
 }
 
+// binaryFileName is the name the CLI binary carries inside a release archive.
+func binaryFileName() string {
+	if runtime.GOOS == "windows" {
+		return commandName + ".exe"
+	}
+	return commandName
+}
+
+// Windows releases ship as .zip; every other platform ships as .tar.gz.
 func extractBinaryFromArchive(archivePath, destDir, binaryName string) (string, error) {
+	if strings.HasSuffix(strings.ToLower(archivePath), ".zip") {
+		return extractBinaryFromZip(archivePath, destDir, binaryName)
+	}
+	return extractBinaryFromTarGz(archivePath, destDir, binaryName)
+}
+
+func extractBinaryFromZip(archivePath, destDir, binaryName string) (string, error) {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return "", err
+	}
+	defer reader.Close()
+	for _, entry := range reader.File {
+		if entry.FileInfo().IsDir() || path.Base(entry.Name) != binaryName {
+			continue
+		}
+		src, err := entry.Open()
+		if err != nil {
+			return "", err
+		}
+		outPath := filepath.Join(destDir, binaryName)
+		out, err := os.OpenFile(outPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o755)
+		if err != nil {
+			src.Close()
+			return "", err
+		}
+		_, copyErr := io.Copy(out, src)
+		src.Close()
+		if copyErr != nil {
+			out.Close()
+			return "", copyErr
+		}
+		if err := out.Close(); err != nil {
+			return "", err
+		}
+		return outPath, nil
+	}
+	return "", fmt.Errorf("archive did not contain %s", binaryName)
+}
+
+func extractBinaryFromTarGz(archivePath, destDir, binaryName string) (string, error) {
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return "", err
@@ -1258,44 +1308,6 @@ func extractBinaryFromArchive(archivePath, destDir, binaryName string) (string, 
 		return outPath, nil
 	}
 	return "", fmt.Errorf("archive did not contain %s", binaryName)
-}
-
-func replaceExecutable(target, source string) error {
-	info, err := os.Stat(target)
-	if err != nil {
-		return err
-	}
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	// Stage via a random-named O_CREATE|O_EXCL file (os.CreateTemp) so a symlink
-	// pre-planted at a predictable ".<name>.new" path cannot redirect the write.
-	out, err := os.CreateTemp(filepath.Dir(target), "."+filepath.Base(target)+".new-*")
-	if err != nil {
-		return err
-	}
-	tmp := out.Name()
-	if err := out.Chmod(info.Mode().Perm() | 0o111); err != nil {
-		out.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(tmp)
-		return err
-	}
-	if err := out.Close(); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, target); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
 }
 
 func (a app) upload(ctx context.Context, args []string) int {
@@ -2963,46 +2975,6 @@ func (a app) pullAll(ctx context.Context, outputDir string) int {
 	}
 	fmt.Fprintf(a.stdout, "Pulled %d share(s)\n", pulled)
 	return 0
-}
-
-func readPasswordNoEcho(prompt string, stderr io.Writer) (string, error) {
-	if stderr != nil && prompt != "" {
-		fmt.Fprint(stderr, prompt)
-	}
-	fd := int(syscall.Stdin)
-	original, err := unix.IoctlGetTermios(fd, ioctlReadTermios)
-	if err != nil {
-		return "", err
-	}
-	noEcho := *original
-	noEcho.Lflag &^= unix.ECHO
-	if err := unix.IoctlSetTermios(fd, ioctlWriteTermios, &noEcho); err != nil {
-		return "", err
-	}
-	defer unix.IoctlSetTermios(fd, ioctlWriteTermios, original)
-
-	var builder strings.Builder
-	buffer := make([]byte, 1)
-	for {
-		n, err := os.Stdin.Read(buffer)
-		if err != nil {
-			if err == io.EOF {
-				break
-			}
-			return "", err
-		}
-		if n == 0 {
-			continue
-		}
-		if buffer[0] == '\n' || buffer[0] == '\r' {
-			break
-		}
-		builder.WriteByte(buffer[0])
-	}
-	if stderr != nil {
-		fmt.Fprintln(stderr)
-	}
-	return builder.String(), nil
 }
 
 func (a app) list(ctx context.Context, args []string) int {
