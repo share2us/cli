@@ -213,7 +213,7 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 	case "inbound":
 		return a.inbound(ctx, args[1:])
 	case "contacts", "teammates": // "teammates" kept as a back-compat alias
-		return a.teammates(ctx)
+		return a.contacts(ctx, args[1:])
 	case "trust":
 		return a.setTeammateSender(ctx, args[1:], "auto")
 	case "block":
@@ -2518,6 +2518,104 @@ func (a app) inbound(ctx context.Context, args []string) int {
 	return 0
 }
 
+// contacts dispatches the contacts command: bare prints the inbound policy;
+// expose/unexpose/exposed manage which of your devices a contact may send to
+// (per-sender device exposure, honored under the 'approvals' inbound mode).
+func (a app) contacts(ctx context.Context, args []string) int {
+	if len(args) == 0 {
+		return a.teammates(ctx)
+	}
+	switch args[0] {
+	case "expose":
+		return a.setContactDeviceExposure(ctx, args[1:], true)
+	case "unexpose":
+		return a.setContactDeviceExposure(ctx, args[1:], false)
+	case "exposed":
+		return a.listContactExposedDevices(ctx, args[1:])
+	default:
+		return a.teammates(ctx)
+	}
+}
+
+// setContactDeviceExposure exposes (or revokes) one of your devices for a contact.
+func (a app) setContactDeviceExposure(ctx context.Context, args []string, expose bool) int {
+	verb := "expose"
+	if !expose {
+		verb = "unexpose"
+	}
+	client, _, ok := a.authClient()
+	if !ok {
+		fmt.Fprintf(a.stderr, "not logged in; run `%s login`\n", commandName)
+		return 1
+	}
+	if len(args) < 2 {
+		fmt.Fprintf(a.stderr, "usage: %s contacts %s <email> <device>\n", commandName, verb)
+		return 2
+	}
+	email := strings.ToLower(strings.TrimSpace(args[0]))
+	device, err := resolveDeviceAlias(ctx, client, args[1])
+	if err != nil {
+		return a.fail("resolve device", err)
+	}
+	if expose {
+		err = client.ExposeDeviceToContact(ctx, email, device.ID)
+	} else {
+		err = client.UnexposeDeviceFromContact(ctx, email, device.ID)
+	}
+	if err != nil {
+		if a.printTeammateAPIError(err, email) {
+			return 1
+		}
+		return a.fail(verb+" device", err)
+	}
+	if expose {
+		fmt.Fprintf(a.stdout, "%s can now send files to %s.\n", email, device.DeviceName)
+	} else {
+		fmt.Fprintf(a.stdout, "%s can no longer send files to %s.\n", email, device.DeviceName)
+	}
+	return 0
+}
+
+// listContactExposedDevices lists the devices a contact is allowed to send to.
+func (a app) listContactExposedDevices(ctx context.Context, args []string) int {
+	client, _, ok := a.authClient()
+	if !ok {
+		fmt.Fprintf(a.stderr, "not logged in; run `%s login`\n", commandName)
+		return 1
+	}
+	if len(args) < 1 {
+		fmt.Fprintf(a.stderr, "usage: %s contacts exposed <email>\n", commandName)
+		return 2
+	}
+	email := strings.ToLower(strings.TrimSpace(args[0]))
+	ids, err := client.ListExposedDevicesForContact(ctx, email)
+	if err != nil {
+		if a.printTeammateAPIError(err, email) {
+			return 1
+		}
+		return a.fail("list exposed devices", err)
+	}
+	if len(ids) == 0 {
+		fmt.Fprintf(a.stdout, "No devices exposed to %s. Use `%s contacts expose %s <device>`.\n", email, commandName, email)
+		return 0
+	}
+	nameByID := map[string]string{}
+	if devices, derr := client.ListDevices(ctx); derr == nil {
+		for _, d := range devices.Sessions {
+			nameByID[d.ID] = d.DeviceName
+		}
+	}
+	fmt.Fprintf(a.stdout, "Devices %s can send to:\n", email)
+	for _, id := range ids {
+		name := nameByID[id]
+		if name == "" {
+			name = id
+		}
+		fmt.Fprintf(a.stdout, "  %s\t%s\n", name, id)
+	}
+	return 0
+}
+
 func (a app) teammates(ctx context.Context) int {
 	client, credential, ok := a.authClient()
 	if !ok {
@@ -2550,6 +2648,7 @@ func (a app) printTeammatePolicy(ctx context.Context, client *clicore.Client) in
 	for _, s := range policy.Senders {
 		fmt.Fprintf(a.stdout, "  %s\t%s\n", s.Email, s.Mode)
 	}
+	fmt.Fprintf(a.stdout, "Limit which devices a contact may send to: '%s contacts expose <email> <device>'.\n", commandName)
 	return 0
 }
 
