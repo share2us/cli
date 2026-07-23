@@ -1607,6 +1607,7 @@ func (a app) upload(ctx context.Context, args []string) int {
 		RecipientEmail: opts.teammate,
 		Targets:        teammateTargets,
 		AllowReshare:   resolveAllowReshare(opts),
+		Note:           strings.TrimSpace(opts.note),
 	})
 	if err != nil {
 		if opts.teammate != "" && a.printTeammateAPIError(err, opts.teammate) {
@@ -1756,6 +1757,7 @@ type uploadOptions struct {
 	password       string
 	promptPassword bool
 	oneTime        bool
+	note           string
 	encrypt        bool
 	recipients     []string
 	maxViews       uint64
@@ -1828,6 +1830,14 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 			opts.promptPassword = true
 		case strings.HasPrefix(arg, "--password="):
 			opts.password = strings.TrimPrefix(arg, "--password=")
+		case arg == "--note":
+			i++
+			if i >= len(args) {
+				return uploadOptions{}, errors.New("--note requires a value")
+			}
+			opts.note = args[i]
+		case strings.HasPrefix(arg, "--note="):
+			opts.note = strings.TrimPrefix(arg, "--note=")
 		case arg == "--one-time":
 			opts.oneTime = true
 		case arg == "--encrypt" || arg == "-e":
