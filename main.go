@@ -2884,6 +2884,12 @@ func (a app) get(ctx context.Context, args []string) int {
 		fmt.Fprintln(a.stderr, err)
 		return 2
 	}
+	convertMode := ""
+	if opts.convertPDF {
+		convertMode = "pdf"
+	} else if opts.convertDOCX {
+		convertMode = "docx"
+	}
 	target := opts.target
 	if isAllASCIIDigits(target) {
 		resolved, err := resolveShareRef(target)
@@ -2893,18 +2899,12 @@ func (a app) get(ctx context.Context, args []string) int {
 		}
 		target = resolved
 	}
-	key := []byte(nil)
-	if opts.key != "" {
-		key, err = clicore.DecodeKey(opts.key)
-	} else if strings.Contains(target, "#") {
-		key, err = clicore.KeyFromShareURL(target)
-	} else {
-		err = clicore.ErrInvalidKey
-	}
-	if err != nil {
-		fmt.Fprintln(a.stderr, "missing or invalid encryption key")
-		return 2
-	}
+	// A key (via --key or the URL #fragment) marks an END-TO-END ENCRYPTED share:
+	// download the ciphertext and decrypt locally. Without a key the gateway serves
+	// the share in the clear and can also convert text shares to PDF/DOCX. Because
+	// conversion runs server-side on the plaintext, --convert-* is only valid on
+	// this non-encrypted path.
+	hasKey := opts.key != "" || strings.Contains(target, "#")
 	downloadURL := target
 	if !strings.HasPrefix(downloadURL, "http://") && !strings.HasPrefix(downloadURL, "https://") {
 		apiBase, err := a.downloadAPIBase()
@@ -2919,6 +2919,25 @@ func (a app) get(ctx context.Context, args []string) int {
 	}
 	if i := strings.Index(downloadURL, "#"); i >= 0 {
 		downloadURL = downloadURL[:i]
+	}
+
+	if !hasKey {
+		return a.downloadPlainShare(ctx, downloadURL, opts.output, convertMode)
+	}
+
+	if convertMode != "" {
+		fmt.Fprintln(a.stderr, "cannot convert an encrypted share: --convert-pdf/--convert-docx need the plaintext. Download without a key to get the encrypted file, or convert a non-encrypted text share.")
+		return 2
+	}
+	var key []byte
+	if opts.key != "" {
+		key, err = clicore.DecodeKey(opts.key)
+	} else {
+		key, err = clicore.KeyFromShareURL(target)
+	}
+	if err != nil {
+		fmt.Fprintln(a.stderr, "missing or invalid encryption key")
+		return 2
 	}
 	downloadURL, err = forceDownloadMode(downloadURL)
 	if err != nil {
@@ -2945,10 +2964,128 @@ func (a app) get(ctx context.Context, args []string) int {
 	return 0
 }
 
+// downloadPlainShare fetches a NON-encrypted share from the gateway. mode is ""
+// (verbatim download), "pdf", or "docx" (server-side text conversion). The output
+// name comes from --output, else the gateway's Content-Disposition (which already
+// carries the converted .pdf/.docx extension for conversions).
+func (a app) downloadPlainShare(ctx context.Context, downloadURL, output, mode string) int {
+	m := "download"
+	if mode == "pdf" || mode == "docx" {
+		m = mode
+	}
+	u, err := withDownloadMode(downloadURL, m)
+	if err != nil {
+		return a.fail("prepare download URL", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return a.fail("prepare download", err)
+	}
+	resp, err := clicore.DefaultHTTPClient.Do(req)
+	if err != nil {
+		return a.fail("download share", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return a.failDownloadResponse(resp, mode)
+	}
+
+	outPath := output
+	if outPath == "" {
+		outPath = filenameFromDisposition(resp.Header.Get("Content-Disposition"))
+	}
+	if outPath == "" {
+		outPath = "download"
+		if mode == "pdf" || mode == "docx" {
+			outPath += "." + mode
+		}
+	}
+
+	dir := filepath.Dir(outPath)
+	if dir == "" {
+		dir = "."
+	}
+	// Stage via a random O_EXCL temp in the dest dir, then rename (atomic, no
+	// partial file left on a mid-stream failure).
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(outPath)+".tmp-*")
+	if err != nil {
+		return a.fail("create output", err)
+	}
+	tmpName := tmp.Name()
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return a.fail("download share", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return a.fail("write output", err)
+	}
+	if err := os.Rename(tmpName, outPath); err != nil {
+		os.Remove(tmpName)
+		return a.fail("save output", err)
+	}
+	fmt.Fprintf(a.stdout, "Saved %s\n", outPath)
+	return 0
+}
+
+// failDownloadResponse maps the gateway's error envelope to a clean CLI message.
+// It never retries (the conversion endpoint is rate-limited at 20/min).
+func (a app) failDownloadResponse(resp *http.Response, mode string) int {
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	var env struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &env)
+	code := env.Error.Code
+	switch {
+	case code == "unsupported_conversion":
+		fmt.Fprintln(a.stderr, "this share can't be converted — only text shares support --convert-pdf/--convert-docx")
+	case code == "conversion_too_large":
+		fmt.Fprintln(a.stderr, "this text share is too large to convert")
+	case resp.StatusCode == http.StatusTooManyRequests || code == "rate_limited":
+		fmt.Fprintln(a.stderr, "too many conversion requests right now, try again shortly")
+	default:
+		msg := strings.TrimSpace(env.Error.Message)
+		if msg == "" {
+			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		if mode == "pdf" || mode == "docx" {
+			fmt.Fprintf(a.stderr, "convert download failed: %s\n", msg)
+		} else {
+			fmt.Fprintf(a.stderr, "download failed: %s\n", msg)
+		}
+	}
+	return 1
+}
+
+// filenameFromDisposition extracts a safe base filename from a Content-Disposition
+// header, or "" if absent/unsafe (path separators and traversal are stripped so a
+// hostile header can never write outside the working directory).
+func filenameFromDisposition(cd string) string {
+	if cd == "" {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(cd)
+	if err != nil {
+		return ""
+	}
+	name := filepath.Base(strings.ReplaceAll(params["filename"], "\\", "/"))
+	if name == "." || name == ".." || name == string(filepath.Separator) || strings.TrimSpace(name) == "" {
+		return ""
+	}
+	return name
+}
+
 type getOptions struct {
-	target string
-	key    string
-	output string
+	target      string
+	key         string
+	output      string
+	convertPDF  bool
+	convertDOCX bool
 }
 
 func parseGetArgs(args []string) (getOptions, error) {
@@ -2972,17 +3109,24 @@ func parseGetArgs(args []string) (getOptions, error) {
 			opts.output = args[i]
 		case strings.HasPrefix(arg, "--output="):
 			opts.output = strings.TrimPrefix(arg, "--output=")
+		case arg == "--convert-pdf":
+			opts.convertPDF = true
+		case arg == "--convert-docx":
+			opts.convertDOCX = true
 		case strings.HasPrefix(arg, "-"):
 			return getOptions{}, fmt.Errorf("unknown flag: %s", arg)
 		default:
 			if opts.target != "" {
-				return getOptions{}, fmt.Errorf("usage: %s get <url-or-public-id> [--key KEY] [--output PATH]", commandName)
+				return getOptions{}, fmt.Errorf("usage: %s get <url-or-public-id> [--key KEY] [--output PATH] [--convert-pdf | --convert-docx]", commandName)
 			}
 			opts.target = arg
 		}
 	}
 	if opts.target == "" {
-		return getOptions{}, fmt.Errorf("usage: %s get <url-or-public-id> [--key KEY] [--output PATH]", commandName)
+		return getOptions{}, fmt.Errorf("usage: %s get <url-or-public-id> [--key KEY] [--output PATH] [--convert-pdf | --convert-docx]", commandName)
+	}
+	if opts.convertPDF && opts.convertDOCX {
+		return getOptions{}, errors.New("--convert-pdf and --convert-docx cannot be used together")
 	}
 	return opts, nil
 }
@@ -3598,12 +3742,18 @@ func pullShare(ctx context.Context, client *clicore.Client, share clicore.Share)
 }
 
 func forceDownloadMode(rawURL string) (string, error) {
+	return withDownloadMode(rawURL, "download")
+}
+
+// withDownloadMode sets the gateway ?m= mode: "download" (verbatim), "pdf" or
+// "docx" (server-side text conversion).
+func withDownloadMode(rawURL, mode string) (string, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return "", err
 	}
 	query := parsed.Query()
-	query.Set("m", "download")
+	query.Set("m", mode)
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
 }

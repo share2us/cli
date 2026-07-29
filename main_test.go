@@ -2400,3 +2400,109 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
+
+func TestGetConvertPDFWritesConvertedFile(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	pdf := []byte("%PDF-1.4 fake pdf bytes")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/d/pub-1" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if got := r.URL.Query().Get("m"); got != "pdf" {
+			t.Fatalf("download mode = %q, want pdf", got)
+		}
+		w.Header().Set("Content-Disposition", `attachment; filename="notes.pdf"`)
+		w.Write(pdf)
+	}))
+	dir := t.TempDir()
+	out := filepath.Join(dir, "converted.pdf")
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"get", "pub-1", "--convert-pdf", "--output", out}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if !bytes.Equal(got, pdf) {
+		t.Fatalf("output = %q, want the converted bytes", got)
+	}
+}
+
+func TestGetConvertUsesDispositionFilename(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("m"); got != "docx" {
+			t.Fatalf("download mode = %q, want docx", got)
+		}
+		w.Header().Set("Content-Disposition", `attachment; filename="report.docx"`)
+		w.Write([]byte("docx-bytes"))
+	}))
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"get", "pub-1", "--convert-docx"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "report.docx")); err != nil {
+		t.Fatalf("expected report.docx from Content-Disposition: %v", err)
+	}
+}
+
+func TestGetConvertFlagsMutuallyExclusive(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"get", "pub-1", "--convert-pdf", "--convert-docx"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "cannot be used together") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestGetConvertRejectedForEncryptedShare(t *testing.T) {
+	key := clicore.EncodeKey([]byte("0123456789abcdef0123456789abcdef"))
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"get", "pub-1", "--key", key, "--convert-pdf"}, &stdout, &stderr)
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "cannot convert an encrypted share") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestGetConvertTooLargeMapsCleanError(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "conversion_too_large", "message": "text share is too large to convert"}})
+	}))
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"get", "pub-1", "--convert-pdf", "--output", filepath.Join(t.TempDir(), "x.pdf")}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "too large to convert") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestFilenameFromDispositionRejectsTraversal(t *testing.T) {
+	cases := map[string]string{
+		`attachment; filename="notes.pdf"`:        "notes.pdf",
+		`attachment; filename="../../etc/passwd"`: "passwd",
+		`attachment; filename="a/b/c.docx"`:       "c.docx",
+		``:                                        "",
+		`attachment`:                              "",
+	}
+	for cd, want := range cases {
+		if got := filenameFromDisposition(cd); got != want {
+			t.Fatalf("filenameFromDisposition(%q) = %q, want %q", cd, got, want)
+		}
+	}
+}
