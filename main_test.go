@@ -1855,7 +1855,7 @@ func TestRunLiveFilePushesThenFlushesOnCancel(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
-	code := app{stdout: &stdout, stderr: &stderr}.runLiveFile(ctx, client, "pub-live", path, "text/plain", false)
+	code := app{stdout: &stdout, stderr: &stderr}.runLiveFile(ctx, client, "pub-live", path, "text/plain", false, nil)
 
 	if code != 0 {
 		t.Fatalf("code = %d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
@@ -2504,5 +2504,86 @@ func TestFilenameFromDispositionRejectsTraversal(t *testing.T) {
 		if got := filenameFromDisposition(cd); got != want {
 			t.Fatalf("filenameFromDisposition(%q) = %q, want %q", cd, got, want)
 		}
+	}
+}
+
+func newStdinApp(stdin string, tty bool, stdout, stderr io.Writer) app {
+	return app{
+		stdin:       strings.NewReader(stdin),
+		stdout:      stdout,
+		stderr:      stderr,
+		sleep:       func(time.Duration) {},
+		stdinIsTTY:  func(io.Reader) bool { return tty },
+		stdoutIsTTY: func(io.Writer) bool { return false },
+	}
+}
+
+func TestUploadFromStdinOneShotCreatesShare(t *testing.T) {
+	withMockAPI(t, uploadHandler(t)) // asserts SizeBytes == 5
+	withCredential(t, "https://api.example.test")
+
+	var stdout, stderr bytes.Buffer
+	a := newStdinApp("hello", false, &stdout, &stderr)
+	code := a.upload(context.Background(), []string{"--expires", "24h"})
+	if code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Uploaded successfully") {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
+func TestUploadFromStdinRequiresPipeNotTTY(t *testing.T) {
+	withCredential(t, "https://api.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("no API call expected, got %s", r.URL.Path)
+	}))
+
+	var stdout, stderr bytes.Buffer
+	a := newStdinApp("hello", true, &stdout, &stderr) // stdin is a TTY -> reject
+	code := a.upload(context.Background(), []string{})
+	if code != 2 {
+		t.Fatalf("code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "pipe data via stdin") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestParseUploadArgsNoPathIsStdin(t *testing.T) {
+	opts, err := parseUploadArgs([]string{"--live"})
+	if err != nil {
+		t.Fatalf("parseUploadArgs() error = %v", err)
+	}
+	if !opts.fromStdin {
+		t.Fatalf("fromStdin = false, want true when no file argument is given")
+	}
+}
+
+func TestStdinSpoolFlushSnapshot(t *testing.T) {
+	spool, err := startStdinSpool(strings.NewReader("line1\nline2\n"))
+	if err != nil {
+		t.Fatalf("startStdinSpool() error = %v", err)
+	}
+	defer os.Remove(spool.path)
+
+	// The background goroutine may not have drained yet; poll until it has.
+	var n int
+	for i := 0; i < 40; i++ {
+		n, err = spool.flush()
+		if err != nil {
+			t.Fatalf("flush() error = %v", err)
+		}
+		if n == len("line1\nline2\n") {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got, err := os.ReadFile(spool.path)
+	if err != nil {
+		t.Fatalf("read spool file: %v", err)
+	}
+	if string(got) != "line1\nline2\n" {
+		t.Fatalf("spool file = %q, want the full stdin", got)
 	}
 }

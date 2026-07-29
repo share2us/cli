@@ -27,6 +27,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -1338,6 +1339,59 @@ func (a app) upload(ctx context.Context, args []string) int {
 		return 1
 	}
 
+	var stdinSpoolRef *stdinSpool
+	if opts.fromStdin {
+		if a.stdinIsTTY != nil && a.stdinIsTTY(a.input()) {
+			fmt.Fprintln(a.stderr, "upload requires a file, or pipe data via stdin (e.g. `tail -f app.log | s2u --live`)")
+			return 2
+		}
+		if opts.device != "" || opts.teammate != "" {
+			fmt.Fprintln(a.stderr, "stdin uploads can't target a device/contact — write to a file first")
+			return 2
+		}
+		if opts.encrypt {
+			fmt.Fprintln(a.stderr, "stdin uploads can't be --encrypt yet — write to a file first")
+			return 2
+		}
+		if opts.name == "" {
+			opts.name = "stdin.txt"
+		}
+		opts.newShare = true // a temp path carries no meaningful source-registry identity
+		if opts.live || opts.watch {
+			spool, err := startStdinSpool(a.input())
+			if err != nil {
+				return a.fail("read stdin", err)
+			}
+			defer os.Remove(spool.path)
+			// Seed the first version with whatever backlog is already buffered
+			// (e.g. `tail -n 300`); wait up to ~2s so v1 isn't empty.
+			for i := 0; i < 40; i++ {
+				if n, _ := spool.flush(); n > 0 {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			stdinSpoolRef = spool
+			opts.path = spool.path
+		} else {
+			// One-shot: drain stdin fully to a temp file, then upload once.
+			tmp, err := os.CreateTemp("", "s2u-stdin-*.txt")
+			if err != nil {
+				return a.fail("read stdin", err)
+			}
+			tmpPath := tmp.Name()
+			defer os.Remove(tmpPath)
+			if _, copyErr := io.Copy(tmp, a.input()); copyErr != nil {
+				tmp.Close()
+				return a.fail("read stdin", copyErr)
+			}
+			if closeErr := tmp.Close(); closeErr != nil {
+				return a.fail("read stdin", closeErr)
+			}
+			opts.path = tmpPath
+		}
+	}
+
 	path := opts.path
 	info, err := os.Stat(path)
 	if err != nil {
@@ -1743,7 +1797,11 @@ func (a app) upload(ctx context.Context, args []string) int {
 		}
 	}
 	if opts.live || opts.watch {
-		return a.runLiveFile(ctx, client, publicID, path, contentType, opts.watch)
+		var refresh func() error
+		if stdinSpoolRef != nil {
+			refresh = func() error { _, err := stdinSpoolRef.flush(); return err }
+		}
+		return a.runLiveFile(ctx, client, publicID, path, contentType, opts.watch, refresh)
 	}
 	return 0
 }
@@ -1775,6 +1833,7 @@ type uploadOptions struct {
 	qrLink         bool
 	restrict       bool
 	unrestrict     bool
+	fromStdin      bool
 }
 
 func parseUploadArgs(args []string) (uploadOptions, error) {
@@ -1934,7 +1993,9 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 		}
 	}
 	if opts.path == "" {
-		return uploadOptions{}, errors.New("upload requires a file")
+		// No file argument: read the content from stdin. upload() confirms stdin is
+		// actually piped (not an interactive terminal) before proceeding.
+		opts.fromStdin = true
 	}
 	if opts.restrict && opts.unrestrict {
 		return uploadOptions{}, errors.New("--restrict and --unrestrict cannot be combined")
@@ -2255,7 +2316,61 @@ func portalDevicesURL(code clicore.DeviceCodeResponse) string {
 	return parsed.String()
 }
 
-func (a app) runLiveFile(ctx context.Context, client *clicore.Client, publicID, path, contentType string, durable bool) int {
+// stdinSpool streams stdin into an in-memory buffer in the background and can
+// flush a consistent snapshot to a temp file on demand. It lets `s2u --live` read
+// from a pipe (e.g. `tail -f app.log | s2u --live`): the live loop flushes the
+// snapshot right before each change-check, so the file is never mid-write during
+// a hash/upload (no size races).
+type stdinSpool struct {
+	path string
+	mu   sync.Mutex
+	buf  bytes.Buffer
+}
+
+// startStdinSpool creates the temp file and begins draining r into the buffer.
+// For a live pipe the goroutine runs until stdin EOF (which for `tail -f` is
+// process exit); it is intentionally not cancelled so late bytes still land.
+func startStdinSpool(r io.Reader) (*stdinSpool, error) {
+	tmp, err := os.CreateTemp("", "s2u-stdin-*.txt")
+	if err != nil {
+		return nil, err
+	}
+	path := tmp.Name()
+	_ = tmp.Close()
+	s := &stdinSpool{path: path}
+	go func() {
+		br := bufio.NewReader(r)
+		chunk := make([]byte, 32*1024)
+		for {
+			n, readErr := br.Read(chunk)
+			if n > 0 {
+				s.mu.Lock()
+				s.buf.Write(chunk[:n])
+				s.mu.Unlock()
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}()
+	return s, nil
+}
+
+// flush writes the current buffer snapshot to the temp file and returns its size.
+// It is the ONLY writer of the file, so a reader (the live change-check) that runs
+// after flush returns always sees a complete file.
+func (s *stdinSpool) flush() (int, error) {
+	s.mu.Lock()
+	data := make([]byte, s.buf.Len())
+	copy(data, s.buf.Bytes())
+	s.mu.Unlock()
+	if err := os.WriteFile(s.path, data, 0o600); err != nil {
+		return 0, err
+	}
+	return len(data), nil
+}
+
+func (a app) runLiveFile(ctx context.Context, client *clicore.Client, publicID, path, contentType string, durable bool, refresh func() error) int {
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -2275,6 +2390,11 @@ func (a app) runLiveFile(ctx context.Context, client *clicore.Client, publicID, 
 	var lastCRC string
 	var pushed uint64
 	push := func() error {
+		if refresh != nil {
+			if err := refresh(); err != nil {
+				return err
+			}
+		}
 		crc, changed, err := putLiveFileIfChanged(ctx, client, publicID, path, contentType, lastCRC)
 		if err != nil {
 			return err
