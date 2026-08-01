@@ -226,6 +226,12 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 	case "incoming":
 		return a.incoming(ctx, args[1:])
 	default:
+		// A bare Share2Us share link (`s2u https://s.share2.us/<code>`) is a quick
+		// download — route it to `get` rather than trying to upload a file named
+		// after the URL.
+		if looksLikeShareURL(args[0]) {
+			return a.get(ctx, args)
+		}
 		// Offline local/LAN direct share (account-free, no cloud). Detected by
 		// the --receive / --dest / --serve flags on a file-verb invocation.
 		switch localShareMode(args) {
@@ -2996,6 +3002,27 @@ func appendRecipients(out []string, value string) []string {
 		}
 	}
 	return out
+}
+
+// looksLikeShareURL reports whether arg is a Share2Us share link, so a bare
+// `s2u https://s.share2.us/<code>` is treated as a quick `s2u get <url>` download
+// instead of an attempt to upload a file named after the URL. Share short links
+// are served from the s.<base> host (prod s.share2.us, staging s.staging.share2.us),
+// so the host must start with "s." and sit under the share2.us domain, and there
+// must be a path (the share code).
+func looksLikeShareURL(arg string) bool {
+	u, err := url.Parse(arg)
+	if err != nil {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	if !strings.HasPrefix(host, "s.") || !strings.HasSuffix(host, ".share2.us") {
+		return false
+	}
+	return strings.Trim(u.Path, "/") != ""
 }
 
 func (a app) get(ctx context.Context, args []string) int {
