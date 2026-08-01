@@ -101,13 +101,12 @@ jobs:
           set -euo pipefail
           dl=marketing/public/downloads
           mkdir -p "$dl"
-          # Platforms served to `s2u update`. Currently linux/amd64 only (matches
-          # the historical channel). To close the multi-platform gap, add e.g.
-          # "darwin/amd64 darwin/arm64 windows/amd64 windows/arm64" here — the
-          # loop already copies each platform's sidecars and the client picks the
-          # right archive by os/arch. (Adding platforms grows the marketing git
-          # history by one binary each per release.)
-          platforms="linux/amd64"
+          # Platforms served to `s2u update` — every platform the build matrix
+          # produces, so no client gets "platform is not supported". The loop
+          # copies each platform's archive (.tar.gz, or .zip on windows) + both
+          # sidecars and the client picks the right one by os/arch. (Each platform
+          # adds one binary per release to the marketing git history.)
+          platforms="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64"
           assets='{}'
           for platform in $platforms; do
             os="${platform%/*}"; arch="${platform#*/}"
