@@ -23,6 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Fine-grained PAT with Contents: read/write on share2us/marketing. When set,
+      # each release refreshes the `s2u update` channel (see steps below); when
+      # unset those steps skip and the release still publishes normally.
+      MARKETING_DEPLOY_TOKEN: ${{ secrets.MARKETING_DEPLOY_TOKEN }}
     steps:
       - uses: actions/checkout@v7
 
@@ -72,6 +76,66 @@ jobs:
             --title "Share2Us CLI ${VERSION}" \
             --notes "Automated build from ${GITHUB_SHA}. Install: \`curl -fsSL https://share2.us/install.sh | sh\`" \
             --latest
+
+      # ---- Refresh the `s2u update` self-update channel -----------------------
+      # `s2u update` reads share2.us/downloads/manifest.json, which lives in the
+      # marketing repo (public/downloads/, served by Firebase Hosting). It used to
+      # be hand-published, so it drifted several builds behind GitHub Releases and
+      # `s2u update` became a no-op. These steps mirror this release's assets into
+      # that repo and push, which triggers the marketing Cloud Build deploy — no
+      # manual step per release. All gated on MARKETING_DEPLOY_TOKEN so an unset
+      # secret simply skips them.
+      - name: Check out marketing (downloads channel)
+        if: env.MARKETING_DEPLOY_TOKEN != ''
+        uses: actions/checkout@v7
+        with:
+          repository: share2us/marketing
+          token: ${{ env.MARKETING_DEPLOY_TOKEN }}
+          path: marketing
+
+      - name: Refresh downloads manifest + assets
+        if: env.MARKETING_DEPLOY_TOKEN != ''
+        run: |
+          set -euo pipefail
+          dl=marketing/public/downloads
+          mkdir -p "$dl"
+          # Platforms served to `s2u update`. Currently linux/amd64 only (matches
+          # the historical channel). To close the multi-platform gap, add e.g.
+          # "darwin/amd64 darwin/arm64 windows/amd64 windows/arm64" here — the
+          # loop already copies each platform's sidecars and the client picks the
+          # right archive by os/arch. (Adding platforms grows the marketing git
+          # history by one binary each per release.)
+          platforms="linux/amd64"
+          assets='{}'
+          for platform in $platforms; do
+            os="${platform%/*}"; arch="${platform#*/}"
+            if [ "$os" = windows ]; then archive="share2us_${os}_${arch}.zip"; else archive="share2us_${os}_${arch}.tar.gz"; fi
+            # tarball + both sidecars (install.sh uses crc32, install.ps1 sha256).
+            cp "dist/$archive" "dist/$archive.crc32" "dist/$archive.sha256" "$dl/"
+            # cksum sidecar is "<crc32> <size_bytes> <name>". The client verifies
+            # the download against the manifest's inline crc32 + size_bytes.
+            read -r crc size _ < "dist/$archive.crc32"
+            assets=$(jq --arg p "$platform" --arg a "$archive" --arg c "$crc" --argjson s "$size" \
+              '.[$p] = {archive: $a, crc32: $c, size_bytes: $s}' <<<"$assets")
+          done
+          jq -n --arg v "$VERSION" --argjson assets "$assets" \
+            '{latest_version: $v, assets: $assets}' > "$dl/manifest.json"
+          echo "== manifest =="; cat "$dl/manifest.json"
+
+      - name: Commit & push downloads channel
+        if: env.MARKETING_DEPLOY_TOKEN != ''
+        working-directory: marketing
+        run: |
+          set -euo pipefail
+          git config user.name hassankhurram
+          git config user.email hassankhurram@ymail.com
+          git add public/downloads
+          if git diff --cached --quiet; then
+            echo "downloads channel already current; nothing to push"
+            exit 0
+          fi
+          git commit -m "downloads: publish CLI ${VERSION} (automated from share2us/cli release)"
+          git push origin HEAD:main
 
       # Publish the npm wrapper (@share2us/cli), pinned to this exact release so a
       # given npm version always installs the same binary.
