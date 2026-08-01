@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -11,9 +12,11 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	clicore "github.com/share2us/cli-core"
+	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli-core/lanshare"
 )
 
@@ -21,18 +24,22 @@ import (
 // is really an offline local-share command. Empty string => fall through to a
 // normal cloud upload. These are all account-free (no login).
 func localShareMode(args []string) string {
-	hasServe, hasReceive, hasDest := false, false, false
+	hasServe, hasReceive, hasDest, hasBroadcast := false, false, false, false
 	for _, a := range args {
 		switch {
 		case a == "--serve":
 			hasServe = true
 		case a == "--receive" || a == "-r":
 			hasReceive = true
+		case a == "--broadcast" || a == "-b":
+			hasBroadcast = true
 		case a == "--dest" || strings.HasPrefix(a, "--dest="):
 			hasDest = true
 		}
 	}
 	switch {
+	case hasBroadcast:
+		return "broadcast"
 	case hasServe:
 		return "serve"
 	case hasReceive:
@@ -912,4 +919,247 @@ func (p *progressPrinter) finish() {
 	if p != nil && p.w != nil && p.drawn {
 		fmt.Fprintln(p.w)
 	}
+}
+
+// ---- broadcast (offer a file/folder for pull) ----
+
+type lanBroadcastOpts struct {
+	path   string
+	access string // all | trusted | approve
+	name   string
+	port   int
+	bind   string
+	once   bool
+	yes    bool
+}
+
+func parseLanBroadcastArgs(args []string) (lanBroadcastOpts, error) {
+	o := lanBroadcastOpts{access: lanshare.AccessApprove}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		next := func() (string, bool) {
+			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+				return args[i], true
+			}
+			return "", false
+		}
+		switch {
+		case arg == "--broadcast" || arg == "-b":
+			// mode marker, no value
+		case arg == "--access":
+			v, ok := next()
+			if !ok {
+				return o, fmt.Errorf("--access needs all|trusted|approve")
+			}
+			o.access = v
+		case strings.HasPrefix(arg, "--access="):
+			o.access = strings.TrimPrefix(arg, "--access=")
+		case arg == "--name":
+			v, ok := next()
+			if !ok {
+				return o, fmt.Errorf("--name needs a value")
+			}
+			o.name = v
+		case strings.HasPrefix(arg, "--name="):
+			o.name = strings.TrimPrefix(arg, "--name=")
+		case arg == "--port" || arg == "-P":
+			v, ok := next()
+			if !ok {
+				return o, fmt.Errorf("%s needs a port number", arg)
+			}
+			p, err := strconv.Atoi(v)
+			if err != nil || p < 0 || p > 65535 {
+				return o, fmt.Errorf("invalid port %q", v)
+			}
+			o.port = p
+		case strings.HasPrefix(arg, "--port="):
+			p, err := strconv.Atoi(strings.TrimPrefix(arg, "--port="))
+			if err != nil || p < 0 || p > 65535 {
+				return o, fmt.Errorf("invalid --port value")
+			}
+			o.port = p
+		case arg == "--bind":
+			v, ok := next()
+			if !ok {
+				return o, fmt.Errorf("--bind needs an address")
+			}
+			o.bind = v
+		case strings.HasPrefix(arg, "--bind="):
+			o.bind = strings.TrimPrefix(arg, "--bind=")
+		case arg == "--once":
+			o.once = true
+		case arg == "--yes" || arg == "-y":
+			o.yes = true
+		case strings.HasPrefix(arg, "-"):
+			return o, fmt.Errorf("unknown flag: %s", arg)
+		default:
+			if o.path != "" {
+				return o, fmt.Errorf("broadcast accepts exactly one file or folder")
+			}
+			o.path = arg
+		}
+	}
+	switch o.access {
+	case lanshare.AccessAll, lanshare.AccessTrusted, lanshare.AccessApprove:
+	default:
+		return o, fmt.Errorf("invalid --access %q (want all, trusted, or approve)", o.access)
+	}
+	return o, nil
+}
+
+// lanBroadcast offers a file (or a zipped folder) on the LAN for nearby devices
+// to pull with `s2u discover`. Mirrors the desktop app: identity-signed, trusted
+// devices auto-accept, and per-download approval otherwise. Runs until Ctrl+C
+// (serving multiple pulls) unless --once.
+func (a app) lanBroadcast(ctx context.Context, args []string) int {
+	opts, err := parseLanBroadcastArgs(args)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 2
+	}
+	if opts.path == "" {
+		fmt.Fprintln(a.stderr, "broadcast needs a file or folder: s2u <path> --broadcast")
+		return 2
+	}
+	st, err := os.Stat(opts.path)
+	if err != nil {
+		fmt.Fprintf(a.stderr, "cannot read %s: %v\n", opts.path, err)
+		return 1
+	}
+
+	// A folder is zipped first (like `--dest` send); the downloader gets <name>.zip.
+	servePath := opts.path
+	displayName := opts.name
+	var cleanup func()
+	if st.IsDir() {
+		zipPath, zerr := zipDirectory(opts.path)
+		if zerr != nil {
+			fmt.Fprintf(a.stderr, "zip folder: %v\n", zerr)
+			return 1
+		}
+		cleanup = func() { _ = os.Remove(zipPath) }
+		servePath = zipPath
+		if displayName == "" {
+			displayName = directoryZipName(opts.path)
+		}
+	} else if displayName == "" {
+		displayName = filepath.Base(opts.path)
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+	var size int64
+	if si, serr := os.Stat(servePath); serr == nil {
+		size = si.Size()
+	}
+
+	id, idErr := lanid.Identity()
+	if idErr != nil {
+		return a.fail("load device identity", idErr)
+	}
+	hostname, _ := os.Hostname()
+	if hostname == "" {
+		hostname = "share2us"
+	}
+
+	bctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	// approve gates each UNtrusted download; trusted devices auto-accept via
+	// IsTrusted before OnRequest is called.
+	approve := func(r lanshare.RequestInfo) bool {
+		fp := lanshare.IdentityFingerprint(r.SenderKey)
+		who := r.PeerIP
+		if who == "" {
+			who = "a nearby device"
+		}
+		if r.SenderName != "" {
+			who = fmt.Sprintf("%s (%s)", r.SenderName, who)
+		}
+		if opts.yes {
+			fmt.Fprintf(a.stderr, "Accepting %s -> %s\n", who, r.Name)
+			return true
+		}
+		if !a.inputIsTTY() {
+			fmt.Fprintf(a.stderr, "Denied %s (no TTY to approve; use --yes or --access all)\n", who)
+			return false
+		}
+		code := lanshare.VerifyCode(fp)
+		fmt.Fprintf(a.stderr, "Allow %s (code %s) to download %s? [y/N/t=trust] ", who, code, r.Name)
+		reader := bufio.NewReader(a.input())
+		ans, _ := reader.ReadString('\n')
+		switch strings.TrimSpace(strings.ToLower(ans)) {
+		case "t", "trust":
+			label := r.SenderName
+			if label == "" {
+				label = r.PeerIP
+			}
+			_ = lanid.Trust(fp, label)
+			fmt.Fprintf(a.stderr, "Trusted %s\n", who)
+			return true
+		case "y", "yes":
+			return true
+		default:
+			return false
+		}
+	}
+
+	fmt.Fprintf(a.stderr, "Broadcasting %s (%s) as %q  access: %s\n", filepath.Base(opts.path), humanBytes(size), displayName, opts.access)
+	fmt.Fprintf(a.stderr, "This device: %s  code %s\n", hostname, lanid.Code())
+	fmt.Fprintln(a.stderr, "On another device: run `s2u discover` (or use the desktop app). Ctrl+C to stop.")
+
+	var (
+		adv  io.Closer
+		mu   sync.Mutex
+		seen = map[string]bool{}
+	)
+	berr := lanshare.Broadcast(bctx, lanshare.BroadcastOptions{
+		Path:      servePath,
+		Name:      displayName,
+		Bind:      opts.bind,
+		Port:      opts.port,
+		Instance:  hostname,
+		Identity:  id,
+		Access:    opts.access,
+		IsTrusted: func(fp string) bool { _, ok := lanid.Lookup(fp); return ok },
+		OnRequest: approve,
+		OnListen: func(li lanshare.ListenInfo) {
+			if c, aerr := lanshare.AdvertiseBroadcast(hostname, li, displayName, size); aerr == nil {
+				adv = c
+			}
+		},
+		OnConn: func(ev lanshare.ConnEvent) {
+			peer := ev.PeerIP
+			if peer == "" {
+				peer = "peer"
+			}
+			switch {
+			case ev.Err != "":
+				fmt.Fprintf(a.stderr, "  %s: error: %s\n", peer, ev.Err)
+			case ev.Done:
+				fmt.Fprintf(a.stderr, "  %s: sent %s (%s)\n", peer, displayName, humanBytes(ev.Total))
+				lanid.ActivityAppend(lanid.ActivityEntry{Kind: "broadcast", Peer: ev.PeerIP, Name: displayName, Size: ev.Total})
+				if opts.once {
+					cancel()
+				}
+			default:
+				mu.Lock()
+				first := !seen[peer]
+				seen[peer] = true
+				mu.Unlock()
+				if first {
+					fmt.Fprintf(a.stderr, "  %s: downloading %s...\n", peer, displayName)
+				}
+			}
+		},
+	})
+	if adv != nil {
+		_ = adv.Close()
+	}
+	if berr != nil && bctx.Err() == nil {
+		return a.fail("broadcast", berr)
+	}
+	fmt.Fprintln(a.stderr, "broadcast stopped")
+	return 0
 }

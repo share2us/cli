@@ -225,6 +225,10 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 		return a.deleteTeammateSender(ctx, args[1:])
 	case "incoming":
 		return a.incoming(ctx, args[1:])
+	case "discover":
+		return a.discover(ctx, args[1:])
+	case "lan":
+		return a.lanAdmin(ctx, args[1:])
 	default:
 		// A bare Share2Us share link (`s2u https://s.share2.us/<code>`) is a quick
 		// download — route it to `get` rather than trying to upload a file named
@@ -233,7 +237,8 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 			return a.get(ctx, args)
 		}
 		// Offline local/LAN direct share (account-free, no cloud). Detected by
-		// the --receive / --dest / --serve flags on a file-verb invocation.
+		// the --receive / --dest / --serve / --broadcast flags on a file-verb
+		// invocation.
 		switch localShareMode(args) {
 		case "receive":
 			return a.lanReceive(ctx, args)
@@ -241,6 +246,8 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 			return a.lanSend(ctx, args)
 		case "serve":
 			return a.lanServe(ctx, args)
+		case "broadcast":
+			return a.lanBroadcast(ctx, args)
 		}
 		return a.upload(ctx, args)
 	}
