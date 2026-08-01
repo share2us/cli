@@ -81,12 +81,14 @@ jobs:
       # `s2u update` reads share2.us/downloads/manifest.json, which lives in the
       # marketing repo (public/downloads/, served by Firebase Hosting). It used to
       # be hand-published, so it drifted several builds behind GitHub Releases and
-      # `s2u update` became a no-op. These steps mirror this release's assets into
-      # that repo and push, which triggers the marketing Cloud Build deploy — no
-      # manual step per release. All gated on MARKETING_DEPLOY_KEY so an unset
-      # secret simply skips them. checkout's ssh-key input configures the deploy
-      # key (and github.com known_hosts) and uses the SSH remote, so the later
-      # `git push` authenticates over SSH with no PAT.
+      # `s2u update` became a no-op. These steps regenerate ONLY manifest.json (the
+      # binaries themselves are 302'd to this release's GitHub assets by a
+      # firebase.json redirect, so they never get committed) and push, which
+      # triggers the marketing Cloud Build deploy — no manual step per release.
+      # All gated on MARKETING_DEPLOY_KEY so an unset secret simply skips them.
+      # checkout's ssh-key input configures the deploy key (and github.com
+      # known_hosts) and uses the SSH remote, so the later `git push`
+      # authenticates over SSH with no PAT.
       - name: Check out marketing (downloads channel)
         if: env.MARKETING_DEPLOY_KEY != ''
         uses: actions/checkout@v7
@@ -95,26 +97,25 @@ jobs:
           ssh-key: ${{ secrets.MARKETING_DEPLOY_KEY }}
           path: marketing
 
-      - name: Refresh downloads manifest + assets
+      - name: Refresh downloads manifest
         if: env.MARKETING_DEPLOY_KEY != ''
         run: |
           set -euo pipefail
           dl=marketing/public/downloads
           mkdir -p "$dl"
           # Platforms served to `s2u update` — every platform the build matrix
-          # produces, so no client gets "platform is not supported". The loop
-          # copies each platform's archive (.tar.gz, or .zip on windows) + both
-          # sidecars and the client picks the right one by os/arch. (Each platform
-          # adds one binary per release to the marketing git history.)
+          # produces, so no client gets "platform is not supported". We only write
+          # manifest.json here; the archives are served by a firebase.json redirect
+          # to this release's GitHub assets (share2.us/downloads/share2us_* -> the
+          # GitHub release download), so no binaries are committed. crc32/size_bytes
+          # come from the dist/ cksum sidecars the build step produced.
           platforms="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64"
           assets='{}'
           for platform in $platforms; do
             os="${platform%/*}"; arch="${platform#*/}"
             if [ "$os" = windows ]; then archive="share2us_${os}_${arch}.zip"; else archive="share2us_${os}_${arch}.tar.gz"; fi
-            # tarball + both sidecars (install.sh uses crc32, install.ps1 sha256).
-            cp "dist/$archive" "dist/$archive.crc32" "dist/$archive.sha256" "$dl/"
             # cksum sidecar is "<crc32> <size_bytes> <name>". The client verifies
-            # the download against the manifest's inline crc32 + size_bytes.
+            # the redirected download against the manifest's inline crc32 + size_bytes.
             read -r crc size _ < "dist/$archive.crc32"
             assets=$(jq --arg p "$platform" --arg a "$archive" --arg c "$crc" --argjson s "$size" \
               '.[$p] = {archive: $a, crc32: $c, size_bytes: $s}' <<<"$assets")
