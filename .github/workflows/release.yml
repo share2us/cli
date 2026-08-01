@@ -23,10 +23,10 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-      # Fine-grained PAT with Contents: read/write on share2us/marketing. When set,
-      # each release refreshes the `s2u update` channel (see steps below); when
-      # unset those steps skip and the release still publishes normally.
-      MARKETING_DEPLOY_TOKEN: ${{ secrets.MARKETING_DEPLOY_TOKEN }}
+      # SSH deploy key (private half) for share2us/marketing, write-enabled. When
+      # set, each release refreshes the `s2u update` channel (see steps below);
+      # when unset those steps skip and the release still publishes normally.
+      MARKETING_DEPLOY_KEY: ${{ secrets.MARKETING_DEPLOY_KEY }}
     steps:
       - uses: actions/checkout@v7
 
@@ -83,18 +83,20 @@ jobs:
       # be hand-published, so it drifted several builds behind GitHub Releases and
       # `s2u update` became a no-op. These steps mirror this release's assets into
       # that repo and push, which triggers the marketing Cloud Build deploy — no
-      # manual step per release. All gated on MARKETING_DEPLOY_TOKEN so an unset
-      # secret simply skips them.
+      # manual step per release. All gated on MARKETING_DEPLOY_KEY so an unset
+      # secret simply skips them. checkout's ssh-key input configures the deploy
+      # key (and github.com known_hosts) and uses the SSH remote, so the later
+      # `git push` authenticates over SSH with no PAT.
       - name: Check out marketing (downloads channel)
-        if: env.MARKETING_DEPLOY_TOKEN != ''
+        if: env.MARKETING_DEPLOY_KEY != ''
         uses: actions/checkout@v7
         with:
           repository: share2us/marketing
-          token: ${{ env.MARKETING_DEPLOY_TOKEN }}
+          ssh-key: ${{ secrets.MARKETING_DEPLOY_KEY }}
           path: marketing
 
       - name: Refresh downloads manifest + assets
-        if: env.MARKETING_DEPLOY_TOKEN != ''
+        if: env.MARKETING_DEPLOY_KEY != ''
         run: |
           set -euo pipefail
           dl=marketing/public/downloads
@@ -123,7 +125,7 @@ jobs:
           echo "== manifest =="; cat "$dl/manifest.json"
 
       - name: Commit & push downloads channel
-        if: env.MARKETING_DEPLOY_TOKEN != ''
+        if: env.MARKETING_DEPLOY_KEY != ''
         working-directory: marketing
         run: |
           set -euo pipefail
