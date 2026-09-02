@@ -109,8 +109,9 @@ jobs:
           # has content, so a stable release cannot go out as a bare "automated
           # build from <sha>" line. Falls back to the sha only for a beta.
           NOTES_FILE=notes.md
-          if [ -f CHANGELOG.md ] && awk '/^## \[Unreleased\]/{f=1;next} /^## /{f=0} f' CHANGELOG.md | grep -q '[^[:space:]]'; then
-            awk '/^## \[Unreleased\]/{f=1;next} /^## /{f=0} f' CHANGELOG.md > "$NOTES_FILE"
+          unreleased() { awk '/^## \[Unreleased\]/{f=1;next} /^## /{f=0} f' CHANGELOG.md | sed '/<!--/,/-->/d'; }
+          if [ -f CHANGELOG.md ] && unreleased | grep -q '[^[:space:]]'; then
+            unreleased > "$NOTES_FILE"
           else
             if [ "${{ inputs.channel }}" = stable ]; then
               echo "::error::CHANGELOG.md [Unreleased] is empty - a stable release needs release notes."
