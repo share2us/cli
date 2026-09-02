@@ -1,15 +1,28 @@
 name: release
 
-# Build the CLI for every supported platform on each push to main (Go changes
-# only) and publish a GitHub Release. install.sh downloads these assets.
+# Build the CLI for every supported platform and publish a GitHub Release.
+# install.sh and the /v1/cli/update manifest download these assets.
+#
+# DELIBERATE, NOT AUTOMATIC. This used to fire on every push to main touching
+# Go files, which meant merging ANY change shipped a new build to every
+# installed CLI -- three releases went out in 41 minutes on 2026-09-02 with no
+# release notes. Cutting a release is now an explicit action.
+#
+#   channel=beta   -> published as a PRE-RELEASE, without --latest.
+#                     GitHub's /releases/latest keeps pointing at the last
+#                     stable, and since both the manifest redirect and the GUI
+#                     updater resolve "latest", a beta is invisible to existing
+#                     users by construction. This is the staging channel.
+#   channel=stable -> published with --latest. Users get it.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "stable = released to all users; beta = pre-release, not served as latest"
+        required: true
+        default: beta
+        type: choice
+        options: [beta, stable]
 
 permissions:
   contents: write
@@ -92,10 +105,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          # Release notes come from CHANGELOG.md's [Unreleased] section when it
+          # has content, so a stable release cannot go out as a bare "automated
+          # build from <sha>" line. Falls back to the sha only for a beta.
+          NOTES_FILE=notes.md
+          unreleased() { awk '/^## \[Unreleased\]/{f=1;next} /^## /{f=0} f' CHANGELOG.md | sed '/<!--/,/-->/d'; }
+          if [ -f CHANGELOG.md ] && unreleased | grep -q '[^[:space:]]'; then
+            unreleased > "$NOTES_FILE"
+          else
+            if [ "${{ inputs.channel }}" = stable ]; then
+              echo "::error::CHANGELOG.md [Unreleased] is empty - a stable release needs release notes."
+              exit 1
+            fi
+            echo "Beta build from ${GITHUB_SHA}. Not served to stable users." > "$NOTES_FILE"
+          fi
+          printf '\n\nInstall: `curl -fsSL https://share2.us/install.sh | sh`\n' >> "$NOTES_FILE"
+
+          if [ "${{ inputs.channel }}" = stable ]; then
+            LATEST_FLAGS="--latest"
+          else
+            LATEST_FLAGS="--prerelease --latest=false"
+          fi
+          # shellcheck disable=SC2086
           gh release create "v${VERSION}" dist/*.tar.gz dist/*.zip dist/*.crc32 dist/*.sha256 dist/manifest.json \
             --title "Share2Us CLI ${VERSION}" \
-            --notes "Automated build from ${GITHUB_SHA}. Install: \`curl -fsSL https://share2.us/install.sh | sh\`" \
-            --latest
+            --notes-file "$NOTES_FILE" \
+            $LATEST_FLAGS
 
       # Publish the npm wrapper (@share2us/cli), pinned to this exact release so a
       # given npm version always installs the same binary.
@@ -114,4 +149,11 @@ jobs:
           set -euo pipefail
           npm pkg set "share2usCliVersion=v${VERSION}"
           npm version "0.1.${GITHUB_RUN_NUMBER}" --no-git-tag-version --allow-same-version
-          npm publish --access public
+          # npm is a SECOND user-facing channel: publishing without a dist-tag
+          # makes it `latest`, so `npm i @share2us/cli` would hand a beta to
+          # everyone regardless of what the GitHub release says.
+          if [ "${{ inputs.channel }}" = stable ]; then
+            npm publish --access public
+          else
+            npm publish --access public --tag beta
+          fi
