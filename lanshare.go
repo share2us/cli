@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -482,6 +483,106 @@ const (
 	servePortHi = 17000
 )
 
+// serveHandler builds the HTTP handler for `s2u --serve`.
+//
+// guardServePath already refuses to publish home/credential/system directories,
+// but within an allowed tree two holes remained: dotfiles were served and listed
+// like anything else (.env, .git/config, .netrc in a project folder), and a
+// symlink pointing out of the tree was followed transparently by http.Dir, so a
+// single link could re-expose exactly what the guard blocks.
+func serveHandler(abs string, isDir bool) http.Handler {
+	if isDir {
+		// http.FileServer cleans paths and rejects traversal; index.html is
+		// served automatically when present. safeFS adds the two checks above.
+		return http.FileServer(safeFS{root: abs})
+	}
+	name := filepath.Base(abs)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" && strings.TrimPrefix(r.URL.Path, "/") != name {
+			http.NotFound(w, r)
+			return
+		}
+		http.ServeFile(w, r, abs)
+	})
+}
+
+// safeFS is an http.FileSystem that hides dotfiles and refuses to follow a
+// symlink out of the served tree. Both the open path and directory listings are
+// filtered — hiding a file from Open but still naming it in a listing would leak
+// the very thing being hidden.
+type safeFS struct{ root string }
+
+func (f safeFS) Open(name string) (http.File, error) {
+	if hasDotSegment(name) {
+		return nil, os.ErrNotExist
+	}
+	full := filepath.Join(f.root, filepath.FromSlash(path.Clean("/"+name)))
+	if !f.within(full) {
+		return nil, os.ErrNotExist
+	}
+	file, err := http.Dir(f.root).Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return safeFile{File: file, fsys: f, dir: full}, nil
+}
+
+// within reports whether p, with every symlink resolved, still sits inside the
+// served root. A path that cannot be resolved is treated as outside: failing
+// closed is the only safe default here.
+func (f safeFS) within(p string) bool {
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return false
+	}
+	root, err := filepath.EvalSymlinks(f.root)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, real)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
+// hasDotSegment reports whether any path segment begins with a dot, so both
+// .env and .git/config are refused.
+func hasDotSegment(name string) bool {
+	for _, seg := range strings.Split(path.Clean("/"+name), "/") {
+		if strings.HasPrefix(seg, ".") && seg != "." && seg != ".." {
+			return true
+		}
+	}
+	return false
+}
+
+type safeFile struct {
+	http.File
+	fsys safeFS
+	dir  string
+}
+
+// Readdir drops dotfiles and symlink escapes from directory listings, matching
+// what Open refuses to serve.
+func (f safeFile) Readdir(count int) ([]os.FileInfo, error) {
+	entries, err := f.File.Readdir(count)
+	if err != nil {
+		return nil, err
+	}
+	kept := entries[:0]
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		if !f.fsys.within(filepath.Join(f.dir, entry.Name())) {
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	return kept, nil
+}
+
 func (a app) lanServe(ctx context.Context, args []string) int {
 	opts, err := parseLanServeArgs(args)
 	if err != nil {
@@ -511,21 +612,7 @@ func (a app) lanServe(ctx context.Context, args []string) int {
 		return 1
 	}
 
-	var handler http.Handler
-	if info.IsDir() {
-		// http.FileServer cleans paths and rejects traversal; index.html is
-		// served automatically when present.
-		handler = http.FileServer(http.Dir(abs))
-	} else {
-		name := filepath.Base(abs)
-		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/" && strings.TrimPrefix(r.URL.Path, "/") != name {
-				http.NotFound(w, r)
-				return
-			}
-			http.ServeFile(w, r, abs)
-		})
-	}
+	handler := serveHandler(abs, info.IsDir())
 
 	bind := opts.bind
 	if bind == "" {
