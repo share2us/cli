@@ -111,7 +111,8 @@ s2u trust|block|require-approval alex@acme.dev   # per-sender policy
 
 ```sh
 # On the receiver:
-s2u --receive                      # prints its IP and waits
+s2u --receive                      # prints its IP and waits for one transfer
+s2u --receive --keep               # stay open for many transfers (Ctrl-C to stop)
 
 # On the sender:
 s2u photos.zip --dest 192.168.1.5  # send directly over LAN/Tailscale/WireGuard

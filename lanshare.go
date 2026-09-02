@@ -65,6 +65,7 @@ type lanReceiveOpts struct {
 	overwrite  bool
 	bind       string
 	qr         bool
+	keep       bool
 }
 
 func (a app) lanReceive(ctx context.Context, args []string) int {
@@ -119,9 +120,29 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 	prog := newProgressPrinter(a.stderr, "receiving")
 	ropts.OnProgress = prog.update
 
+	// --keep: one listener accepts many transfers instead of returning after the
+	// first. cli-core already had the primitive (ReceiveOptions.Loop); it reports
+	// each completed transfer through OnReceived and only returns when the
+	// context is cancelled.
+	received := 0
+	if opts.keep {
+		ropts.Loop = true
+		ropts.OnReceived = func(r lanshare.ReceiveResult) {
+			received++
+			prog.finish()
+			a.printReceived(r)
+		}
+	}
+
 	res, err := lanshare.Receive(ctx, ropts)
 	prog.finish()
 	if err != nil {
+		// In --keep mode the only way out is Ctrl-C, so a cancelled context is
+		// the SUCCESS path, not a failure to report.
+		if opts.keep && errors.Is(err, context.Canceled) {
+			fmt.Fprintf(a.stderr, "Stopped after %d transfer(s).\n", received)
+			return 0
+		}
 		if !printed {
 			fmt.Fprintln(a.stderr, err)
 			return 1
@@ -129,13 +150,17 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 		fmt.Fprintf(a.stderr, "receive failed: %v\n", err)
 		return 1
 	}
+	a.printReceived(res)
+	return 0
+}
+
+func (a app) printReceived(res lanshare.ReceiveResult) {
 	from := res.PeerIP
 	if from == "" {
 		from = "peer"
 	}
 	fmt.Fprintf(a.stdout, "Received %s (%s) from %s -> %s\n",
 		res.Name, humanBytes(res.Bytes), from, res.Path)
-	return 0
 }
 
 func (a app) printReceiveBanner(info lanshare.ListenInfo, opts lanReceiveOpts) {
@@ -149,7 +174,15 @@ func (a app) printReceiveBanner(info lanshare.ListenInfo, opts lanReceiveOpts) {
 	switch info.Mode {
 	case lanshare.ModePassword:
 		fmt.Fprintf(a.stderr, "Passphrase: %s\n", info.Passphrase)
-		sender += fmt.Sprintf(" --password=%q", info.Passphrase)
+		// Advertise the BARE flag, which prompts with terminal echo off. Printing
+		// --password=<pass> here put the passphrase into the sender's shell
+		// history and into `ps` output for the life of the transfer, and it was
+		// the form we told every user to copy.
+		// NOTE: the pairing string below still embeds the passphrase by design
+		// (one paste carries address + fingerprint + password). Pasting THAT into
+		// --dest has the same history exposure — tracked separately in todo W-L2.
+		sender += " --password"
+
 	case lanshare.ModeAllowIP:
 		fmt.Fprintf(a.stderr, "Only accepting from: %s\n", strings.Join(opts.allowIPs, ", "))
 	}
@@ -164,7 +197,11 @@ func (a app) printReceiveBanner(info lanshare.ListenInfo, opts lanReceiveOpts) {
 			fmt.Fprintln(a.stderr, art)
 		}
 	}
-	fmt.Fprintln(a.stderr, "Waiting for a sender... (Ctrl-C to cancel)")
+	if opts.keep {
+		fmt.Fprintln(a.stderr, "Waiting for senders... staying open for more (Ctrl-C to stop)")
+	} else {
+		fmt.Fprintln(a.stderr, "Waiting for a sender... (Ctrl-C to cancel)")
+	}
 }
 
 func parseLanReceiveArgs(args []string) (lanReceiveOpts, error) {
@@ -185,6 +222,8 @@ func parseLanReceiveArgs(args []string) (lanReceiveOpts, error) {
 			o.noPassword = true
 		case arg == "--overwrite":
 			o.overwrite = true
+		case arg == "--keep" || arg == "-k":
+			o.keep = true
 		case arg == "--qr" || arg == "--qrl":
 			o.qr = true
 		case arg == "--password" || arg == "-p":
