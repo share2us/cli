@@ -164,6 +164,21 @@ func (a app) printReceived(res lanshare.ReceiveResult) {
 		res.Name, humanBytes(res.Bytes), from, res.Path)
 }
 
+// warnIfFirewallBlocks prints an advisory when Windows Firewall will drop
+// inbound connections to this binary. Run in the background: the check spawns
+// powershell and must never delay the listener banner.
+//
+// It matters most for the discoverable paths — a receiver keeps advertising over
+// mDNS while the firewall drops its port, so a peer finds the machine by name and
+// then times out, which looks like a broken product rather than a missing rule.
+func (a app) warnIfFirewallBlocks() {
+	go func() {
+		if inboundLikelyBlocked() {
+			fmt.Fprintln(a.stderr, "\nNOTE: "+firewallHint())
+		}
+	}()
+}
+
 func (a app) printReceiveBanner(info lanshare.ListenInfo, opts lanReceiveOpts) {
 	ip := opts.bind
 	if ip == "" || ip == "0.0.0.0" || ip == "::" {
@@ -203,6 +218,7 @@ func (a app) printReceiveBanner(info lanshare.ListenInfo, opts lanReceiveOpts) {
 	} else {
 		fmt.Fprintln(a.stderr, "Waiting for a sender... (Ctrl-C to cancel)")
 	}
+	a.warnIfFirewallBlocks()
 }
 
 func parseLanReceiveArgs(args []string) (lanReceiveOpts, error) {
@@ -730,6 +746,7 @@ func (a app) printServeBanner(abs string, isDir bool, bind string, port int, qr 
 		kind = "directory"
 	}
 	fmt.Fprintf(a.stderr, "Serving %s %s over HTTP (Ctrl-C to stop)\n", kind, abs)
+	a.warnIfFirewallBlocks()
 	primary := bind
 	if bind == "0.0.0.0" || bind == "::" {
 		primary = primaryLANIP()
@@ -1243,6 +1260,7 @@ func (a app) lanBroadcast(ctx context.Context, args []string) int {
 	fmt.Fprintf(a.stderr, "Broadcasting %s (%s) as %q  access: %s\n", filepath.Base(opts.path), humanBytes(size), displayName, opts.access)
 	fmt.Fprintf(a.stderr, "This device: %s  code %s\n", hostname, lanid.Code())
 	fmt.Fprintln(a.stderr, "On another device: run `s2u discover` (or use the desktop app). Ctrl+C to stop.")
+	a.warnIfFirewallBlocks()
 
 	var (
 		adv  io.Closer

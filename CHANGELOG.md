@@ -26,6 +26,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   and `ps` output.
 
 ### Fixed
+- On Windows, a receiver kept advertising itself over mDNS while the firewall
+  silently dropped its port — so another device could see it by name and then
+  time out connecting, which looks like a broken feature rather than a missing
+  firewall rule. `--receive`, `--broadcast` and `--serve` now notice when no
+  inbound rule names the program and print the exact command to add one. It is
+  advisory only: it never blocks the listener and never changes firewall state.
 - `s2u --serve` no longer serves or lists dotfiles (`.env`, `.git/config`) from
   within a shared directory, and refuses to follow a symlink that points outside
   the served tree.
