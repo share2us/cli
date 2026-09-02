@@ -188,3 +188,23 @@ func TestServeHidesDotfilesAndSymlinkEscapes(t *testing.T) {
 		}
 	}
 }
+
+// --resume is opt-in: it costs a full hashing pass over the source before any
+// bytes move, so it must never turn itself on.
+func TestParseLanSendResumeFlag(t *testing.T) {
+	opts, err := parseLanSendArgs([]string{"file.bin", "--dest=192.0.2.5", "--resume"})
+	if err != nil {
+		t.Fatalf("parse error = %v", err)
+	}
+	if !opts.resume {
+		t.Fatal("--resume did not set resume")
+	}
+
+	plain, err := parseLanSendArgs([]string{"file.bin", "--dest=192.0.2.5"})
+	if err != nil {
+		t.Fatalf("parse error = %v", err)
+	}
+	if plain.resume {
+		t.Fatal("resume must default to off")
+	}
+}

@@ -306,6 +306,7 @@ type lanSendOpts struct {
 	password string
 	prompt   bool
 	pin      string
+	resume   bool
 }
 
 func (a app) lanSend(ctx context.Context, args []string) int {
@@ -413,11 +414,17 @@ func (a app) lanSend(ctx context.Context, args []string) int {
 
 	prog := newProgressPrinter(a.stderr, "sending")
 	fmt.Fprintf(a.stderr, "Sending %s (%s) to %s...\n", name, humanBytes(size), opts.dest)
+	// --resume costs a full read pass to hash the file before any bytes move, so
+	// it stays opt-in rather than becoming a silent stall on every large send.
+	if opts.resume && isDir {
+		fmt.Fprintln(a.stderr, "note: --resume does not apply to folders (the archive is rebuilt each attempt); sending normally.")
+	}
 	_, err = lanshare.Send(ctx, name, size, isDir, body, lanshare.SendOptions{
 		Dest:           opts.dest,
 		Password:       opts.password,
 		PinFingerprint: opts.pin,
 		OnProgress:     prog.update,
+		Resume:         opts.resume,
 	})
 	prog.finish()
 	if err != nil {
@@ -457,6 +464,8 @@ func parseLanSendArgs(args []string) (lanSendOpts, error) {
 			}
 		case strings.HasPrefix(arg, "--password="):
 			o.password = strings.TrimPrefix(arg, "--password=")
+		case arg == "--resume":
+			o.resume = true
 		case strings.HasPrefix(arg, "-"):
 			return o, fmt.Errorf("unknown flag: %s", arg)
 		default:

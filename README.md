@@ -116,6 +116,7 @@ s2u --receive --keep               # stay open for many transfers (Ctrl-C to sto
 
 # On the sender:
 s2u photos.zip --dest 192.168.1.5  # send directly over LAN/Tailscale/WireGuard
+s2u big.iso --dest 192.168.1.5 --resume   # restart an interrupted send where it stopped
 
 # Or serve over HTTP to any browser on the network:
 s2u ./folder --serve --qr
