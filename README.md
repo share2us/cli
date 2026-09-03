@@ -28,6 +28,26 @@ The script ([`scripts/install.sh`](scripts/install.sh)) verifies a CRC32 checksu
 and falls back to GitHub Releases. Tune it with env vars: `SHARE2US_INSTALL_DIR`
 (default `~/.local/bin`), `SHARE2US_VERSION` (default `latest`).
 
+**Debian / Ubuntu (apt)** — system-wide install that upgrades with the rest of the
+system. Two lines once, then `sudo apt install s2u`:
+
+```sh
+curl -fsSL https://apt.share2.us/share2us-apt.gpg | sudo tee /usr/share/keyrings/share2us-apt.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/share2us-apt.gpg] https://apt.share2.us stable main" | sudo tee /etc/apt/sources.list.d/share2us.list
+sudo apt update && sudo apt install s2u
+```
+
+amd64 and arm64. Pre-release builds are in the `beta` suite (`beta main` instead of
+`stable main`). The `.deb` files are also attached to every
+[release](https://github.com/share2us/cli/releases) for `sudo apt install ./s2u_<version>_amd64.deb`
+without adding the repository. An apt-installed `s2u` upgrades with
+`sudo apt upgrade`; `s2u update` tells you so instead of replacing the file.
+
+**Which one?** The one-liner needs no root and lives in your home directory —
+right for a personal machine, WSL, or anywhere you cannot install packages. apt
+is right for servers and for machines you already keep current with `apt upgrade`.
+Use one or the other on a machine; a `~/.local/bin` copy shadows `/usr/bin/s2u`.
+
 **One-liner (Windows, PowerShell)** — downloads `share2us.exe`, installs `s2u` +
 `share2us` under `%LOCALAPPDATA%\Share2Us\bin`, and adds it to your PATH:
 
@@ -51,7 +71,8 @@ sudo mv s2u /usr/local/bin/        # or anywhere on your PATH
 `go install github.com/share2us/cli@latest` also works, but it installs the
 binary as `cli` — rename it to `s2u` (or `share2us`) afterwards.
 
-Once installed, **`s2u update`** keeps it current from prebuilt releases.
+Once installed, **`s2u update`** keeps a script- or source-installed copy current
+from prebuilt releases (apt-installed copies are updated by apt).
 
 ### Uninstall
 
