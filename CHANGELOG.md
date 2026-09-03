@@ -12,6 +12,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+<!-- Add user-facing changes here as they merge. A stable release refuses to
+     ship while this section is empty (HTML comments do not count). -->
+
+## [20260903124432] - 2026-09-03
+
 ### Added
 - `s2u update --channel beta` follows prerelease builds; `--channel stable`
   returns to stable releases. The choice is saved, so the passive update
