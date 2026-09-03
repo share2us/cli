@@ -1,0 +1,36 @@
+# nfpm config for the Debian package. Built per linux arch by the release
+# workflow: copy that arch's binary to dist/deb/share2us, then
+# VERSION=<build timestamp> ARCH=amd64|arm64 nfpm package -p deb (nfpm expands env
+# in scalar fields like arch/version but NOT in contents[].src, hence the fixed path).
+# Package is `s2u` (what people type); the binary is installed as /usr/bin/share2us
+# with /usr/bin/s2u as a symlink, matching install.sh.
+name: s2u
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+# Build versions are UTC timestamps, not semver: keep them verbatim (nfpm would
+# otherwise rewrite 20260903150349 as 20260903150349.0.0).
+version_schema: none
+section: utils
+priority: optional
+maintainer: Share2Us <support@share2.us>
+description: |
+  Share2Us command line (s2u): share files and folders by link, to your
+  other devices, or directly over the local network.
+vendor: Share2Us
+homepage: https://share2.us
+license: MIT
+contents:
+  - src: ./dist/deb/share2us
+    dst: /usr/bin/share2us
+    file_info:
+      mode: 0755
+  - src: /usr/bin/share2us
+    dst: /usr/bin/s2u
+    type: symlink
+  # Tells `s2u update` that apt owns this install, so it prints the apt
+  # command instead of replacing /usr/bin/share2us underneath dpkg.
+  - src: ./packaging/managed-by-apt
+    dst: /usr/share/s2u/managed-by
+    file_info:
+      mode: 0644
