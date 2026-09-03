@@ -15,6 +15,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+## [20260903150825] - 2026-09-03
+
 ### Added
 - Debian/Ubuntu packages. `sudo apt install s2u` from the signed repository at
   https://apt.share2.us (suites `stable` and `beta`); `.deb` files are also
