@@ -113,6 +113,8 @@ s2u trust|block|require-approval alex@acme.dev   # per-sender policy
 # On the receiver:
 s2u --receive                      # prints its IP and waits for one transfer
 s2u --receive --keep               # stay open for many transfers (Ctrl-C to stop)
+s2u --receive --no-password        # open mode: prompts you to accept each transfer
+                                   #   (add --yes to accept without asking)
 
 # On the sender:
 s2u photos.zip --dest 192.168.1.5  # send directly over LAN/Tailscale/WireGuard

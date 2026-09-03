@@ -13,6 +13,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 ## [Unreleased]
 
 ### Added
+- `s2u --receive` in open mode (`--no-password`) now asks before accepting each
+  transfer, showing the sender, the file, and the sender's 6-digit verify code.
+  Answer `t` to trust that device by its key, and future transfers from it are
+  accepted without asking. `--yes` accepts without prompting. Modes that already
+  authenticate the sender (`--password`, `--allow-ip`) are unchanged.
 - `s2u --receive --keep` — one listener accepts many sequential transfers
   instead of exiting after the first.
 - `s2u <file> --dest=… --resume` — an interrupted send restarts where it

@@ -208,3 +208,67 @@ func TestParseLanSendResumeFlag(t *testing.T) {
 		t.Fatal("resume must default to off")
 	}
 }
+
+// Open mode ("--no-password") lets anyone who can reach the port send a file, so
+// each inbound transfer is approved by a human. These guard the three behaviours
+// that matter: headless refuses, --yes accepts, and answering "t" pins the
+// sender's KEY rather than its address.
+func TestApproveInboundHeadlessDeclines(t *testing.T) {
+	var out bytes.Buffer
+	a := app{stdout: io.Discard, stderr: &out} // no stdinIsTTY => not a TTY
+
+	approve := a.approveInbound(false)
+	if approve(lanshare.RequestInfo{Name: "x.bin", Size: 10, PeerIP: "192.0.2.5"}) {
+		t.Fatal("a headless open-mode receive must NOT auto-accept")
+	}
+	if !strings.Contains(out.String(), "--yes") {
+		t.Fatalf("the refusal must say how to proceed, got: %q", out.String())
+	}
+}
+
+func TestApproveInboundYesAccepts(t *testing.T) {
+	var out bytes.Buffer
+	a := app{stdout: io.Discard, stderr: &out}
+
+	if !a.approveInbound(true)(lanshare.RequestInfo{Name: "x.bin", Size: 1024, PeerIP: "192.0.2.5"}) {
+		t.Fatal("--yes must accept without a TTY")
+	}
+	if !strings.Contains(out.String(), "Accepting") {
+		t.Fatalf("an auto-accept must still be reported, got: %q", out.String())
+	}
+}
+
+func TestApproveInboundTrustNeedsAnIdentity(t *testing.T) {
+	// "t" on a sender with no device key must not pretend to trust anything —
+	// there is no key to pin, so it accepts once and says so.
+	var out bytes.Buffer
+	a := app{
+		stdout:     io.Discard,
+		stderr:     &out,
+		stdin:      strings.NewReader("t\n"),
+		stdinIsTTY: func(io.Reader) bool { return true },
+	}
+
+	if !a.approveInbound(false)(lanshare.RequestInfo{Name: "x.bin", Size: 1, PeerIP: "192.0.2.5"}) {
+		t.Fatal(`answering "t" should still accept this transfer`)
+	}
+	if !strings.Contains(out.String(), "cannot be trusted") {
+		t.Fatalf("must say why it could not trust an anonymous sender, got: %q", out.String())
+	}
+}
+
+func TestParseLanReceiveYesFlag(t *testing.T) {
+	for _, arg := range []string{"--yes", "-y"} {
+		opts, err := parseLanReceiveArgs([]string{"--receive", arg})
+		if err != nil {
+			t.Fatalf("%s: %v", arg, err)
+		}
+		if !opts.yes {
+			t.Fatalf("%s did not set yes", arg)
+		}
+	}
+	opts, _ := parseLanReceiveArgs([]string{"--receive"})
+	if opts.yes {
+		t.Fatal("yes must default to false, or headless receives silently auto-accept again")
+	}
+}
