@@ -568,12 +568,25 @@ func (a app) lanSend(ctx context.Context, args []string) int {
 	if opts.resume && isDir {
 		fmt.Fprintln(a.stderr, "note: --resume does not apply to folders (the archive is rebuilt each attempt); sending normally.")
 	}
+	// Present this device's identity (Ed25519 key, signed over the TLS channel
+	// binding) so the receiver can recognise and trust the DEVICE, not an IP.
+	// Until now only the broadcast path did this; a direct send was anonymous, so
+	// a receiver could never trust a sender from `--receive`. Best-effort: an
+	// unloadable identity falls back to an anonymous send rather than failing.
+	id, idErr := lanid.Identity()
+	if idErr != nil {
+		fmt.Fprintf(a.stderr, "note: sending without a device identity (%v); the receiver cannot trust this device\n", idErr)
+		id = nil
+	}
+	hostname, _ := os.Hostname()
 	_, err = lanshare.Send(ctx, name, size, isDir, body, lanshare.SendOptions{
 		Dest:           opts.dest,
 		Password:       opts.password,
 		PinFingerprint: opts.pin,
 		OnProgress:     prog.update,
 		Resume:         opts.resume,
+		Identity:       id,
+		SenderName:     hostname,
 	})
 	prog.finish()
 	if err != nil {

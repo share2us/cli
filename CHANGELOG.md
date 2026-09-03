@@ -23,6 +23,9 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   `s2u lan trusted list` shows the mode; `s2u lan trusted mode <fingerprint>
   ask|auto` changes it. `--receive` now honours trust too (it used to prompt
   trusted devices like strangers).
+- Direct sends (`s2u <file> --dest=…`) now present the device identity and
+  name, like broadcasts already did. Before, a direct sender was anonymous, so
+  the receiver could never trust it, only accept once.
 
 ## [20260903150825] - 2026-09-03
 
