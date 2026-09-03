@@ -182,50 +182,100 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 // mechanism this sits alongside.
 func (a app) approveInbound(yes bool) func(lanshare.RequestInfo) bool {
 	return func(r lanshare.RequestInfo) bool {
-		fp := lanshare.IdentityFingerprint(r.SenderKey)
-		who := r.PeerIP
-		if who == "" {
-			who = "a nearby device"
-		}
-		if r.SenderName != "" {
-			who = fmt.Sprintf("%s (%s)", r.SenderName, who)
-		}
 		what := fmt.Sprintf("%s (%s)", r.Name, humanBytes(max64(r.Size, 0)))
-		if yes {
-			fmt.Fprintf(a.stderr, "Accepting %s from %s\n", what, who)
-			return true
-		}
-		if !a.inputIsTTY() {
-			fmt.Fprintf(a.stderr, "Denied %s (no TTY to approve; use --yes)\n", who)
-			return false
-		}
-		code := ""
-		if fp != "" {
-			code = " code " + lanshare.VerifyCode(fp)
-		}
-		fmt.Fprintf(a.stderr, "Accept %s from %s%s? [y/N/t=trust] ", what, who, code)
-		reader := bufio.NewReader(a.input())
+		return a.decideInbound(r, yes, what, "Accept %s from %s%s?")
+	}
+}
+
+// decideInbound is the one approval decision for both inbound paths (--receive
+// and --broadcast --access approve). yes = --yes (accept everything, headless
+// safe). Otherwise, per the sender's trust state:
+//   - trusted + auto: accepted, no prompt (announced on stderr).
+//   - trusted + ask:  one-tap y/N, no verify code (the key is already pinned).
+//   - untrusted:      y/N/t with the verify code; "t" trusts the device and then
+//     asks which mode to give it, defaulting to ask.
+//
+// question is a format with three %s: what, who, and the code/trust suffix.
+func (a app) decideInbound(r lanshare.RequestInfo, yes bool, what, question string) bool {
+	fp := lanshare.IdentityFingerprint(r.SenderKey)
+	who := r.PeerIP
+	if who == "" {
+		who = "a nearby device"
+	}
+	if r.SenderName != "" {
+		who = fmt.Sprintf("%s (%s)", r.SenderName, who)
+	}
+	if yes {
+		fmt.Fprintf(a.stderr, "Accepting %s from %s\n", what, who)
+		return true
+	}
+	if d, ok := lanid.Lookup(fp); ok && d.AutoAccept() {
+		fmt.Fprintf(a.stderr, "Accepting %s from trusted device %s (saves automatically; change with `%s lan trusted mode`)\n", what, who, commandName)
+		return true
+	}
+	if !a.inputIsTTY() {
+		fmt.Fprintf(a.stderr, "Denied %s (no TTY to approve; use --yes)\n", who)
+		return false
+	}
+	reader := bufio.NewReader(a.input())
+	if _, ok := lanid.Lookup(fp); ok {
+		fmt.Fprintf(a.stderr, question+" [y/N] ", what, who, " (trusted device)")
 		ans, _ := reader.ReadString('\n')
-		switch strings.TrimSpace(strings.ToLower(ans)) {
-		case "t", "trust":
-			label := r.SenderName
-			if label == "" {
-				label = r.PeerIP
-			}
-			if fp == "" {
-				// An anonymous sender has no key to pin, so there is nothing to
-				// trust. Accept this one transfer rather than pretending.
-				fmt.Fprintln(a.stderr, "This sender has no device identity, so it cannot be trusted; accepting once.")
-				return true
-			}
-			_ = lanid.Trust(fp, label)
-			fmt.Fprintf(a.stderr, "Trusted %s — future transfers from it will not ask.\n", who)
+		return isYes(ans)
+	}
+	code := ""
+	if fp != "" {
+		code = " code " + lanshare.VerifyCode(fp)
+	}
+	fmt.Fprintf(a.stderr, question+" [y/N/t=trust] ", what, who, code)
+	ans, _ := reader.ReadString('\n')
+	switch strings.TrimSpace(strings.ToLower(ans)) {
+	case "t", "trust":
+		if fp == "" {
+			// An anonymous sender has no key to pin, so there is nothing to
+			// trust. Accept this one transfer rather than pretending.
+			fmt.Fprintln(a.stderr, "This sender has no device identity, so it cannot be trusted; accepting once.")
 			return true
-		case "y", "yes":
-			return true
-		default:
-			return false
 		}
+		label := r.SenderName
+		if label == "" {
+			label = r.PeerIP
+		}
+		// The mode question. Ask is the default: a trusted device skips the code
+		// compare but each file still gets a one-tap approval.
+		fmt.Fprintf(a.stderr, "Ask before each transfer from this device? [Y/n]\n")
+		fmt.Fprintf(a.stderr, "  Y = you still approve every file it sends (no code to compare)  (recommended)\n")
+		fmt.Fprintf(a.stderr, "  n = its files are saved automatically without asking\n> ")
+		modeAns, _ := reader.ReadString('\n')
+		mode := trustModeFromAnswer(modeAns)
+		_ = lanid.TrustWithMode(fp, label, mode)
+		if mode == lanid.ModeAuto {
+			fmt.Fprintf(a.stderr, "Trusted %s — its transfers will be saved automatically. Change: %s lan trusted mode %s ask\n", who, commandName, fp)
+		} else {
+			fmt.Fprintf(a.stderr, "Trusted %s — you will still approve each transfer, without a code. Change: %s lan trusted mode %s auto\n", who, commandName, fp)
+		}
+		return true
+	default:
+		return isYes(ans)
+	}
+}
+
+func isYes(ans string) bool {
+	switch strings.TrimSpace(strings.ToLower(ans)) {
+	case "y", "yes":
+		return true
+	}
+	return false
+}
+
+// trustModeFromAnswer maps the "Ask before each transfer? [Y/n]" answer to a
+// trust mode. Anything but an explicit no means ask (the safe default).
+func trustModeFromAnswer(ans string) string {
+	switch strings.TrimSpace(strings.ToLower(ans)) {
+	case "n", "no", "auto":
+		return lanid.ModeAuto
+	default:
+		return lanid.ModeAsk
 	}
 }
 
@@ -1301,43 +1351,11 @@ func (a app) lanBroadcast(ctx context.Context, args []string) int {
 	bctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// approve gates each UNtrusted download; trusted devices auto-accept via
-	// IsTrusted before OnRequest is called.
+	// approve gates each download in --access approve. Trusted devices follow
+	// their mode (auto = no prompt, ask = one tap without a code); untrusted ones
+	// get the code prompt with the option to trust. Same decider as --receive.
 	approve := func(r lanshare.RequestInfo) bool {
-		fp := lanshare.IdentityFingerprint(r.SenderKey)
-		who := r.PeerIP
-		if who == "" {
-			who = "a nearby device"
-		}
-		if r.SenderName != "" {
-			who = fmt.Sprintf("%s (%s)", r.SenderName, who)
-		}
-		if opts.yes {
-			fmt.Fprintf(a.stderr, "Accepting %s -> %s\n", who, r.Name)
-			return true
-		}
-		if !a.inputIsTTY() {
-			fmt.Fprintf(a.stderr, "Denied %s (no TTY to approve; use --yes or --access all)\n", who)
-			return false
-		}
-		code := lanshare.VerifyCode(fp)
-		fmt.Fprintf(a.stderr, "Allow %s (code %s) to download %s? [y/N/t=trust] ", who, code, r.Name)
-		reader := bufio.NewReader(a.input())
-		ans, _ := reader.ReadString('\n')
-		switch strings.TrimSpace(strings.ToLower(ans)) {
-		case "t", "trust":
-			label := r.SenderName
-			if label == "" {
-				label = r.PeerIP
-			}
-			_ = lanid.Trust(fp, label)
-			fmt.Fprintf(a.stderr, "Trusted %s\n", who)
-			return true
-		case "y", "yes":
-			return true
-		default:
-			return false
-		}
+		return a.decideInbound(r, opts.yes, r.Name, "Allow %s to be downloaded by %s%s?")
 	}
 
 	fmt.Fprintf(a.stderr, "Broadcasting %s (%s) as %q  access: %s\n", filepath.Base(opts.path), humanBytes(size), displayName, opts.access)

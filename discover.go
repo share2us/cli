@@ -406,7 +406,7 @@ func (a app) lanAdmin(ctx context.Context, args []string) int {
 }
 
 func (a app) lanAdminUsage() int {
-	fmt.Fprintf(a.stderr, "usage: %s lan id | trusted [list|revoke <fingerprint>] | activity [list|clear] | scan-interval [get|set <sec>]\n", commandName)
+	fmt.Fprintf(a.stderr, "usage: %s lan id | trusted [list|mode <fp> ask|auto|revoke <fp>] | activity [list|clear] | scan-interval [get|set <sec>]\n", commandName)
 	return 2
 }
 
@@ -423,7 +423,23 @@ func (a app) lanTrusted(args []string) int {
 			return 0
 		}
 		for _, d := range list {
-			fmt.Fprintf(a.stdout, "%s  %s  (code %s)\n", d.Fingerprint, d.Name, lanshare.VerifyCode(d.Fingerprint))
+			fmt.Fprintf(a.stdout, "%s  %s  (code %s)  mode: %s\n", d.Fingerprint, d.Name, lanshare.VerifyCode(d.Fingerprint), d.EffectiveMode())
+		}
+		fmt.Fprintf(a.stdout, "\nmode ask  = approve each transfer (no code to compare)\nmode auto = files from this device are saved without asking\nChange with: %s lan trusted mode <fingerprint> ask|auto\n", commandName)
+		return 0
+	case "mode":
+		if len(args) < 3 {
+			fmt.Fprintf(a.stderr, "usage: %s lan trusted mode <fingerprint> ask|auto\n", commandName)
+			return 2
+		}
+		if err := lanid.SetMode(args[1], args[2]); err != nil {
+			return a.fail("set trust mode", err)
+		}
+		mode, _ := lanid.NormalizeMode(args[2])
+		if mode == lanid.ModeAuto {
+			fmt.Fprintln(a.stdout, "Set to auto: transfers from this device are saved without asking.")
+		} else {
+			fmt.Fprintln(a.stdout, "Set to ask: you approve each transfer from this device (no code to compare).")
 		}
 		return 0
 	case "revoke", "remove", "rm":
@@ -437,7 +453,7 @@ func (a app) lanTrusted(args []string) int {
 		fmt.Fprintln(a.stdout, "Revoked.")
 		return 0
 	default:
-		fmt.Fprintf(a.stderr, "usage: %s lan trusted [list|revoke <fingerprint>]\n", commandName)
+		fmt.Fprintf(a.stderr, "usage: %s lan trusted [list|mode <fingerprint> ask|auto|revoke <fingerprint>]\n", commandName)
 		return 2
 	}
 }
