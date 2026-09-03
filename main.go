@@ -976,6 +976,10 @@ func (a app) maybeNotifyUpdate(ctx context.Context, command string) {
 		LatestVersion: info.LatestVersion,
 	})
 	if info.UpdateAvailable && strings.TrimSpace(info.LatestVersion) != "" {
+		if m, ok := managedInstall(); ok {
+			fmt.Fprintf(a.stderr, "Update available: %s %s. Run: %s\n", commandName, info.LatestVersion, m.upgradeCommand)
+			return
+		}
 		fmt.Fprintf(a.stderr, "Update available: %s %s. Run: %s update\n", commandName, info.LatestVersion, commandName)
 	}
 }
@@ -997,6 +1001,12 @@ func (a app) update(ctx context.Context, args []string) int {
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 2
+	}
+	// A package manager owns this install: replacing its file underneath it would
+	// desync dpkg and be undone by the next upgrade. Point at the manager instead.
+	if m, ok := managedInstall(); ok {
+		fmt.Fprintf(a.stdout, "%s was installed with %s. Update it with:\n  %s\n", commandName, m.name, m.upgradeCommand)
+		return 0
 	}
 	apiBase, err := resolveUpdateAPIBase(opts.host)
 	if err != nil {
@@ -5085,4 +5095,30 @@ func truncateLeft(value string, width int) string {
 		return value[len(value)-width:]
 	}
 	return "..." + value[len(value)-(width-3):]
+}
+
+// managedInstallInfo describes a package-manager-owned install.
+type managedInstallInfo struct {
+	name           string // "apt"
+	upgradeCommand string // what the user should run instead of `update`
+}
+
+// managedInstallMarker is installed by the .deb (packaging/nfpm.yaml). Its
+// content names the manager. Overridable for tests.
+var managedInstallMarker = "/usr/share/s2u/managed-by"
+
+// managedInstall reports whether this binary was installed by a package manager
+// that should also be the one to update it. Only apt exists today; the marker
+// file keeps it data-driven for future managers (brew, winget).
+func managedInstall() (managedInstallInfo, bool) {
+	raw, err := os.ReadFile(managedInstallMarker)
+	if err != nil {
+		return managedInstallInfo{}, false
+	}
+	switch strings.TrimSpace(string(raw)) {
+	case "apt":
+		return managedInstallInfo{name: "apt", upgradeCommand: "sudo apt update && sudo apt install --only-upgrade s2u"}, true
+	default:
+		return managedInstallInfo{}, false
+	}
 }

@@ -2604,3 +2604,28 @@ func TestParseUpdateArgsChannel(t *testing.T) {
 		t.Fatalf("default channel should be unset: %+v %v", opts, err)
 	}
 }
+
+func TestManagedInstallMarker(t *testing.T) {
+	dir := t.TempDir()
+	prev := managedInstallMarker
+	t.Cleanup(func() { managedInstallMarker = prev })
+
+	managedInstallMarker = dir + "/missing"
+	if _, ok := managedInstall(); ok {
+		t.Fatal("no marker should mean not managed")
+	}
+	managedInstallMarker = dir + "/managed-by"
+	if err := os.WriteFile(managedInstallMarker, []byte("apt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, ok := managedInstall()
+	if !ok || m.name != "apt" || !strings.Contains(m.upgradeCommand, "apt install --only-upgrade s2u") {
+		t.Fatalf("managed = %+v ok=%v", m, ok)
+	}
+	if err := os.WriteFile(managedInstallMarker, []byte("something-else"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := managedInstall(); ok {
+		t.Fatal("unknown manager should not count as managed")
+	}
+}

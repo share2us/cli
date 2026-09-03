@@ -32,6 +32,7 @@ on:
       - "**.go"
       - "go.mod"
       - "go.sum"
+      - "packaging/**"
   workflow_dispatch:
     inputs:
       channel:
@@ -53,6 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v7
 
@@ -84,6 +86,8 @@ jobs:
               archive="share2us_${os}_${arch}.tar.gz"
               tar -C dist -czf "dist/$archive" "$bin"
             fi
+            # Keep the linux binaries for the .deb build below.
+            if [ "$os" = linux ]; then mkdir -p "dist/deb/$arch" && cp "dist/$bin" "dist/deb/$arch/share2us"; fi
             rm -f "dist/$bin"
             # crc32 sidecar for install.sh and the `s2u update` manifest;
             # sha256 for install.ps1 (Windows has no cksum, but has Get-FileHash).
@@ -91,6 +95,17 @@ jobs:
               && cksum "$archive" > "$archive.crc32" \
               && sha256sum "$archive" | awk '{print $1}' > "$archive.sha256" )
           done
+
+          # Debian packages (package `s2u`, /usr/bin/share2us + s2u symlink) for
+          # `sudo apt install s2u`; attached to the release and published to the
+          # apt repository below. nfpm is Go-native, so no extra toolchain.
+          for arch in amd64 arm64; do
+            cp "dist/deb/$arch/share2us" dist/deb/share2us
+            VERSION="$VERSION" ARCH="$arch" go run github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.1 \
+              package -f packaging/nfpm.yaml -p deb -t dist/
+          done
+          rm -rf dist/deb
+          ( cd dist && for f in *.deb; do sha256sum "$f" | awk '{print $1}' > "$f.sha256"; done )
           ls -la dist
 
       # Generate manifest.json for `s2u update` and ship it AS A RELEASE ASSET, so
@@ -144,10 +159,38 @@ jobs:
             LATEST_FLAGS="--prerelease --latest=false"
           fi
           # shellcheck disable=SC2086
-          gh release create "v${VERSION}" dist/*.tar.gz dist/*.zip dist/*.crc32 dist/*.sha256 dist/manifest.json \
+          gh release create "v${VERSION}" dist/*.tar.gz dist/*.zip dist/*.deb dist/*.crc32 dist/*.sha256 dist/manifest.json \
             --title "Share2Us CLI ${VERSION}" \
             --notes-file "$NOTES_FILE" \
             $LATEST_FLAGS
+
+      # Publish the apt repository: a signed static tree on the gh-pages branch of
+      # THIS repo (served by GitHub Pages at https://apt.share2.us). Same-repo push,
+      # so the workflow token suffices — no deploy key. Suite follows the channel:
+      # stable (merge to main) or beta (dispatch); each suite carries its latest
+      # build only, older ones stay on GitHub Releases. Skips cleanly when the
+      # signing key secret is not set.
+      - name: Publish apt repository
+        if: env.APT_GPG_PRIVATE_KEY != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq dpkg-dev apt-utils >/dev/null
+          export GNUPGHOME="$(mktemp -d)"
+          printf '%s' "$APT_GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          KEY_ID="$(gpg --list-secret-keys --with-colons | awk -F: '/^fpr/{print $10; exit}')"
+          SUITE="${{ inputs.channel || 'stable' }}"
+          git clone --quiet --depth 1 --branch gh-pages "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" site
+          APT_GPG_KEY_ID="$KEY_ID" scripts/apt-repo.sh "$SUITE" site dist/*.deb
+          gpg --export "$KEY_ID" > site/share2us-apt.gpg
+          gpg --export --armor "$KEY_ID" > site/share2us-apt.asc
+          cd site
+          git add -A
+          git -c user.name=github-actions -c user.email=github-actions@github.com \
+            commit -q -m "apt: ${SUITE} ${VERSION}" || { echo "apt repo unchanged"; exit 0; }
+          git push -q origin gh-pages
+          echo "apt repo published: suite=${SUITE} version=${VERSION}"
 
       # Publish the npm wrapper (@share2us/cli), pinned to this exact release so a
       # given npm version always installs the same binary.
