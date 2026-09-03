@@ -15,6 +15,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+## [20260903161047] - 2026-09-03
+
 ### Changed
 - Trusted devices now have a mode. When you answer `t` to trust a sender, the
   CLI asks "Ask before each transfer from this device?": **Y** (default) keeps a
