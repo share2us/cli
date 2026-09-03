@@ -145,6 +145,19 @@ s2u big.iso --dest 192.168.1.5 --resume   # restart an interrupted send where it
 s2u ./folder --serve --qr
 ```
 
+**Trusting a device.** When an open-mode prompt asks about a sender, answer `t` to
+trust it: you choose whether it should still **ask** before each transfer (default,
+no code to compare) or save its files **automatically**. Trust is an account
+feature verified with a second factor: Share2Us emails a 6-digit code to your
+account address, or asks for your authenticator code once you set one up under
+**Account → Security** in the portal. The trusted list lives on your account,
+signed by the server and synced to your signed-in machines, so nothing on the
+local disk (and no automation or AI agent driving the CLI) can widen it.
+`s2u lan trusted list|mode <fingerprint> ask|auto|revoke <fingerprint>|reset`
+manages it; switching to auto asks for a code, revoking does not. Not signed in,
+or using a personal API token? The transfer is accepted once and nothing is trusted.
+
+
 Transfers are secured with TLS 1.3 and a PAKE handshake; peers can be discovered
 by mDNS and saved as aliases/trusted peers.
 
