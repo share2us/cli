@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><title>Share2Us apt repository</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;max-width:46rem;margin:3rem auto;padding:0 1rem;color:#222}pre{background:#f4f4f4;padding:.8rem;overflow:auto}</style>
+<h1>Share2Us apt repository</h1>
+<p>Debian and Ubuntu packages for the <code>s2u</code> command line. Signed with the key at <a href="/share2us-apt.gpg">/share2us-apt.gpg</a> (<a href="/share2us-apt.asc">ASCII</a>).</p>
+<pre>curl -fsSL https://apt.share2.us/share2us-apt.gpg | sudo tee /usr/share/keyrings/share2us-apt.gpg &gt;/dev/null
+echo "deb [signed-by=/usr/share/keyrings/share2us-apt.gpg] https://apt.share2.us stable main" | sudo tee /etc/apt/sources.list.d/share2us.list
+sudo apt update &amp;&amp; sudo apt install s2u</pre>
+<p>Pre-release builds live in the <code>beta</code> suite: use <code>beta main</code> instead of <code>stable main</code>. The repository is published by the <a href="https://github.com/share2us/cli">share2us/cli</a> release workflow; releases and checksums are on <a href="https://github.com/share2us/cli/releases">GitHub Releases</a>.</p>
