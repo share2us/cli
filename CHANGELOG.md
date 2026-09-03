@@ -15,6 +15,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Removed
+- The pre-verification local trust file (`lan_trusted.json`) is deleted at
+  startup. Its entries were never confirmed with a code, so they are not
+  migrated; trust each device again once (see README, "Trusting a device").
+
 ## [20260903164522] - 2026-09-03
 
 ### Security

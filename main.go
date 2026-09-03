@@ -33,6 +33,7 @@ import (
 	"unicode/utf8"
 
 	clicore "github.com/share2us/cli-core"
+	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli-core/p2p"
 	"github.com/share2us/cli/tui"
 	localmcp "github.com/share2us/mcp/mcp"
@@ -55,6 +56,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		stdoutIsTTY:  isTerminalWriter,
 		readPassword: readPasswordNoEcho,
 	}
+	// ADR-034: trust now comes from the account (server-signed, MFA-gated). The
+	// pre-MFA local trust file was never factor-verified and is not migrated.
+	lanid.RemoveLegacyTrustFile()
 	return app.run(context.Background(), args)
 }
 
