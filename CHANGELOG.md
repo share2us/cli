@@ -15,6 +15,18 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Changed
+- Trusted devices now have a mode. When you answer `t` to trust a sender, the
+  CLI asks "Ask before each transfer from this device?": **Y** (default) keeps a
+  one-tap approval per file without the code compare; **n** saves its files
+  automatically. Devices trusted before this release are treated as "ask".
+  `s2u lan trusted list` shows the mode; `s2u lan trusted mode <fingerprint>
+  ask|auto` changes it. `--receive` now honours trust too (it used to prompt
+  trusted devices like strangers).
+- Direct sends (`s2u <file> --dest=…`) now present the device identity and
+  name, like broadcasts already did. Before, a direct sender was anonymous, so
+  the receiver could never trust it, only accept once.
+
 ## [20260903150825] - 2026-09-03
 
 ### Added

@@ -2629,3 +2629,11 @@ func TestManagedInstallMarker(t *testing.T) {
 		t.Fatal("unknown manager should not count as managed")
 	}
 }
+
+func TestTrustModeFromAnswerDefaultsToAsk(t *testing.T) {
+	for in, want := range map[string]string{"": "ask", "y": "ask", "Yes": "ask", "maybe": "ask", "n": "auto", "NO": "auto", "auto": "auto"} {
+		if got := trustModeFromAnswer(in); got != want {
+			t.Errorf("trustModeFromAnswer(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
