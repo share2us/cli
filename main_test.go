@@ -19,7 +19,13 @@ import (
 	"testing"
 	"time"
 
+	"bufio"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/hex"
 	clicore "github.com/share2us/cli-core"
+	"github.com/share2us/cli-core/lanid"
+	"github.com/share2us/cli-core/lanshare"
 )
 
 func TestRunHelpAndVersion(t *testing.T) {
@@ -2635,5 +2641,104 @@ func TestTrustModeFromAnswerDefaultsToAsk(t *testing.T) {
 		if got := trustModeFromAnswer(in); got != want {
 			t.Errorf("trustModeFromAnswer(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// fakeTrustAPI is a minimal ADR-034 server: one challenge, email factor, the
+// right code is "123456", and a real Ed25519-signed list on success.
+type fakeTrustAPI struct {
+	priv     ed25519.PrivateKey
+	pubHex   string
+	attempts int
+	trusted  []lanid.TrustedDevice
+}
+
+func newFakeTrustAPI(t *testing.T) (*fakeTrustAPI, *httptest.Server) {
+	t.Helper()
+	pub, priv, _ := ed25519.GenerateKey(nil)
+	f := &fakeTrustAPI{priv: priv, pubHex: hex.EncodeToString(pub)}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/lan/trust/challenges", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer s2s_test" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var req struct{ Fingerprint, Name, Mode string }
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		f.trusted = []lanid.TrustedDevice{{Fingerprint: req.Fingerprint, Name: req.Name, Mode: req.Mode}}
+		_ = json.NewEncoder(w).Encode(map[string]any{"challenge_id": "ch1", "factor": "email", "sent_to": "u***@example.test", "expires_in": 600, "verify_code": lanshare.VerifyCode(req.Fingerprint)})
+	})
+	mux.HandleFunc("POST /v1/lan/trust/challenges/ch1/verify", func(w http.ResponseWriter, r *http.Request) {
+		var req struct{ Code string }
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Code != "123456" {
+			f.attempts++
+			w.WriteHeader(http.StatusForbidden)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "invalid_code", "message": "wrong code (4 attempts left)"}})
+			return
+		}
+		raw, _ := json.Marshal(lanid.TrustListPayload{Version: 1, AccountID: "acct", IssuedAt: time.Now(), ExpiresAt: time.Now().Add(24 * time.Hour), Devices: f.trusted})
+		signed := lanid.SignedTrustList{KeyID: "t", Payload: base64.RawURLEncoding.EncodeToString(raw), Signature: base64.RawURLEncoding.EncodeToString(ed25519.Sign(f.priv, raw))}
+		_ = json.NewEncoder(w).Encode(map[string]any{"devices": f.trusted, "signed": signed, "public_key": f.pubHex})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return f, srv
+}
+
+func TestTrustDeviceWithMFAVerifiesCodeThenCachesSignedList(t *testing.T) {
+	f, srv := newFakeTrustAPI(t)
+	withCredential(t, srv.URL)
+	t.Setenv("SHARE2US_API_BASE", srv.URL)
+	t.Cleanup(func() { _ = lanid.ResetTrust() })
+	const fp = "b676f58a180a7fc204ab3a1c0d24eb9eec33b66faa066569eef3fa0d8096d37c"
+
+	var errOut bytes.Buffer
+	a := app{stdout: io.Discard, stderr: &errOut, stdin: strings.NewReader("000000\n123456\n"), stdinIsTTY: func(io.Reader) bool { return true }}
+	ok := a.trustDeviceWithMFA(context.Background(), bufio.NewReader(a.input()), fp, "laptop", lanid.ModeAuto)
+	if !ok {
+		t.Fatalf("trust should succeed on the second code; output:\n%s", errOut.String())
+	}
+	if f.attempts != 1 {
+		t.Fatalf("wrong-code attempts = %d", f.attempts)
+	}
+	out := errOut.String()
+	if !strings.Contains(out, "we emailed a 6-digit code to u***@example.test") || !strings.Contains(out, lanshare.VerifyCode(fp)) || !strings.Contains(out, "wrong code (4 attempts left)") {
+		t.Fatalf("prompt text missing pieces:\n%s", out)
+	}
+	d, trusted := lanid.Lookup(fp)
+	if !trusted || !d.AutoAccept() || d.Name != "laptop" {
+		t.Fatalf("after verify: %+v trusted=%v", d, trusted)
+	}
+	if lanid.PinnedTrustKey() != f.pubHex {
+		t.Fatal("server key was not pinned")
+	}
+}
+
+func TestTrustDeviceWithMFARefusesAPITokensAndBlankCancels(t *testing.T) {
+	_, srv := newFakeTrustAPI(t)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("SHARE2US_API_BASE", srv.URL)
+	if err := clicore.SaveCredential(clicore.Credential{APIBase: srv.URL, Token: "s2u_pat_agent", Email: "agent@example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	var errOut bytes.Buffer
+	a := app{stdout: io.Discard, stderr: &errOut, stdin: strings.NewReader("123456\n"), stdinIsTTY: func(io.Reader) bool { return true }}
+	if a.trustDeviceWithMFA(context.Background(), bufio.NewReader(a.input()), "b676f58a180a7fc204ab3a1c0d24eb9eec33b66faa066569eef3fa0d8096d37c", "x", lanid.ModeAsk) {
+		t.Fatal("a personal API token must not be able to trust a device")
+	}
+	if !strings.Contains(errOut.String(), "not an API token") {
+		t.Fatalf("expected the PAT refusal, got:\n%s", errOut.String())
+	}
+
+	// Signed-in user, but a blank code cancels without trusting.
+	withCredential(t, srv.URL)
+	errOut.Reset()
+	a = app{stdout: io.Discard, stderr: &errOut, stdin: strings.NewReader("\n"), stdinIsTTY: func(io.Reader) bool { return true }}
+	if a.trustDeviceWithMFA(context.Background(), bufio.NewReader(a.input()), "b676f58a180a7fc204ab3a1c0d24eb9eec33b66faa066569eef3fa0d8096d37c", "x", lanid.ModeAsk) {
+		t.Fatal("blank code must cancel")
+	}
+	if _, trusted := lanid.Lookup("b676f58a180a7fc204ab3a1c0d24eb9eec33b66faa066569eef3fa0d8096d37c"); trusted {
+		t.Fatal("nothing may be trusted after cancel")
 	}
 }

@@ -15,6 +15,20 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Security
+- Trusting a nearby device now requires verification through your account
+  (ADR-034). When you answer `t` (or use `discover --trust`), Share2Us emails a
+  6-digit code to your account address (or asks for your authenticator code once
+  you enrol one) and only then records the device — on your account, not in a
+  local file. The list of trusted devices is signed by the server and synced to
+  your signed-in machines; a hand-edited copy is ignored. This stops an
+  automation or AI agent driving the CLI from trusting devices on its own.
+  Devices you trusted before this release were never verified this way and are
+  **not carried over**: trust them again once. Switching a device to "auto" also
+  needs the code; switching back to "ask" and revoking do not. Trusting needs a
+  signed-in interactive login: personal API tokens cannot trust.
+- New: `s2u lan trusted reset` clears the cached list and pinned server key.
+
 ## [20260903161047] - 2026-09-03
 
 ### Changed

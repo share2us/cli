@@ -248,11 +248,17 @@ func (a app) decideInbound(r lanshare.RequestInfo, yes bool, what, question stri
 		fmt.Fprintf(a.stderr, "  n = its files are saved automatically without asking\n> ")
 		modeAns, _ := reader.ReadString('\n')
 		mode := trustModeFromAnswer(modeAns)
-		_ = lanid.TrustWithMode(fp, label, mode)
-		if mode == lanid.ModeAuto {
-			fmt.Fprintf(a.stderr, "Trusted %s — its transfers will be saved automatically. Change: %s lan trusted mode %s ask\n", who, commandName, fp)
+		// ADR-034: trusting needs a second factor verified by the server. The
+		// transfer itself is accepted either way (the user said yes); only the
+		// trust is conditional on the code.
+		if a.trustDeviceWithMFA(context.Background(), reader, fp, label, mode) {
+			if mode == lanid.ModeAuto {
+				fmt.Fprintf(a.stderr, "Trusted %s — its transfers will be saved automatically. Change: %s lan trusted mode %s ask\n", who, commandName, fp)
+			} else {
+				fmt.Fprintf(a.stderr, "Trusted %s — you will still approve each transfer, without a code. Change: %s lan trusted mode %s auto\n", who, commandName, fp)
+			}
 		} else {
-			fmt.Fprintf(a.stderr, "Trusted %s — you will still approve each transfer, without a code. Change: %s lan trusted mode %s auto\n", who, commandName, fp)
+			fmt.Fprintln(a.stderr, "Not trusted; accepting this transfer once.")
 		}
 		return true
 	default:
@@ -1429,4 +1435,82 @@ func (a app) lanBroadcast(ctx context.Context, args []string) int {
 	}
 	fmt.Fprintln(a.stderr, "broadcast stopped")
 	return 0
+}
+
+// trustClient returns an API client for the signed-in user, or an explanation of
+// why trusting is not possible right now. Trust is an account feature (ADR-034):
+// it needs an interactive login, never a personal API token.
+func (a app) trustClient() (*clicore.Client, string) {
+	cred, err := clicore.LoadCredential()
+	if err != nil || cred.Token == "" {
+		return nil, "trusting a device requires being signed in (" + commandName + " login)"
+	}
+	if clicore.IsAPIToken(cred.Token) {
+		return nil, "trusting a device needs an interactive login, not an API token"
+	}
+	apiBase, _, err := resolveAPIBase()
+	if err != nil {
+		return nil, "cannot resolve the API: " + err.Error()
+	}
+	return clicore.NewClient(apiBase, cred.Token), ""
+}
+
+// trustDeviceWithMFA runs the ADR-034 flow on the terminal: open a challenge,
+// ask the user for the code the server delivered (email, or their authenticator
+// app), verify, and cache the signed list. Returns true only when the server
+// recorded the trust. reader is the prompt input already in use.
+func (a app) trustDeviceWithMFA(ctx context.Context, reader *bufio.Reader, fp, name, mode string) bool {
+	client, why := a.trustClient()
+	if client == nil {
+		fmt.Fprintf(a.stderr, "Cannot trust: %s.\n", why)
+		return false
+	}
+	ch, err := client.LanTrustOpen(ctx, fp, name, mode)
+	if err != nil {
+		fmt.Fprintf(a.stderr, "Cannot start the trust verification: %v\n", err)
+		return false
+	}
+	switch ch.Factor {
+	case "totp":
+		fmt.Fprintf(a.stderr, "Verification: enter the 6-digit code from your authenticator app (device verify code %s).\n", ch.VerifyCode)
+	default:
+		fmt.Fprintf(a.stderr, "Verification: we emailed a 6-digit code to %s. The email also shows this device's verify code (%s) — make sure it matches.\n", ch.SentTo, ch.VerifyCode)
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		fmt.Fprint(a.stderr, "Code (blank to cancel): ")
+		ans, _ := reader.ReadString('\n')
+		code := strings.TrimSpace(ans)
+		if code == "" {
+			fmt.Fprintln(a.stderr, "Cancelled.")
+			return false
+		}
+		list, err := client.LanTrustVerify(ctx, ch.ChallengeID, code)
+		if err == nil {
+			if serr := clicore.SaveTrustList(list); serr != nil {
+				fmt.Fprintf(a.stderr, "Trusted on your account, but the local copy could not be saved: %v\n", serr)
+				return false
+			}
+			return true
+		}
+		var apiErr *clicore.APIError
+		if errors.As(err, &apiErr) && apiErr.Code == "invalid_code" {
+			fmt.Fprintf(a.stderr, "%s\n", apiErr.Message)
+			continue
+		}
+		fmt.Fprintf(a.stderr, "Verification failed: %v\n", err)
+		return false
+	}
+	return false
+}
+
+// refreshTrustList pulls the account's trusted devices and caches the signed
+// copy. Silent on failure (offline keeps the last valid cache).
+func (a app) refreshTrustList(ctx context.Context) {
+	client, _ := a.trustClient()
+	if client == nil {
+		return
+	}
+	if list, err := client.LanTrusted(ctx); err == nil {
+		_ = clicore.SaveTrustList(list)
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	clicore "github.com/share2us/cli-core"
 	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli-core/lanshare"
 )
@@ -227,21 +229,27 @@ func (a app) downloadOffer(ctx context.Context, peer lanshare.Peer, destDir stri
 	fmt.Fprintf(a.stdout, "Received %s (%s) from %s -> %s\n", res.Name, humanBytes(res.Bytes), peer.Name, res.Path)
 	lanid.ActivityAppend(lanid.ActivityEntry{Kind: "downloaded", Peer: peer.Name, Name: res.Name, Size: res.Bytes})
 
-	// Offer to trust the (now verified) source so future transfers auto-accept.
+	// Offer to trust the (now verified) source. Trust needs the account's second
+	// factor (ADR-034), so this is always interactive: --trust skips the y/N but
+	// not the code.
 	if srcFP != "" {
-		if _, already := lanid.Lookup(srcFP); !already {
-			if autoTrust {
-				_ = lanid.Trust(srcFP, peer.Name)
-				fmt.Fprintf(a.stderr, "Trusted %s (code %s)\n", peer.Name, lanshare.VerifyCode(srcFP))
-			} else if a.inputIsTTY() {
+		if _, already := lanid.Lookup(srcFP); !already && a.inputIsTTY() {
+			r := bufio.NewReader(a.input())
+			want := autoTrust
+			if !want {
 				fmt.Fprintf(a.stderr, "Trust %s (code %s) for future transfers? [y/N] ", peer.Name, lanshare.VerifyCode(srcFP))
-				r := bufio.NewReader(a.input())
 				ans, _ := r.ReadString('\n')
-				if s := strings.TrimSpace(strings.ToLower(ans)); s == "y" || s == "yes" {
-					_ = lanid.Trust(srcFP, peer.Name)
-					fmt.Fprintln(a.stderr, "Trusted.")
+				want = isYes(ans)
+			}
+			if want {
+				if a.trustDeviceWithMFA(ctx, r, srcFP, peer.Name, lanid.ModeAsk) {
+					fmt.Fprintf(a.stderr, "Trusted %s (code %s); it will still ask before each transfer. Change: %s lan trusted mode %s auto\n", peer.Name, lanshare.VerifyCode(srcFP), commandName, srcFP)
+				} else {
+					fmt.Fprintln(a.stderr, "Not trusted.")
 				}
 			}
+		} else if !already && autoTrust {
+			fmt.Fprintln(a.stderr, "--trust needs a terminal to enter the verification code; not trusted.")
 		}
 	}
 	return 0
@@ -411,49 +419,92 @@ func (a app) lanAdminUsage() int {
 }
 
 func (a app) lanTrusted(args []string) int {
+	ctx := context.Background()
 	action := "list"
 	if len(args) > 0 {
 		action = args[0]
 	}
-	switch action {
-	case "list":
-		list := lanid.List()
+	printList := func(list []lanid.TrustedDevice, source string) int {
 		if len(list) == 0 {
-			fmt.Fprintln(a.stdout, "No trusted devices.")
+			fmt.Fprintf(a.stdout, "No trusted devices (%s).\n", source)
 			return 0
 		}
 		for _, d := range list {
 			fmt.Fprintf(a.stdout, "%s  %s  (code %s)  mode: %s\n", d.Fingerprint, d.Name, lanshare.VerifyCode(d.Fingerprint), d.EffectiveMode())
 		}
-		fmt.Fprintf(a.stdout, "\nmode ask  = approve each transfer (no code to compare)\nmode auto = files from this device are saved without asking\nChange with: %s lan trusted mode <fingerprint> ask|auto\n", commandName)
+		fmt.Fprintf(a.stdout, "\n(%s)  mode ask = approve each transfer, no code to compare;  mode auto = saved without asking\nChange with: %s lan trusted mode <fingerprint> ask|auto   (auto needs verification)\n", source, commandName)
 		return 0
+	}
+	switch action {
+	case "list":
+		a.refreshTrustList(ctx)
+		ok, exp := lanid.TrustCacheStatus()
+		source := "from your account"
+		if !ok {
+			source = "no verified list; sign in to sync"
+		} else if client, _ := a.trustClient(); client == nil {
+			source = "cached copy, valid until " + exp.Local().Format("2006-01-02 15:04")
+		}
+		return printList(lanid.List(), source)
 	case "mode":
 		if len(args) < 3 {
 			fmt.Fprintf(a.stderr, "usage: %s lan trusted mode <fingerprint> ask|auto\n", commandName)
 			return 2
 		}
-		if err := lanid.SetMode(args[1], args[2]); err != nil {
+		mode, err := lanid.NormalizeMode(args[2])
+		if err != nil {
 			return a.fail("set trust mode", err)
 		}
-		mode, _ := lanid.NormalizeMode(args[2])
-		if mode == lanid.ModeAuto {
-			fmt.Fprintln(a.stdout, "Set to auto: transfers from this device are saved without asking.")
-		} else {
-			fmt.Fprintln(a.stdout, "Set to ask: you approve each transfer from this device (no code to compare).")
+		client, why := a.trustClient()
+		if client == nil {
+			return a.fail("set trust mode", errors.New(why))
 		}
+		if mode == lanid.ModeAuto {
+			// Widening trust: verified like a new trust.
+			d, ok := lanid.Lookup(args[1])
+			if !ok {
+				return a.fail("set trust mode", errors.New("this device is not trusted; trust it first"))
+			}
+			if !a.inputIsTTY() {
+				return a.fail("set trust mode", errors.New("switching to auto needs a terminal to enter the verification code"))
+			}
+			if a.trustDeviceWithMFA(ctx, bufio.NewReader(a.input()), args[1], d.Name, lanid.ModeAuto) {
+				fmt.Fprintln(a.stdout, "Set to auto: transfers from this device are saved without asking.")
+				return 0
+			}
+			return 1
+		}
+		list, err := client.LanTrustSetMode(ctx, args[1], mode)
+		if err != nil {
+			return a.fail("set trust mode", err)
+		}
+		_ = clicore.SaveTrustList(list)
+		fmt.Fprintln(a.stdout, "Set to ask: you approve each transfer from this device (no code to compare).")
 		return 0
 	case "revoke", "remove", "rm":
 		if len(args) < 2 {
 			fmt.Fprintf(a.stderr, "usage: %s lan trusted revoke <fingerprint>\n", commandName)
 			return 2
 		}
-		if err := lanid.Untrust(args[1]); err != nil {
+		client, why := a.trustClient()
+		if client == nil {
+			return a.fail("revoke", errors.New(why))
+		}
+		list, err := client.LanTrustRevoke(ctx, args[1])
+		if err != nil {
 			return a.fail("revoke", err)
 		}
+		_ = clicore.SaveTrustList(list)
 		fmt.Fprintln(a.stdout, "Revoked.")
 		return 0
+	case "reset":
+		if err := lanid.ResetTrust(); err != nil {
+			return a.fail("reset", err)
+		}
+		fmt.Fprintln(a.stdout, "Cleared the cached trusted list and the pinned server key. Run `lan trusted list` to fetch it again.")
+		return 0
 	default:
-		fmt.Fprintf(a.stderr, "usage: %s lan trusted [list|mode <fingerprint> ask|auto|revoke <fingerprint>]\n", commandName)
+		fmt.Fprintf(a.stderr, "usage: %s lan trusted [list|mode <fingerprint> ask|auto|revoke <fingerprint>|reset]\n", commandName)
 		return 2
 	}
 }
