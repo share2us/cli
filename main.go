@@ -943,6 +943,8 @@ Portable skill:
 type updateOptions struct {
 	host    string
 	version string
+	// channel is the release channel to follow; "" keeps the saved/env choice.
+	channel string
 }
 
 const updateCheckInterval = 24 * time.Hour
@@ -965,7 +967,7 @@ func (a app) maybeNotifyUpdate(ctx context.Context, command string) {
 		return
 	}
 	client := clicore.NewClient(apiBase, "")
-	info, err := client.CheckUpdate(checkCtx, clicore.FullVersion(), runtime.GOOS, runtime.GOARCH)
+	info, err := client.CheckUpdateChannel(checkCtx, clicore.FullVersion(), runtime.GOOS, runtime.GOARCH, a.updateChannelFor(""))
 	if err != nil {
 		return
 	}
@@ -1004,14 +1006,22 @@ func (a app) update(ctx context.Context, args []string) int {
 	if err != nil {
 		return a.fail("locate current executable", err)
 	}
+	channel := a.updateChannelFor(opts.channel)
 	client := clicore.NewClient(apiBase, "")
-	updateInfo, err := client.CheckUpdate(ctx, clicore.FullVersion(), runtime.GOOS, runtime.GOARCH)
+	updateInfo, err := client.CheckUpdateChannel(ctx, clicore.FullVersion(), runtime.GOOS, runtime.GOARCH, channel)
 	if err != nil {
 		return a.fail("check update", err)
 	}
+	channelNote := ""
+	if channel != clicore.UpdateChannelStable {
+		channelNote = " on the " + channel + " channel"
+	}
 	if !updateInfo.UpdateAvailable {
-		fmt.Fprintf(a.stdout, "%s is already up to date (%s)\n", commandName, updateInfo.LatestVersion)
+		fmt.Fprintf(a.stdout, "%s is already up to date (%s)%s\n", commandName, updateInfo.LatestVersion, channelNote)
 		return 0
+	}
+	if updateInfo.Prerelease {
+		fmt.Fprintf(a.stdout, "Note: %s is a beta (prerelease) build. Run `%s update --channel stable` to return to stable releases.\n", updateInfo.LatestVersion, commandName)
 	}
 	if updateInfo.Downloads.ArchiveURL == "" || updateInfo.Downloads.CRC32 == "" || updateInfo.Downloads.SizeBytes <= 0 {
 		return a.fail("check update", errors.New("update manifest is missing archive URL, CRC, or size"))
@@ -1051,17 +1061,35 @@ func parseUpdateArgs(args []string) (updateOptions, error) {
 		switch args[i] {
 		case "--host":
 			if i+1 >= len(args) {
-				return opts, fmt.Errorf("usage: %s update [--host URL] [--version VERSION]", commandName)
+				return opts, fmt.Errorf("usage: %s update [--host URL] [--version VERSION] [--channel stable|beta]", commandName)
 			}
 			opts.host = args[i+1]
 			i++
 		case "--version":
 			if i+1 >= len(args) {
-				return opts, fmt.Errorf("usage: %s update [--host URL] [--version VERSION]", commandName)
+				return opts, fmt.Errorf("usage: %s update [--host URL] [--version VERSION] [--channel stable|beta]", commandName)
 			}
 			opts.version = strings.TrimSpace(args[i+1])
 			i++
+		case "--channel":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("usage: %s update [--host URL] [--version VERSION] [--channel stable|beta]", commandName)
+			}
+			channel, err := clicore.NormalizeUpdateChannel(args[i+1])
+			if err != nil {
+				return opts, err
+			}
+			opts.channel = channel
+			i++
 		default:
+			if strings.HasPrefix(args[i], "--channel=") {
+				channel, err := clicore.NormalizeUpdateChannel(strings.TrimPrefix(args[i], "--channel="))
+				if err != nil {
+					return opts, err
+				}
+				opts.channel = channel
+				continue
+			}
 			return opts, fmt.Errorf("unknown update argument: %s", args[i])
 		}
 	}
@@ -1069,6 +1097,29 @@ func parseUpdateArgs(args []string) (updateOptions, error) {
 		return opts, fmt.Errorf("version cannot be empty")
 	}
 	return opts, nil
+}
+
+// updateChannelFor returns the channel an update check should use: an explicit
+// --channel is saved to config so the passive check and future `update` runs
+// follow it; otherwise the env/config/stable resolution applies.
+func (a app) updateChannelFor(explicit string) string {
+	config, err := clicore.LoadConfig()
+	if err != nil {
+		config = clicore.Config{}
+	}
+	if explicit == "" {
+		return clicore.ResolveUpdateChannel(config)
+	}
+	if config.UpdateChannel != explicit {
+		config.UpdateChannel = explicit
+		if explicit == clicore.UpdateChannelStable {
+			config.UpdateChannel = "" // stable is the default; keep config.json minimal
+		}
+		if err := clicore.SaveConfig(config); err != nil {
+			fmt.Fprintf(a.stderr, "warning: could not save update channel: %v\n", err)
+		}
+	}
+	return explicit
 }
 
 func (a app) currentExecutable() (string, error) {
