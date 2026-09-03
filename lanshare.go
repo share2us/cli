@@ -67,6 +67,7 @@ type lanReceiveOpts struct {
 	bind       string
 	qr         bool
 	keep       bool
+	yes        bool
 }
 
 func (a app) lanReceive(ctx context.Context, args []string) int {
@@ -95,6 +96,17 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 			_ = mdnsCloser.Close()
 		}
 	}()
+	// OPEN mode means anyone who can reach the port may send, so each inbound
+	// transfer is approved by a human — the same gate the broadcast path already
+	// applies, with the same flags and wording.
+	//
+	// Deliberately scoped to open mode. With --password or --allow-ip the sender
+	// already passed an authorization check, so a second prompt would add nothing
+	// and would break every existing script that receives non-interactively.
+	//
+	// cli-core skips OnRequest entirely for an already-trusted device, so trusting
+	// a peer once is what makes later transfers from it land without a prompt.
+	openMode := opts.noPassword && opts.password == "" && len(opts.allowIPs) == 0
 	ropts := lanshare.ReceiveOptions{
 		Bind:       opts.bind,
 		Port:       opts.port,
@@ -118,6 +130,10 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 			}
 		},
 	}
+	if openMode {
+		ropts.OnRequest = a.approveInbound(opts.yes)
+	}
+
 	prog := newProgressPrinter(a.stderr, "receiving")
 	ropts.OnProgress = prog.update
 
@@ -155,6 +171,71 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 	return 0
 }
 
+// approveInbound gates an inbound transfer in open mode. It mirrors the
+// broadcast path's approve(): identical flags (--yes), identical answers
+// (y / t=trust), identical headless behaviour.
+//
+// The sender's identity here is its VERIFIED Ed25519 key, not its IP — the
+// receiver only learns the fingerprint because the sender signed this TLS
+// session's channel binding. Trusting stores that key, so trust cannot be
+// spoofed by taking an address, which is the weakness of the older TrustedIPs
+// mechanism this sits alongside.
+func (a app) approveInbound(yes bool) func(lanshare.RequestInfo) bool {
+	return func(r lanshare.RequestInfo) bool {
+		fp := lanshare.IdentityFingerprint(r.SenderKey)
+		who := r.PeerIP
+		if who == "" {
+			who = "a nearby device"
+		}
+		if r.SenderName != "" {
+			who = fmt.Sprintf("%s (%s)", r.SenderName, who)
+		}
+		what := fmt.Sprintf("%s (%s)", r.Name, humanBytes(max64(r.Size, 0)))
+		if yes {
+			fmt.Fprintf(a.stderr, "Accepting %s from %s\n", what, who)
+			return true
+		}
+		if !a.inputIsTTY() {
+			fmt.Fprintf(a.stderr, "Denied %s (no TTY to approve; use --yes)\n", who)
+			return false
+		}
+		code := ""
+		if fp != "" {
+			code = " code " + lanshare.VerifyCode(fp)
+		}
+		fmt.Fprintf(a.stderr, "Accept %s from %s%s? [y/N/t=trust] ", what, who, code)
+		reader := bufio.NewReader(a.input())
+		ans, _ := reader.ReadString('\n')
+		switch strings.TrimSpace(strings.ToLower(ans)) {
+		case "t", "trust":
+			label := r.SenderName
+			if label == "" {
+				label = r.PeerIP
+			}
+			if fp == "" {
+				// An anonymous sender has no key to pin, so there is nothing to
+				// trust. Accept this one transfer rather than pretending.
+				fmt.Fprintln(a.stderr, "This sender has no device identity, so it cannot be trusted; accepting once.")
+				return true
+			}
+			_ = lanid.Trust(fp, label)
+			fmt.Fprintf(a.stderr, "Trusted %s — future transfers from it will not ask.\n", who)
+			return true
+		case "y", "yes":
+			return true
+		default:
+			return false
+		}
+	}
+}
+
+func max64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func (a app) printReceived(res lanshare.ReceiveResult) {
 	from := res.PeerIP
 	if from == "" {
@@ -162,6 +243,21 @@ func (a app) printReceived(res lanshare.ReceiveResult) {
 	}
 	fmt.Fprintf(a.stdout, "Received %s (%s) from %s -> %s\n",
 		res.Name, humanBytes(res.Bytes), from, res.Path)
+}
+
+// warnIfFirewallBlocks prints an advisory when Windows Firewall will drop
+// inbound connections to this binary. Run in the background: the check spawns
+// powershell and must never delay the listener banner.
+//
+// It matters most for the discoverable paths — a receiver keeps advertising over
+// mDNS while the firewall drops its port, so a peer finds the machine by name and
+// then times out, which looks like a broken product rather than a missing rule.
+func (a app) warnIfFirewallBlocks() {
+	go func() {
+		if inboundLikelyBlocked() {
+			fmt.Fprintln(a.stderr, "\nNOTE: "+firewallHint())
+		}
+	}()
 }
 
 func (a app) printReceiveBanner(info lanshare.ListenInfo, opts lanReceiveOpts) {
@@ -203,6 +299,7 @@ func (a app) printReceiveBanner(info lanshare.ListenInfo, opts lanReceiveOpts) {
 	} else {
 		fmt.Fprintln(a.stderr, "Waiting for a sender... (Ctrl-C to cancel)")
 	}
+	a.warnIfFirewallBlocks()
 }
 
 func parseLanReceiveArgs(args []string) (lanReceiveOpts, error) {
@@ -225,6 +322,8 @@ func parseLanReceiveArgs(args []string) (lanReceiveOpts, error) {
 			o.overwrite = true
 		case arg == "--keep" || arg == "-k":
 			o.keep = true
+		case arg == "--yes" || arg == "-y":
+			o.yes = true
 		case arg == "--qr" || arg == "--qrl":
 			o.qr = true
 		case arg == "--password" || arg == "-p":
@@ -730,6 +829,7 @@ func (a app) printServeBanner(abs string, isDir bool, bind string, port int, qr 
 		kind = "directory"
 	}
 	fmt.Fprintf(a.stderr, "Serving %s %s over HTTP (Ctrl-C to stop)\n", kind, abs)
+	a.warnIfFirewallBlocks()
 	primary := bind
 	if bind == "0.0.0.0" || bind == "::" {
 		primary = primaryLANIP()
@@ -1243,6 +1343,7 @@ func (a app) lanBroadcast(ctx context.Context, args []string) int {
 	fmt.Fprintf(a.stderr, "Broadcasting %s (%s) as %q  access: %s\n", filepath.Base(opts.path), humanBytes(size), displayName, opts.access)
 	fmt.Fprintf(a.stderr, "This device: %s  code %s\n", hostname, lanid.Code())
 	fmt.Fprintln(a.stderr, "On another device: run `s2u discover` (or use the desktop app). Ctrl+C to stop.")
+	a.warnIfFirewallBlocks()
 
 	var (
 		adv  io.Closer

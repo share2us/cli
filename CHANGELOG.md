@@ -13,6 +13,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 ## [Unreleased]
 
 ### Added
+- `s2u --receive` in open mode (`--no-password`) now asks before accepting each
+  transfer, showing the sender, the file, and the sender's 6-digit verify code.
+  Answer `t` to trust that device by its key, and future transfers from it are
+  accepted without asking. `--yes` accepts without prompting. Modes that already
+  authenticate the sender (`--password`, `--allow-ip`) are unchanged.
 - `s2u --receive --keep` — one listener accepts many sequential transfers
   instead of exiting after the first.
 - `s2u <file> --dest=… --resume` — an interrupted send restarts where it
@@ -26,6 +31,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   and `ps` output.
 
 ### Fixed
+- On Windows, a receiver kept advertising itself over mDNS while the firewall
+  silently dropped its port — so another device could see it by name and then
+  time out connecting, which looks like a broken feature rather than a missing
+  firewall rule. `--receive`, `--broadcast` and `--serve` now notice when no
+  inbound rule names the program and print the exact command to add one. It is
+  advisory only: it never blocks the listener and never changes firewall state.
 - `s2u --serve` no longer serves or lists dotfiles (`.env`, `.git/config`) from
   within a shared directory, and refuses to follow a symlink that points outside
   the served tree.
