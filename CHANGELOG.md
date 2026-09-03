@@ -15,6 +15,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+## [20260903164522] - 2026-09-03
+
 ### Security
 - Trusting a nearby device now requires verification through your account
   (ADR-034). When you answer `t` (or use `discover --trust`), Share2Us emails a
