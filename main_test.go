@@ -2587,3 +2587,20 @@ func TestStdinSpoolFlushSnapshot(t *testing.T) {
 		t.Fatalf("spool file = %q, want the full stdin", got)
 	}
 }
+
+func TestParseUpdateArgsChannel(t *testing.T) {
+	opts, err := parseUpdateArgs([]string{"--channel", "beta"})
+	if err != nil || opts.channel != "beta" {
+		t.Fatalf("opts=%+v err=%v", opts, err)
+	}
+	opts, err = parseUpdateArgs([]string{"--channel=Stable"})
+	if err != nil || opts.channel != "stable" {
+		t.Fatalf("opts=%+v err=%v", opts, err)
+	}
+	if _, err := parseUpdateArgs([]string{"--channel", "nightly"}); err == nil {
+		t.Fatal("expected an error for an unknown channel")
+	}
+	if opts, err := parseUpdateArgs(nil); err != nil || opts.channel != "" {
+		t.Fatalf("default channel should be unset: %+v %v", opts, err)
+	}
+}

@@ -13,6 +13,10 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 ## [Unreleased]
 
 ### Added
+- `s2u update --channel beta` follows prerelease builds; `--channel stable`
+  returns to stable releases. The choice is saved, so the passive update
+  notice follows it too. `SHARE2US_UPDATE_CHANNEL=beta` overrides it for one
+  run (CI). Stable users never see a beta.
 - `s2u --receive` in open mode (`--no-password`) now asks before accepting each
   transfer, showing the sender, the file, and the sender's 6-digit verify code.
   Answer `t` to trust that device by its key, and future transfers from it are
