@@ -14,7 +14,24 @@ name: release
 #                     updater resolve "latest", a beta is invisible to existing
 #                     users by construction. This is the staging channel.
 #   channel=stable -> published with --latest. Users get it.
+# A merge to `main` publishes a STABLE release. That is safe now in a way it was
+# not before: `main` is reached only through a reviewed PR from a release branch,
+# after the work has been exercised on local `staging`, so a merge IS the decision
+# to ship. Before, `main` doubled as the working branch, which is how three
+# releases went out in 41 minutes with no notes.
+#
+# The changelog gate still applies — a stable release FAILS when
+# CHANGELOG.md's [Unreleased] section is empty, so a merge cannot ship silence.
+#
+# workflow_dispatch stays for BETA: a pre-release cannot be produced by a merge,
+# because a push carries no channel choice.
 on:
+  push:
+    branches: [main]
+    paths:
+      - "**.go"
+      - "go.mod"
+      - "go.sum"
   workflow_dispatch:
     inputs:
       channel:
@@ -113,7 +130,7 @@ jobs:
           if [ -f CHANGELOG.md ] && unreleased | grep -q '[^[:space:]]'; then
             unreleased > "$NOTES_FILE"
           else
-            if [ "${{ inputs.channel }}" = stable ]; then
+            if [ "${{ inputs.channel || 'stable' }}" = stable ]; then
               echo "::error::CHANGELOG.md [Unreleased] is empty - a stable release needs release notes."
               exit 1
             fi
@@ -121,7 +138,7 @@ jobs:
           fi
           printf '\n\nInstall: `curl -fsSL https://share2.us/install.sh | sh`\n' >> "$NOTES_FILE"
 
-          if [ "${{ inputs.channel }}" = stable ]; then
+          if [ "${{ inputs.channel || 'stable' }}" = stable ]; then
             LATEST_FLAGS="--latest"
           else
             LATEST_FLAGS="--prerelease --latest=false"
@@ -152,7 +169,7 @@ jobs:
           # npm is a SECOND user-facing channel: publishing without a dist-tag
           # makes it `latest`, so `npm i @share2us/cli` would hand a beta to
           # everyone regardless of what the GitHub release says.
-          if [ "${{ inputs.channel }}" = stable ]; then
+          if [ "${{ inputs.channel || 'stable' }}" = stable ]; then
             npm publish --access public
           else
             npm publish --access public --tag beta
