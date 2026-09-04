@@ -401,6 +401,8 @@ func (a app) lanAdmin(ctx context.Context, args []string) int {
 	case "id", "whoami":
 		fmt.Fprintf(a.stdout, "This device fingerprint: %s\n", lanid.Fingerprint())
 		fmt.Fprintf(a.stdout, "Verify code:             %s\n", lanid.Code())
+		fmt.Fprintf(a.stdout, "Safety number:           %s\n", lanid.SafetyNumber())
+		fmt.Fprintf(a.stdout, "\nThe verify code is for per-transfer prompts. Before TRUSTING this device from another\nmachine, compare the safety number: it is shown there at trust time and in the email.\n")
 		return 0
 	case "trusted":
 		return a.lanTrusted(args[1:])
@@ -430,7 +432,7 @@ func (a app) lanTrusted(args []string) int {
 			return 0
 		}
 		for _, d := range list {
-			fmt.Fprintf(a.stdout, "%s  %s  (code %s)  mode: %s\n", d.Fingerprint, d.Name, lanshare.VerifyCode(d.Fingerprint), d.EffectiveMode())
+			fmt.Fprintf(a.stdout, "%s  %s  mode: %s\n    safety number %s\n", d.Fingerprint, d.Name, d.EffectiveMode(), lanshare.SafetyNumber(d.Fingerprint))
 		}
 		fmt.Fprintf(a.stdout, "\n(%s)  mode ask = approve each transfer, no code to compare;  mode auto = saved without asking\nChange with: %s lan trusted mode <fingerprint> ask|auto   (auto needs verification)\n", source, commandName)
 		return 0
