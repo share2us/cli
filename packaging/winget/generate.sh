@@ -33,10 +33,10 @@ Commands:
   - s2u
   - share2us
 NestedInstallerFiles:
+  # One entry per file (winget rejects a duplicate RelativeFilePath). The created
+  # command shim is s2u (the primary); "share2us" stays in Commands for search.
   - RelativeFilePath: share2us.exe
     PortableCommandAlias: s2u
-  - RelativeFilePath: share2us.exe
-    PortableCommandAlias: share2us
 Installers:
   - Architecture: x64
     InstallerUrl: ${BASE}/share2us_windows_amd64.zip
@@ -59,7 +59,7 @@ PublisherSupportUrl: https://github.com/${REPO}/issues
 PackageName: Share2Us CLI
 PackageUrl: https://share2.us
 License: MIT
-LicenseUrl: https://github.com/${REPO}/blob/main/LICENSE
+LicenseUrl: https://github.com/${REPO}/blob/main/LICENSE.md
 ShortDescription: Share files and folders by link, to your devices, or directly over the local network.
 Description: |-
   The Share2Us command line (s2u): share files and folders by link, send them to

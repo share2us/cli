@@ -32,7 +32,9 @@ on:
       - "**.go"
       - "go.mod"
       - "go.sum"
-      - "packaging/**"
+      # NOTE: packaging/** (nfpm, winget generator) is deliberately NOT a trigger —
+      # a manifest/generator edit must not cut a release; it applies at the next
+      # code release, which regenerates apt + winget from the current packaging/.
   workflow_dispatch:
     inputs:
       channel:

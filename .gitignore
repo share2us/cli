@@ -4,3 +4,6 @@
 *.test
 *.out
 coverage.*
+
+# winget manifests are generated at release time from generate.sh
+packaging/winget/manifests/
