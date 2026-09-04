@@ -5111,10 +5111,28 @@ type managedInstallInfo struct {
 // content names the manager. Overridable for tests.
 var managedInstallMarker = "/usr/share/s2u/managed-by"
 
+// managedExecutable resolves this process's own path (overridable for tests). On
+// Windows a winget "portable" install lands the exe under ...\WinGet\Packages\,
+// which is how we recognise a winget-managed copy (there is no marker file to
+// install for a portable package).
+var managedExecutable = os.Executable
+
+// managedGOOS is runtime.GOOS, overridable for tests.
+var managedGOOS = runtime.GOOS
+
 // managedInstall reports whether this binary was installed by a package manager
-// that should also be the one to update it. Only apt exists today; the marker
-// file keeps it data-driven for future managers (brew, winget).
+// that should also be the one to update it: apt (marker file from the .deb) or
+// winget (executable path on Windows). `s2u update` then points at that manager
+// instead of self-replacing a file it does not own.
 func managedInstall() (managedInstallInfo, bool) {
+	if managedGOOS == "windows" {
+		if exe, err := managedExecutable(); err == nil {
+			low := strings.ToLower(exe)
+			if strings.Contains(low, `\winget\packages\`) || strings.Contains(low, `\microsoft\winget\`) {
+				return managedInstallInfo{name: "winget", upgradeCommand: "winget upgrade Share2Us.CLI"}, true
+			}
+		}
+	}
 	raw, err := os.ReadFile(managedInstallMarker)
 	if err != nil {
 		return managedInstallInfo{}, false

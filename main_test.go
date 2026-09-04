@@ -2742,3 +2742,32 @@ func TestTrustDeviceWithMFARefusesAPITokensAndBlankCancels(t *testing.T) {
 		t.Fatal("nothing may be trusted after cancel")
 	}
 }
+
+func TestManagedInstallDetectsWinget(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		// managedInstall only checks the exe path on Windows; force the marker path
+		// to a nonexistent file so the apt branch stays out of the way, then confirm
+		// the detector's string match directly.
+		prev := managedInstallMarker
+		managedInstallMarker = t.TempDir() + "/none"
+		t.Cleanup(func() { managedInstallMarker = prev })
+		if _, ok := managedInstall(); ok {
+			t.Fatal("no marker + non-windows must be unmanaged")
+		}
+	}
+	prevExe := managedExecutable
+	prevOS := managedGOOS
+	t.Cleanup(func() { managedExecutable = prevExe; managedGOOS = prevOS })
+	managedGOOS = "windows"
+	managedExecutable = func() (string, error) {
+		return `C:\Users\x\AppData\Local\Microsoft\WinGet\Packages\Share2Us.CLI_abc\share2us.exe`, nil
+	}
+	m, ok := managedInstall()
+	if !ok || m.name != "winget" || m.upgradeCommand != "winget upgrade Share2Us.CLI" {
+		t.Fatalf("winget detection = %+v ok=%v", m, ok)
+	}
+	managedExecutable = func() (string, error) { return `C:\tools\share2us.exe`, nil }
+	if _, ok := managedInstall(); ok {
+		t.Fatal("an exe outside WinGet\\Packages must not be winget-managed")
+	}
+}

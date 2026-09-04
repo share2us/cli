@@ -43,6 +43,12 @@ amd64 and arm64. Pre-release builds are in the `beta` suite (`beta main` instead
 without adding the repository. An apt-installed `s2u` upgrades with
 `sudo apt upgrade`; `s2u update` tells you so instead of replacing the file.
 
+**Windows (winget)** — `winget install share2us.cli` installs the `s2u` and
+`share2us` commands. Note: the CLI is not code-signed yet, so on a machine with
+**Smart App Control** on, Windows may block the unsigned binary from running;
+until a signed build ships, run the CLI under WSL (`sudo apt install s2u`) or
+turn Smart App Control off (one-way). Signing is tracked.
+
 **Which one?** The one-liner needs no root and lives in your home directory —
 right for a personal machine, WSL, or anywhere you cannot install packages. apt
 is right for servers and for machines you already keep current with `apt upgrade`.
