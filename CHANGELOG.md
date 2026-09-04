@@ -15,6 +15,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+## [20260904112641] - 2026-09-04
+
 ### Added
 - Windows Package Manager: `winget install share2us.cli` (installs the `s2u` and
   `share2us` commands). An winget-installed `s2u update` points at
