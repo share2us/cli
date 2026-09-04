@@ -192,6 +192,37 @@ jobs:
           git push -q origin gh-pages
           echo "apt repo published: suite=${SUITE} version=${VERSION}"
 
+      # Winget: regenerate the three-file manifest for this release and attach it to
+      # the GitHub release (so it can always be submitted by hand), then, when
+      # WINGET_TOKEN is set, open/update the microsoft/winget-pkgs PR via komac.
+      # Stable only; best-effort — a winget hiccup never fails the release. The FIRST
+      # submission of a new package is moderated by Microsoft; komac handles new + update.
+      - name: Winget manifest + submission
+        if: ${{ (inputs.channel || 'stable') == 'stable' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="$VERSION" bash packaging/winget/generate.sh
+          MANI="packaging/winget/manifests/${VERSION}"
+          gh release upload "v${VERSION}" "$MANI"/*.yaml --clobber
+          if [ -z "${WINGET_TOKEN:-}" ]; then
+            echo "WINGET_TOKEN not set - manifest attached to the release; submit by hand or set the secret."
+            exit 0
+          fi
+          # komac: single Linux binary from its GitHub releases (pinned).
+          KOMAC_VER=2.11.2
+          curl -fsSL -o /tmp/komac.tar.gz "https://github.com/russellbanks/Komac/releases/download/v${KOMAC_VER}/komac-${KOMAC_VER}-x86_64-unknown-linux-gnu.tar.gz" || { echo "komac download failed; manifest still attached"; exit 0; }
+          tar -xzf /tmp/komac.tar.gz -C /tmp || { echo "komac extract failed; manifest still attached"; exit 0; }
+          BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VERSION}"
+          # `komac update` creates the PR (and works for a first submission too), pulling
+          # metadata from the manifest we just generated. Best-effort.
+          /tmp/komac update Share2Us.CLI \
+            --version "${VERSION}" \
+            --urls "${BASE}/share2us_windows_amd64.zip" "${BASE}/share2us_windows_arm64.zip" \
+            --submit --token "${WINGET_TOKEN}" || echo "komac submit failed; manifest is attached to the release for a manual PR."
+
       # Publish the npm wrapper (@share2us/cli), pinned to this exact release so a
       # given npm version always installs the same binary.
       - name: Set up Node
