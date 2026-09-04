@@ -1470,11 +1470,15 @@ func (a app) trustDeviceWithMFA(ctx context.Context, reader *bufio.Reader, fp, n
 		fmt.Fprintf(a.stderr, "Cannot start the trust verification: %v\n", err)
 		return false
 	}
+	// The safety number is the anti-impersonation check for TRUST: 5x4 digits
+	// from the device key, shown on that device under `lan id` (or Settings) and
+	// in the email. A 6-digit code can be ground by an attacker; this cannot.
+	fmt.Fprintf(a.stderr, "Safety number of %s: %s\n  Compare it with `%s lan id` (or Settings) on that device. If it differs, cancel: someone may be impersonating it.\n", name, lanshare.SafetyNumber(fp), commandName)
 	switch ch.Factor {
 	case "totp":
-		fmt.Fprintf(a.stderr, "Verification: enter the 6-digit code from your authenticator app (device verify code %s).\n", ch.VerifyCode)
+		fmt.Fprintln(a.stderr, "Verification: enter the 6-digit code from your authenticator app.")
 	default:
-		fmt.Fprintf(a.stderr, "Verification: we emailed a 6-digit code to %s. The email also shows this device's verify code (%s) — make sure it matches.\n", ch.SentTo, ch.VerifyCode)
+		fmt.Fprintf(a.stderr, "Verification: we emailed a 6-digit code to %s (the email repeats the safety number).\n", ch.SentTo)
 	}
 	for attempt := 0; attempt < 5; attempt++ {
 		fmt.Fprint(a.stderr, "Code (blank to cancel): ")

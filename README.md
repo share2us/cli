@@ -153,6 +153,9 @@ account address, or asks for your authenticator code once you set one up under
 **Account → Security** in the portal. The trusted list lives on your account,
 signed by the server and synced to your signed-in machines, so nothing on the
 local disk (and no automation or AI agent driving the CLI) can widen it.
+Before you enter the code, the prompt (and the email) shows the device's **safety
+number**, five groups of four digits: compare it with `s2u lan id` on that device
+and cancel if it differs, because that is how an impersonator would be caught.
 `s2u lan trusted list|mode <fingerprint> ask|auto|revoke <fingerprint>|reset`
 manages it; switching to auto asks for a code, revoking does not. Not signed in,
 or using a personal API token? The transfer is accepted once and nothing is trusted.

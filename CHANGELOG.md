@@ -15,6 +15,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Security
+- Trusting a device now shows its **safety number** (five groups of four
+  digits, derived from the device key) in the prompt and in the verification
+  email, to compare with `s2u lan id` on that device. The six-digit code stays
+  for per-transfer prompts, but it is short enough for a determined attacker to
+  forge a matching device; the safety number is not. `s2u lan id` and
+  `s2u lan trusted list` print it too.
+
 ## [20260903182054] - 2026-09-03
 
 ### Removed

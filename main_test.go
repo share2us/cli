@@ -2703,7 +2703,7 @@ func TestTrustDeviceWithMFAVerifiesCodeThenCachesSignedList(t *testing.T) {
 		t.Fatalf("wrong-code attempts = %d", f.attempts)
 	}
 	out := errOut.String()
-	if !strings.Contains(out, "we emailed a 6-digit code to u***@example.test") || !strings.Contains(out, lanshare.VerifyCode(fp)) || !strings.Contains(out, "wrong code (4 attempts left)") {
+	if !strings.Contains(out, "we emailed a 6-digit code to u***@example.test") || !strings.Contains(out, lanshare.SafetyNumber(fp)) || !strings.Contains(out, "wrong code (4 attempts left)") {
 		t.Fatalf("prompt text missing pieces:\n%s", out)
 	}
 	d, trusted := lanid.Lookup(fp)
