@@ -15,6 +15,16 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Added
+- Background service: `share2us daemon install` runs an optional, off-by-default
+  per-user service that keeps receiving device and LAN shares (with desktop
+  notifications) while no terminal or app is open, and refreshes the trusted-
+  device list and checks for updates on a schedule. `share2us daemon
+  run|status|stop|logs|uninstall` manage it. Linux (systemd --user) in this
+  release; macOS and Windows to follow. Honors the same device-trust rules as
+  the CLI: it never trusts a new device on its own, and unknown senders are
+  declined.
+
 ## [20260904112641] - 2026-09-04
 
 ### Added

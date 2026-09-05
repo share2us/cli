@@ -142,7 +142,7 @@ func (a app) maybeShowTip(command string) {
 		return
 	}
 	switch command {
-	case "", "help", "-h", "--help", "version", "-v", "--version", "tui", "mcp":
+	case "", "help", "-h", "--help", "version", "-v", "--version", "tui", "mcp", "daemon":
 		return
 	}
 	if mrand.Intn(tipEveryN) != 0 {
@@ -233,6 +233,8 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 		return a.discover(ctx, args[1:])
 	case "lan":
 		return a.lanAdmin(ctx, args[1:])
+	case "daemon":
+		return a.daemon(ctx, args[1:])
 	default:
 		// A bare Share2Us share link (`s2u https://s.share2.us/<code>`) is a quick
 		// download — route it to `get` rather than trying to upload a file named
@@ -993,7 +995,7 @@ func shouldSkipUpdateCheck(command string) bool {
 		return true
 	}
 	switch command {
-	case "", "help", "-h", "--help", "version", "-v", "--version", "update", "mcp", "tui", "stream", "p2p", "receive":
+	case "", "help", "-h", "--help", "version", "-v", "--version", "update", "mcp", "tui", "stream", "p2p", "receive", "daemon":
 		return true
 	default:
 		return false
