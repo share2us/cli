@@ -14,7 +14,17 @@ REPO="${WINGET_CLI_REPO:-share2us/cli}"
 ID="Share2Us.CLI"
 BASE="https://github.com/${REPO}/releases/download/v${VERSION}"
 
-sha() { gh release download "v${VERSION}" --repo "$REPO" -p "$1.sha256" -O - 2>/dev/null | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]'; }
+# Release assets can lag a second or two behind the Publish step that just
+# uploaded them, so retry rather than fail the whole winget step on an empty read.
+sha() {
+  local out i
+  for i in 1 2 3 4 5 6; do
+    out="$(gh release download "v${VERSION}" --repo "$REPO" -p "$1.sha256" -O - 2>/dev/null | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')"
+    [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+    sleep 5
+  done
+  printf ''
+}
 AMD64_SHA="$(sha share2us_windows_amd64.zip)"
 ARM64_SHA="$(sha share2us_windows_arm64.zip)"
 [ -n "$AMD64_SHA" ] && [ -n "$ARM64_SHA" ] || { echo "missing sha256 sidecars for the windows zips" >&2; exit 1; }
