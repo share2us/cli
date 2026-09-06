@@ -9,6 +9,7 @@ import (
 	"time"
 
 	clicore "github.com/share2us/cli-core"
+	"github.com/share2us/cli-core/daemonctl"
 	"github.com/share2us/cli-core/lanshare"
 )
 
@@ -102,7 +103,7 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 	}
 
 	// Single-instance lock + control endpoint. Binding it is the lock.
-	closer, err := Listen(rt.control())
+	closer, err := daemonctl.Listen(rt.control())
 	if err != nil {
 		return err
 	}
@@ -129,26 +130,26 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 }
 
 // control returns the handler backing the control endpoint.
-func (rt *Runtime) control() func(Request) Response {
-	return func(req Request) Response {
+func (rt *Runtime) control() func(daemonctl.Request) daemonctl.Response {
+	return func(req daemonctl.Request) daemonctl.Response {
 		switch req.Op {
 		case "ping":
-			return Response{OK: true}
+			return daemonctl.Response{OK: true}
 		case "status":
-			return Response{
+			return daemonctl.Response{
 				OK: true, PID: os.Getpid(), Version: clicore.FullVersion(),
 				OwnsLAN: rt.ownsLAN, OwnsInbox: rt.ownsInbox,
 				Since: rt.startedAt.Format(time.RFC3339),
 			}
 		case "owns-receiver":
-			return Response{OK: rt.ownsLAN || rt.ownsInbox, OwnsLAN: rt.ownsLAN, OwnsInbox: rt.ownsInbox}
+			return daemonctl.Response{OK: rt.ownsLAN || rt.ownsInbox, OwnsLAN: rt.ownsLAN, OwnsInbox: rt.ownsInbox}
 		case "stop":
 			if rt.stop != nil {
 				rt.stop()
 			}
-			return Response{OK: true}
+			return daemonctl.Response{OK: true}
 		default:
-			return Response{Err: "unknown op"}
+			return daemonctl.Response{Err: "unknown op"}
 		}
 	}
 }
