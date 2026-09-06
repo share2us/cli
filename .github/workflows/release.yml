@@ -200,6 +200,9 @@ jobs:
       # Stable only; best-effort — a winget hiccup never fails the release. The FIRST
       # submission of a new package is moderated by Microsoft; komac handles new + update.
       - name: Winget manifest + submission
+        # Best-effort: attaching manifests / submitting to winget must never fail
+        # the release or block the npm publish that follows it.
+        continue-on-error: true
         if: ${{ (inputs.channel || 'stable') == 'stable' }}
         env:
           GH_TOKEN: ${{ github.token }}
