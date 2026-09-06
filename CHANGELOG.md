@@ -16,6 +16,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      ship while this section is empty (HTML comments do not count). -->
 
 ### Added
+- `share2us daemon` can now run **LAN receive without an account**: start it
+  while logged out to receive account-free LAN transfers (unknown senders are
+  still declined). Log in to also receive account device shares.
+
+### Added
 - Background service: `share2us daemon install` runs an optional, off-by-default
   per-user service that keeps receiving device and LAN shares (with desktop
   notifications) while no terminal or app is open, and refreshes the trusted-

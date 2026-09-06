@@ -13,6 +13,7 @@ import (
 	"time"
 
 	clicore "github.com/share2us/cli-core"
+	"github.com/share2us/cli-core/daemonctl"
 	"github.com/share2us/cli/internal/daemon"
 )
 
@@ -79,12 +80,6 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		destDir = settings.DestDir
 	}
 
-	client, credential, ok := a.authClient()
-	if !ok {
-		fmt.Fprintf(a.stderr, "not logged in; run `%s login`\n", commandName)
-		return 1
-	}
-
 	runOpts := daemon.Options{
 		DestDir:         destDir,
 		LANDiscoverable: settings.LANDiscoverable && !opts.noLAN,
@@ -93,19 +88,27 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		TrustedIPs:      loadLocalConfig().TrustedIPs(),
 	}
 
-	// Account-inbox e2e receive needs the device key, which a PAT cannot provide
-	// (ADR-035). Disable inbox under a PAT rather than failing outright — the LAN
-	// receiver still works. Only error if inbox is the only thing left to do.
-	deviceCred, keyErr := ensureDeviceKey(ctx, client, credential)
-	if keyErr == nil {
-		runOpts.RunInbox = true
-		credential = deviceCred
-	} else {
-		fmt.Fprintf(a.stderr, "note: account-inbox receive is off (%v)\n", keyErr)
-		if !runOpts.LANDiscoverable {
-			fmt.Fprintln(a.stderr, "nothing to do: inbox needs an interactive login and LAN is disabled")
-			return 4
+	// The daemon runs LAN receive with no account — the LAN listener needs no
+	// login (ADR-028 offline mode). Account-inbox receive additionally needs the
+	// device key, which a PAT cannot provide (ADR-035). So: if we can log in and
+	// get a device key, run the inbox too; otherwise fall back to LAN-only with a
+	// note. Only refuse to start when there is genuinely nothing to do.
+	client, credential, ok := a.authClient()
+	switch {
+	case !ok:
+		fmt.Fprintf(a.stderr, "note: not logged in; running LAN receive only (run `%s login` to also receive account shares)\n", commandName)
+	default:
+		deviceCred, keyErr := ensureDeviceKey(ctx, client, credential)
+		if keyErr == nil {
+			runOpts.RunInbox = true
+			credential = deviceCred
+		} else {
+			fmt.Fprintf(a.stderr, "note: account-inbox receive is off (%v)\n", keyErr)
 		}
+	}
+	if !runOpts.RunInbox && !runOpts.LANDiscoverable {
+		fmt.Fprintln(a.stderr, "nothing to do: account-inbox receive is unavailable (login needed) and LAN is disabled")
+		return 4
 	}
 
 	deps := daemon.Deps{
@@ -122,7 +125,7 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 	defer stop()
 
 	if err := daemon.Run(ctx, runOpts, deps); err != nil {
-		if errors.Is(err, daemon.ErrAlreadyRunning) {
+		if errors.Is(err, daemonctl.ErrAlreadyRunning) {
 			fmt.Fprintln(a.stderr, "a share2us daemon is already running for this user")
 			return 1
 		}
@@ -132,7 +135,7 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 }
 
 func (a app) daemonStatus() int {
-	resp, ok := daemon.Query("status")
+	resp, ok := daemonctl.Query("status")
 	if !ok || !resp.OK {
 		fmt.Fprintln(a.stdout, "not running")
 		return 3
@@ -149,7 +152,7 @@ func (a app) daemonStatus() int {
 func (a app) daemonStop() int {
 	// Prefer the control socket so a hand-started `run` also stops; fall back to
 	// the service manager for an installed unit.
-	if resp, ok := daemon.Query("stop"); ok && resp.OK {
+	if resp, ok := daemonctl.Query("stop"); ok && resp.OK {
 		fmt.Fprintln(a.stdout, "Stopped.")
 		return 0
 	}
