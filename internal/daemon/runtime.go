@@ -55,8 +55,8 @@ type Deps struct {
 	Cleanup func(ctx context.Context) error
 	// AgentClient + AgentRunner drive the agent-session bridge (ADR-036); nil when
 	// the bridge is off.
-	AgentClient AgentClient
-	AgentRunner AgentRunner
+	AgentClient  AgentClient
+	AgentRunners []AgentRunner
 	// Unseal opens a prompt/envelope sealed to this device (ADR-036 E2E); nil = plaintext.
 	Unseal func(sealed string) (string, error)
 	// DownloadContent fetches an injected file's ciphertext by request id; nil = no files.
@@ -133,9 +133,9 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 	}
 	wg.Add(1)
 	go func() { defer wg.Done(); rt.scheduler(ctx, opts, deps) }()
-	if opts.AgentBridge && deps.AgentClient != nil && deps.AgentRunner != nil {
+	if opts.AgentBridge && deps.AgentClient != nil && len(deps.AgentRunners) > 0 {
 		wg.Add(1)
-		go func() { defer wg.Done(); rt.agentBridge(ctx, deps.AgentClient, deps.AgentRunner, deps) }()
+		go func() { defer wg.Done(); rt.agentBridge(ctx, deps.AgentClient, deps.AgentRunners, deps) }()
 	}
 
 	<-ctx.Done()

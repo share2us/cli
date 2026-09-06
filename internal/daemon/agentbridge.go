@@ -33,22 +33,26 @@ const (
 // agentBridge runs the two agent-bridge loops (ADR-036 P2): one keeps the server
 // directory in sync with local sessions, the other receives relayed inject
 // requests and runs them. Both stop on ctx cancel.
-func (rt *Runtime) agentBridge(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps) {
-	go rt.agentRegisterLoop(ctx, client, runner, deps)
-	rt.agentReceiveLoop(ctx, client, runner, deps)
+func (rt *Runtime) agentBridge(ctx context.Context, client AgentClient, runners []AgentRunner, deps Deps) {
+	go rt.agentRegisterLoop(ctx, client, runners, deps)
+	rt.agentReceiveLoop(ctx, client, runners, deps)
 }
 
 // agentRegisterLoop discovers local sessions and registers/heartbeats them,
 // deregistering ones that have gone away.
-func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps) {
+func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, runners []AgentRunner, deps Deps) {
 	known := map[string]bool{}
 	sync := func() {
-		sessions, err := runner.Discover(ctx)
-		if err != nil {
-			deps.logf("agent-bridge discover: %v", err)
-			return
-		}
 		seen := map[string]bool{}
+		var sessions []DiscoveredSession
+		for _, runner := range runners {
+			found, err := runner.Discover(ctx)
+			if err != nil {
+				deps.logf("agent-bridge discover (%s): %v", runner.Tool(), err)
+				continue
+			}
+			sessions = append(sessions, found...)
+		}
 		for _, s := range sessions {
 			seen[s.SessionID] = true
 			if err := client.RegisterAgentSession(ctx, clicore.AgentRegisterInput{
@@ -78,7 +82,11 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 }
 
 // agentReceiveLoop long-polls for inject requests and runs each one.
-func (rt *Runtime) agentReceiveLoop(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps) {
+func (rt *Runtime) agentReceiveLoop(ctx context.Context, client AgentClient, runners []AgentRunner, deps Deps) {
+	byTool := map[string]AgentRunner{}
+	for _, r := range runners {
+		byTool[r.Tool()] = r
+	}
 	for {
 		if ctx.Err() != nil {
 			return
@@ -97,6 +105,12 @@ func (rt *Runtime) agentReceiveLoop(ctx context.Context, client AgentClient, run
 			continue
 		}
 		for _, req := range reqs {
+			runner := byTool[req.Tool]
+			if runner == nil {
+				deps.logf("agent-bridge: no runner for tool %q (request %s)", req.Tool, req.ID)
+				_ = client.AgentReportResult(ctx, req.ID, "failed", "this machine does not run "+req.Tool+" sessions")
+				continue
+			}
 			rt.handleInject(ctx, client, runner, deps, req)
 		}
 	}

@@ -128,7 +128,7 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		if client != nil {
 			runOpts.AgentBridge = true
 			deps.AgentClient = client
-			deps.AgentRunner = daemon.ClaudeRunner{}
+			deps.AgentRunners = []daemon.AgentRunner{daemon.ClaudeRunner{}, daemon.CodexRunner{}}
 			// E2E: unseal injected prompts with this device's key (ADR-036 P4).
 			if credential.DevicePublicKey != "" && credential.DevicePrivateKey != "" {
 				pub, priv := credential.DevicePublicKey, credential.DevicePrivateKey
