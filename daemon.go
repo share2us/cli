@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -137,6 +138,17 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 						return "", err
 					}
 					return string(b), nil
+				}
+				deps.OpenContentKey = func(sealed string) ([]byte, error) {
+					return clicore.OpenSealedContentKey(sealed, pub, priv)
+				}
+				cl := client
+				deps.DownloadContent = func(c context.Context, id string) ([]byte, error) {
+					var buf bytes.Buffer
+					if err := cl.AgentDownloadContent(c, id, &buf); err != nil {
+						return nil, err
+					}
+					return buf.Bytes(), nil
 				}
 			}
 		} else {

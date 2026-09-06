@@ -57,8 +57,12 @@ type Deps struct {
 	// the bridge is off.
 	AgentClient AgentClient
 	AgentRunner AgentRunner
-	// Unseal opens a prompt sealed to this device (ADR-036 E2E); nil = plaintext.
+	// Unseal opens a prompt/envelope sealed to this device (ADR-036 E2E); nil = plaintext.
 	Unseal func(sealed string) (string, error)
+	// DownloadContent fetches an injected file's ciphertext by request id; nil = no files.
+	DownloadContent func(ctx context.Context, id string) ([]byte, error)
+	// OpenContentKey opens a sealed file content key with this device's key.
+	OpenContentKey func(sealed string) ([]byte, error)
 	// Logf writes an operational log line (to stderr/journal).
 	Logf func(format string, args ...any)
 }

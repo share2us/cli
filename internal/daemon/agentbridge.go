@@ -111,7 +111,7 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	// E2E (ADR-036 P4): the prompt is sealed to this device's key; unseal it before
 	// running. A decryption failure is fatal for the request (never run a garbled
 	// or unexpectedly-plaintext prompt).
-	prompt := req.SealedPrompt
+	raw := req.SealedPrompt
 	if deps.Unseal != nil {
 		p, uerr := deps.Unseal(req.SealedPrompt)
 		if uerr != nil {
@@ -119,8 +119,10 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 			_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device could not decrypt the prompt")
 			return
 		}
-		prompt = p
+		raw = p
 	}
+	env := ParseEnvelope(raw)
+	prompt := env.Prompt
 	cwd := ""
 	if sessions, derr := runner.Discover(ctx); derr == nil {
 		for _, s := range sessions {
@@ -129,6 +131,28 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 				break
 			}
 		}
+	}
+	// A delivered file (ADR-036 P4b): download the ciphertext, open its content
+	// key with this device's key, decrypt it into the session's .s2u-inbox, and
+	// point the prompt at it.
+	if req.ObjectKey != "" && env.FileName != "" && deps.DownloadContent != nil && deps.OpenContentKey != nil {
+		ciphertext, derr := deps.DownloadContent(ctx, req.ID)
+		if derr != nil {
+			deps.logf("agent-bridge: download file for %s: %v", req.ID, derr)
+			_ = client.AgentReportResult(ctx, req.ID, "failed", "could not download the attached file")
+			return
+		}
+		ck, kerr := deps.OpenContentKey(req.SealedFileKey)
+		if kerr != nil {
+			_ = client.AgentReportResult(ctx, req.ID, "failed", "could not decrypt the attached file key")
+			return
+		}
+		path, perr := placeInjectedFile(cwd, env.FileName, ciphertext, ck)
+		if perr != nil {
+			_ = client.AgentReportResult(ctx, req.ID, "failed", "could not write the attached file")
+			return
+		}
+		prompt = prompt + "\n\n(A file for this task was placed at " + path + ".)"
 	}
 	rt.notify("Share2Us", "Running a prompt in your "+req.Tool+" session")
 	deps.logf("agent-bridge: running inject %s in session %s (cwd %s)", req.ID, req.TargetSessionID, cwd)

@@ -1,11 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	clicore "github.com/share2us/cli-core"
+	"github.com/share2us/cli/internal/daemon"
 )
 
 // agent is the user-facing surface of the agent-session bridge (ADR-036): list
@@ -37,7 +42,7 @@ func (a app) agent(ctx context.Context, args []string) int {
 func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|pending|allow>\n", commandName)
 	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
-	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P   inject a prompt into a session (--tool claude)\n")
+	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P [--file PATH]   inject a prompt (+ optional file)\n")
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
 	fmt.Fprintf(a.stderr, "  allow <sender-device-id>                   always-allow a device to inject into this one\n")
@@ -74,7 +79,7 @@ func (a app) agentList(ctx context.Context) int {
 }
 
 func (a app) agentSend(ctx context.Context, args []string) int {
-	var deviceID, sessionID, prompt, tool string
+	var deviceID, sessionID, prompt, tool, file string
 	tool = "claude"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -97,6 +102,11 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 			i++
 			if i < len(args) {
 				tool = args[i]
+			}
+		case "--file":
+			i++
+			if i < len(args) {
+				file = args[i]
 			}
 		default:
 			fmt.Fprintf(a.stderr, "unknown flag %q\n", args[i])
@@ -133,7 +143,35 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		fmt.Fprintln(a.stderr, "target device has no encryption key; cannot inject (end-to-end encryption required)")
 		return 1
 	}
-	sealed, err := clicore.SealForDevice([]byte(prompt), targetPub)
+	// A file rides along end-to-end: a fresh content key encrypts it, the ciphertext
+	// goes to R2 (object_key), and the content key is sealed to the target device.
+	env := daemon.InjectEnvelope{Prompt: prompt}
+	var objectKey, sealedFileKey string
+	if file != "" {
+		data, rerr := os.ReadFile(file)
+		if rerr != nil {
+			return a.fail("read file", rerr)
+		}
+		ck, kerr := clicore.NewContentKey()
+		if kerr != nil {
+			return a.fail("content key", kerr)
+		}
+		var enc bytes.Buffer
+		if eerr := clicore.EncryptStream(&enc, bytes.NewReader(data), ck); eerr != nil {
+			return a.fail("encrypt file", eerr)
+		}
+		objectKey, err = client.AgentUploadContent(ctx, enc.Bytes())
+		if err != nil {
+			return a.fail("upload file", err)
+		}
+		sealedFileKey, err = clicore.SealContentKeyForDevice(ck, targetPub)
+		if err != nil {
+			return a.fail("seal file key", err)
+		}
+		env.FileName = filepath.Base(file)
+	}
+	envBytes, _ := json.Marshal(env)
+	sealed, err := clicore.SealForDevice(envBytes, targetPub)
 	if err != nil {
 		return a.fail("seal prompt", err)
 	}
@@ -142,6 +180,8 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		TargetSessionID: sessionID,
 		Tool:            tool,
 		SealedPrompt:    sealed,
+		ObjectKey:       objectKey,
+		SealedFileKey:   sealedFileKey,
 	})
 	if err != nil {
 		return a.fail("send", err)
