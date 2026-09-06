@@ -128,6 +128,17 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 			runOpts.AgentBridge = true
 			deps.AgentClient = client
 			deps.AgentRunner = daemon.ClaudeRunner{}
+			// E2E: unseal injected prompts with this device's key (ADR-036 P4).
+			if credential.DevicePublicKey != "" && credential.DevicePrivateKey != "" {
+				pub, priv := credential.DevicePublicKey, credential.DevicePrivateKey
+				deps.Unseal = func(sealed string) (string, error) {
+					b, err := clicore.OpenSealedForDevice(sealed, pub, priv)
+					if err != nil {
+						return "", err
+					}
+					return string(b), nil
+				}
+			}
 		} else {
 			fmt.Fprintln(a.stderr, "note: --agent-bridge needs an interactive login; the agent bridge is off")
 		}

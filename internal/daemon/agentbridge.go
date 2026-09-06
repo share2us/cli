@@ -108,8 +108,19 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 		_ = client.AgentReportResult(ctx, req.ID, "failed", "this daemon does not run "+req.Tool+" sessions")
 		return
 	}
-	// Phase 2 relays the prompt as-is; Phase 4 unseals it with the device key.
-	prompt := unsealPrompt(req.SealedPrompt)
+	// E2E (ADR-036 P4): the prompt is sealed to this device's key; unseal it before
+	// running. A decryption failure is fatal for the request (never run a garbled
+	// or unexpectedly-plaintext prompt).
+	prompt := req.SealedPrompt
+	if deps.Unseal != nil {
+		p, uerr := deps.Unseal(req.SealedPrompt)
+		if uerr != nil {
+			deps.logf("agent-bridge: cannot decrypt inject %s: %v", req.ID, uerr)
+			_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device could not decrypt the prompt")
+			return
+		}
+		prompt = p
+	}
 	cwd := ""
 	if sessions, derr := runner.Discover(ctx); derr == nil {
 		for _, s := range sessions {
@@ -133,7 +144,3 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	}
 	_ = client.AgentReportResult(ctx, req.ID, "done", out)
 }
-
-// unsealPrompt returns the plaintext prompt. Phase 2 passes the field through;
-// Phase 4 replaces this with device-key unsealing (E2E).
-func unsealPrompt(sealed string) string { return sealed }

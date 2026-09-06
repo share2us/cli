@@ -31,17 +31,19 @@ func (f *fakeAgentClient) AgentReportResult(_ context.Context, _, status, result
 }
 
 type fakeRunner struct {
-	out    string
-	err    error
-	ranSID string
+	out       string
+	err       error
+	ranSID    string
+	ranPrompt string
 }
 
 func (f *fakeRunner) Tool() string { return "claude" }
 func (f *fakeRunner) Discover(context.Context) ([]DiscoveredSession, error) {
 	return []DiscoveredSession{{SessionID: "s1", Tool: "claude", Status: "idle"}}, nil
 }
-func (f *fakeRunner) Run(_ context.Context, sessionID, _, _ string) (string, error) {
+func (f *fakeRunner) Run(_ context.Context, sessionID, _, prompt string) (string, error) {
 	f.ranSID = sessionID
+	f.ranPrompt = prompt
 	return f.out, f.err
 }
 
@@ -96,5 +98,37 @@ func TestRegisterLoopSyncDeregistersVanished(t *testing.T) {
 	}
 	if len(c.registered) != 1 || c.registered[0] != "s1" {
 		t.Fatalf("registered = %v, want [s1]", c.registered)
+	}
+}
+
+func TestHandleInjectUnsealsPrompt(t *testing.T) {
+	c := &fakeAgentClient{}
+	r := &fakeRunner{out: "ok"}
+	deps := noDeps()
+	deps.Unseal = func(sealed string) (string, error) {
+		if sealed != "CIPHERTEXT" {
+			t.Fatalf("unseal got %q", sealed)
+		}
+		return "the real prompt", nil
+	}
+	rt().handleInject(context.Background(), c, r, deps,
+		clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "CIPHERTEXT"})
+	if r.ranPrompt != "the real prompt" {
+		t.Fatalf("runner got prompt %q, want the decrypted one", r.ranPrompt)
+	}
+}
+
+func TestHandleInjectUnsealFailureIsFatal(t *testing.T) {
+	c := &fakeAgentClient{}
+	r := &fakeRunner{}
+	deps := noDeps()
+	deps.Unseal = func(string) (string, error) { return "", errors.New("bad box") }
+	rt().handleInject(context.Background(), c, r, deps,
+		clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "x"})
+	if r.ranSID != "" {
+		t.Fatal("must not run when the prompt cannot be decrypted")
+	}
+	if len(c.reports) != 1 || c.reports[0][0] != "failed" {
+		t.Fatalf("reports = %v, want a single failed", c.reports)
 	}
 }

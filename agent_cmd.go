@@ -111,12 +111,37 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	if !ok {
 		return 1
 	}
-	// Phase 2 sends the prompt as-is; Phase 4 seals it to the target device key (E2E).
+	// E2E (ADR-036 P4): find the target session in the directory, take its device
+	// public key, and seal the prompt to it so the server relays ciphertext only.
+	sessions, err := client.ListAgentSessions(ctx)
+	if err != nil {
+		return a.fail("resolve target", err)
+	}
+	targetPub := ""
+	found := false
+	for _, s := range sessions {
+		if s.DeviceID == deviceID && s.SessionID == sessionID {
+			targetPub, found = s.DevicePublicKey, true
+			break
+		}
+	}
+	if !found {
+		fmt.Fprintln(a.stderr, "no such reachable session; run `"+commandName+" agent list`")
+		return 1
+	}
+	if targetPub == "" {
+		fmt.Fprintln(a.stderr, "target device has no encryption key; cannot inject (end-to-end encryption required)")
+		return 1
+	}
+	sealed, err := clicore.SealForDevice([]byte(prompt), targetPub)
+	if err != nil {
+		return a.fail("seal prompt", err)
+	}
 	res, err := client.AgentInject(ctx, clicore.AgentInjectInput{
 		TargetDeviceID:  deviceID,
 		TargetSessionID: sessionID,
 		Tool:            tool,
-		SealedPrompt:    prompt,
+		SealedPrompt:    sealed,
 	})
 	if err != nil {
 		return a.fail("send", err)

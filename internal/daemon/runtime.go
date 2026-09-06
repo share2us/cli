@@ -57,6 +57,8 @@ type Deps struct {
 	// the bridge is off.
 	AgentClient AgentClient
 	AgentRunner AgentRunner
+	// Unseal opens a prompt sealed to this device (ADR-036 E2E); nil = plaintext.
+	Unseal func(sealed string) (string, error)
 	// Logf writes an operational log line (to stderr/journal).
 	Logf func(format string, args ...any)
 }
