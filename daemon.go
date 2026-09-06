@@ -57,7 +57,7 @@ func (a app) daemon(ctx context.Context, args []string) int {
 
 func (a app) daemonUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s daemon <run|status|start|stop|install|uninstall|logs>\n", commandName)
-	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify]   run the background receiver (foreground)\n")
+	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify] [--agent-bridge]   run the background receiver\n")
 	fmt.Fprintf(a.stderr, "  install [--dest DIR]                         install + start the per-user service\n")
 	fmt.Fprintf(a.stderr, "  status | stop | start | logs [-f] | uninstall\n")
 	return 2
@@ -119,6 +119,18 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		CheckUpdate:  a.daemonUpdateCheck,
 		Cleanup:      func(c context.Context) error { return cleanupStaging(destDir) },
 		Logf:         func(format string, args ...any) { fmt.Fprintf(a.stderr, format+"\n", args...) },
+	}
+
+	// Agent-session bridge (ADR-036): register this machine's coding-agent sessions
+	// and receive relayed inject requests. Needs the authenticated device client.
+	if opts.agentBridge {
+		if client != nil {
+			runOpts.AgentBridge = true
+			deps.AgentClient = client
+			deps.AgentRunner = daemon.ClaudeRunner{}
+		} else {
+			fmt.Fprintln(a.stderr, "note: --agent-bridge needs an interactive login; the agent bridge is off")
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -220,9 +232,10 @@ func (a app) daemonUpdateCheck(ctx context.Context) (bool, string) {
 }
 
 type daemonRunOpts struct {
-	dest     string
-	noLAN    bool
-	noNotify bool
+	dest        string
+	noLAN       bool
+	noNotify    bool
+	agentBridge bool
 }
 
 func parseDaemonRunArgs(args []string) (daemonRunOpts, error) {
@@ -242,6 +255,8 @@ func parseDaemonRunArgs(args []string) (daemonRunOpts, error) {
 			o.noLAN = true
 		case arg == "--no-notify":
 			o.noNotify = true
+		case arg == "--agent-bridge":
+			o.agentBridge = true
 		case arg == "--foreground":
 			// accepted and ignored: `run` is always foreground; the service
 			// manager backgrounds it.
