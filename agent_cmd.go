@@ -27,6 +27,8 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentPending(ctx)
 	case "allow":
 		return a.agentAllow(ctx, args[1:])
+	case "rules":
+		return a.agentRules(args[1:])
 	default:
 		return a.agentUsage()
 	}
@@ -39,6 +41,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
 	fmt.Fprintf(a.stderr, "  allow <sender-device-id>                   always-allow a device to inject into this one\n")
+	fmt.Fprintf(a.stderr, "  rules [--project DIR]                      show which .s2u.rules are hard-enforced vs advisory\n")
 	return 2
 }
 

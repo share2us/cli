@@ -93,15 +93,38 @@ func claudeStatus(e claudeAgentEntry) string {
 }
 
 // RunClaudeInject continues a Claude session non-interactively with the injected
-// prompt and returns its output. Phase 2 runs a plain resume; Phase 3 adds the
-// compiled guardrail profile (--permission-mode / --allowedTools / hooks) and
-// Phase 4 the delivered file.
-func RunClaudeInject(ctx context.Context, sessionID, prompt string) (string, error) {
+// prompt, under the compiled guardrail profile for the session's project (ADR-036
+// P3): a restricted permission mode (never bypassPermissions / auto-accept from
+// the live session), hard --disallowedTools denies compiled from .s2u.rules, and
+// the advisory rules in the system prompt. cwd is the session's project dir, used
+// to locate .s2u.rules. Returns the run's combined output. (Phase 4 adds the
+// delivered file.)
+func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
+	policy := CompileRules(LoadRules(cwd))
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "claude", "--resume", sessionID, "-p", prompt)
+	cmd := exec.CommandContext(cctx, "claude", buildClaudeInjectArgs(sessionID, prompt, policy)...)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// buildClaudeInjectArgs assembles the `claude` args for a guarded injected run.
+// --disallowedTools is variadic, so it is placed immediately before -p (a flag)
+// which bounds it.
+func buildClaudeInjectArgs(sessionID, prompt string, policy Policy) []string {
+	args := []string{"--resume", sessionID, "--permission-mode", "acceptEdits"}
+	if sp := policy.AppendSystemPrompt(); sp != "" {
+		args = append(args, "--append-system-prompt", sp)
+	}
+	if len(policy.DisallowedTools) > 0 {
+		args = append(args, "--disallowedTools")
+		args = append(args, policy.DisallowedTools...)
+	}
+	args = append(args, "-p", prompt)
+	return args
 }
 
 // ClaudeRunner adapts the Claude Code CLI to the AgentRunner interface.
@@ -111,6 +134,6 @@ func (ClaudeRunner) Tool() string { return "claude" }
 func (ClaudeRunner) Discover(ctx context.Context) ([]DiscoveredSession, error) {
 	return DiscoverClaude(ctx)
 }
-func (ClaudeRunner) Run(ctx context.Context, sessionID, prompt string) (string, error) {
-	return RunClaudeInject(ctx, sessionID, prompt)
+func (ClaudeRunner) Run(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
+	return RunClaudeInject(ctx, sessionID, cwd, prompt)
 }

@@ -21,7 +21,7 @@ type AgentClient interface {
 type AgentRunner interface {
 	Tool() string
 	Discover(ctx context.Context) ([]DiscoveredSession, error)
-	Run(ctx context.Context, sessionID, prompt string) (string, error)
+	Run(ctx context.Context, sessionID, cwd, prompt string) (string, error)
 }
 
 const (
@@ -110,10 +110,19 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	}
 	// Phase 2 relays the prompt as-is; Phase 4 unseals it with the device key.
 	prompt := unsealPrompt(req.SealedPrompt)
+	cwd := ""
+	if sessions, derr := runner.Discover(ctx); derr == nil {
+		for _, s := range sessions {
+			if s.SessionID == req.TargetSessionID {
+				cwd = s.Project
+				break
+			}
+		}
+	}
 	rt.notify("Share2Us", "Running a prompt in your "+req.Tool+" session")
-	deps.logf("agent-bridge: running inject %s in session %s", req.ID, req.TargetSessionID)
+	deps.logf("agent-bridge: running inject %s in session %s (cwd %s)", req.ID, req.TargetSessionID, cwd)
 	_ = client.AgentReportResult(ctx, req.ID, "running", "")
-	out, err := runner.Run(ctx, req.TargetSessionID, prompt)
+	out, err := runner.Run(ctx, req.TargetSessionID, cwd, prompt)
 	if len(out) > maxReportedResult {
 		out = out[:maxReportedResult]
 	}

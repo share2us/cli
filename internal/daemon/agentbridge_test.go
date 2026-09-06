@@ -40,7 +40,7 @@ func (f *fakeRunner) Tool() string { return "claude" }
 func (f *fakeRunner) Discover(context.Context) ([]DiscoveredSession, error) {
 	return []DiscoveredSession{{SessionID: "s1", Tool: "claude", Status: "idle"}}, nil
 }
-func (f *fakeRunner) Run(_ context.Context, sessionID, _ string) (string, error) {
+func (f *fakeRunner) Run(_ context.Context, sessionID, _, _ string) (string, error) {
 	f.ranSID = sessionID
 	return f.out, f.err
 }
