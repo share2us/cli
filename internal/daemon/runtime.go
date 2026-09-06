@@ -38,6 +38,7 @@ type Options struct {
 	TrustedIPs      []string      // IPs auto-accepted for LAN (trust-by-IP)
 	InboxInterval   time.Duration // inbox poll cadence (0 = default 5s)
 	ApprovalPolicy  string        // LAN approval policy (clicore.ApprovalPolicy*)
+	AgentBridge     bool          // ADR-036: register sessions + receive inject requests
 }
 
 // Deps are the behaviours the daemon composes, injected from package main so this
@@ -52,6 +53,16 @@ type Deps struct {
 	CheckUpdate func(ctx context.Context) (available bool, message string)
 	// Cleanup removes stale temp/staging files (best-effort).
 	Cleanup func(ctx context.Context) error
+	// AgentClient + AgentRunner drive the agent-session bridge (ADR-036); nil when
+	// the bridge is off.
+	AgentClient  AgentClient
+	AgentRunners []AgentRunner
+	// Unseal opens a prompt/envelope sealed to this device (ADR-036 E2E); nil = plaintext.
+	Unseal func(sealed string) (string, error)
+	// DownloadContent fetches an injected file's ciphertext by request id; nil = no files.
+	DownloadContent func(ctx context.Context, id string) ([]byte, error)
+	// OpenContentKey opens a sealed file content key with this device's key.
+	OpenContentKey func(sealed string) ([]byte, error)
 	// Logf writes an operational log line (to stderr/journal).
 	Logf func(format string, args ...any)
 }
@@ -122,6 +133,10 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 	}
 	wg.Add(1)
 	go func() { defer wg.Done(); rt.scheduler(ctx, opts, deps) }()
+	if opts.AgentBridge && deps.AgentClient != nil && len(deps.AgentRunners) > 0 {
+		wg.Add(1)
+		go func() { defer wg.Done(); rt.agentBridge(ctx, deps.AgentClient, deps.AgentRunners, deps) }()
+	}
 
 	<-ctx.Done()
 	deps.logf("share2us daemon stopping")
