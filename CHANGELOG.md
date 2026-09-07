@@ -16,6 +16,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      ship while this section is empty (HTML comments do not count). -->
 
 ### Security
+- **Sending to a device found on the network now asks you to confirm it.** Device
+  discovery is unauthenticated — any machine on the same network can advertise
+  another device's name — so `s2u <file> --dest=<name>` could hand your file to
+  whoever answered to that name. The receiver now prints a short **verify code**,
+  and a password-less send to a discovered device asks you to confirm the same
+  code before anything is sent. If there is no terminal to ask on, it refuses
+  rather than guessing.
+
+  Unaffected: sending to an IP, to a pasted pairing string, or with a password —
+  those already identify the receiver, and none of them prompt.
+
 - **Trusting a nearby device no longer depends on its IP address.** A receiver
   that had set a password would still accept a transfer with *no* password from
   any device at a "trusted" IP — and an IP is something another machine on the

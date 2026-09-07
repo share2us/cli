@@ -195,6 +195,42 @@ func trustedSender(senderKey []byte) bool {
 	return ok
 }
 
+// confirmDiscoveredPeer asks the user to compare the receiver's short verify code
+// with the one printed on the receiver's own screen, before trusting a
+// fingerprint that arrived over unauthenticated mDNS.
+//
+// It fails CLOSED: with no terminal to ask (a script, a pipe), it refuses rather
+// than sending, and points at the two ways to name the receiver that are not
+// attacker-choosable. --yes deliberately does not answer this: --yes means "do
+// not ask me about the transfer", not "trust whoever answered to that name".
+func (a app) confirmDiscoveredPeer(dest, fingerprint string) bool {
+	return a.confirmDiscoveredPeerWith(dest, fingerprint, isTerminalReader(a.input()))
+}
+
+// confirmDiscoveredPeerWith is confirmDiscoveredPeer with the terminal check
+// injected, so both branches are testable without a pty.
+func (a app) confirmDiscoveredPeerWith(dest, fingerprint string, interactive bool) bool {
+	code := lanshare.VerifyCode(fingerprint)
+	if code == "" {
+		fmt.Fprintln(a.stderr, "the discovered device advertised no fingerprint to verify; use a pairing string or --dest=<ip> --pin=<fingerprint>")
+		return false
+	}
+	if !interactive {
+		fmt.Fprintf(a.stderr, "refusing to send to a device found over the network without confirming it (verify code %s).\n", code)
+		fmt.Fprintln(a.stderr, "Anyone on this network can advertise that name. Re-run where you can answer the prompt, or")
+		fmt.Fprintln(a.stderr, "name the receiver in a way that cannot be impersonated: paste its pairing string, or use")
+		fmt.Fprintln(a.stderr, "--dest=<ip> --pin=<fingerprint>. A --password also removes the need to confirm.")
+		return false
+	}
+	fmt.Fprintf(a.stderr, "Found a device at %s. It should be showing the verify code:\n\n    %s\n\n", dest, code)
+	fmt.Fprint(a.stderr, "Does the receiver show exactly that code? [y/N] ")
+	if !a.readYesNo() {
+		fmt.Fprintln(a.stderr, "Not sent. If the codes differ, another device on this network answered to that name.")
+		return false
+	}
+	return true
+}
+
 func (a app) approveInbound(yes bool) func(lanshare.RequestInfo) bool {
 	return func(r lanshare.RequestInfo) bool {
 		what := fmt.Sprintf("%s (%s)", r.Name, humanBytes(max64(r.Size, 0)))
@@ -355,6 +391,13 @@ func (a app) printReceiveBanner(info lanshare.ListenInfo, opts lanReceiveOpts) {
 		fmt.Fprintf(a.stderr, "Only accepting from: %s\n", strings.Join(opts.allowIPs, ", "))
 	}
 	fmt.Fprintf(a.stderr, "On the sender:  %s\n", sender)
+	// The sender computes this same code from the certificate it is about to pin.
+	// mDNS is unauthenticated — anyone on the network can advertise this device's
+	// name with THEIR fingerprint — so reading these two codes aloud is what
+	// distinguishes this receiver from an impersonator (todo W-M4).
+	if code := lanshare.VerifyCode(info.Fingerprint); code != "" {
+		fmt.Fprintf(a.stderr, "Verify code:    %s   (the sender is asked to confirm this)\n", code)
+	}
 
 	// A pairing string bundles address + fingerprint (+ passphrase); one paste on
 	// the sender's --dest is all that's needed and it pins the receiver identity.
@@ -493,6 +536,11 @@ func (a app) lanSend(ctx context.Context, args []string) int {
 		fmt.Fprintln(a.stderr, "send needs --dest=<ip|alias|pairing-string>")
 		return 2
 	}
+	// Whether the pinned fingerprint came from mDNS (attacker-choosable) rather
+	// than a pairing string, an alias, or an explicit --pin. Only that case needs
+	// out-of-band confirmation.
+	pinFromDiscovery := false
+
 	// A bare name resolves via a saved alias first, then LAN mDNS discovery.
 	if !lanshare.IsPairingString(opts.dest) && !looksLikeAddr(opts.dest) {
 		if addr, ok := loadLocalConfig().ResolveDeviceAlias(opts.dest); ok {
@@ -507,6 +555,7 @@ func (a app) lanSend(ctx context.Context, args []string) int {
 			opts.dest = pi.Addr()
 			if opts.pin == "" {
 				opts.pin = pi.Fingerprint
+				pinFromDiscovery = true
 			}
 		}
 	}
@@ -533,6 +582,18 @@ func (a app) lanSend(ctx context.Context, args []string) int {
 			return 1
 		}
 		opts.password = pw
+	}
+
+	// mDNS is unauthenticated: any device on the network can advertise the name we
+	// just looked up, carrying ITS certificate fingerprint, and we would pin the
+	// impersonator and hand it the file. A password closes this on its own (the
+	// PAKE is bound to the TLS channel, so a wrong peer cannot complete it), so
+	// the confirmation is only needed for a password-less send to a DISCOVERED
+	// address (todo W-M4).
+	if pinFromDiscovery && opts.password == "" {
+		if !a.confirmDiscoveredPeer(opts.dest, opts.pin) {
+			return 1
+		}
 	}
 
 	info, statErr := os.Stat(opts.path)
