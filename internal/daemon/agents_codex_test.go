@@ -51,7 +51,7 @@ func TestParseCodexIndexMissingFile(t *testing.T) {
 }
 
 func TestBuildCodexInjectArgs(t *testing.T) {
-	args := buildCodexInjectArgs("sess-9", "/repo", "do it")
+	args := buildCodexInjectArgs("sess-9", "/repo", "do it", codexSandbox(false))
 	joined := strings.Join(args, " ")
 	if !strings.HasPrefix(joined, "exec resume") {
 		t.Fatalf("must use exec resume: %v", args)

@@ -58,7 +58,7 @@ func (a app) daemon(ctx context.Context, args []string) int {
 
 func (a app) daemonUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s daemon <run|status|start|stop|install|uninstall|logs>\n", commandName)
-	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify] [--agent-bridge]   run the background receiver\n")
+	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify] [--agent-bridge [--agent-strict]]  run the receiver\n")
 	fmt.Fprintf(a.stderr, "  install [--dest DIR]                         install + start the per-user service\n")
 	fmt.Fprintf(a.stderr, "  status | stop | start | logs [-f] | uninstall\n")
 	return 2
@@ -128,7 +128,11 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		if client != nil {
 			runOpts.AgentBridge = true
 			deps.AgentClient = client
-			deps.AgentRunners = []daemon.AgentRunner{daemon.ClaudeRunner{}, daemon.CodexRunner{}, daemon.GeminiRunner{}}
+			deps.AgentRunners = []daemon.AgentRunner{
+				daemon.ClaudeRunner{Strict: opts.agentStrict},
+				daemon.CodexRunner{Strict: opts.agentStrict},
+				daemon.GeminiRunner{Strict: opts.agentStrict},
+			}
 			// E2E: unseal injected prompts with this device's key (ADR-036 P4).
 			if credential.DevicePublicKey != "" && credential.DevicePrivateKey != "" {
 				pub, priv := credential.DevicePublicKey, credential.DevicePrivateKey
@@ -259,6 +263,7 @@ type daemonRunOpts struct {
 	noLAN       bool
 	noNotify    bool
 	agentBridge bool
+	agentStrict bool
 }
 
 func parseDaemonRunArgs(args []string) (daemonRunOpts, error) {
@@ -280,6 +285,8 @@ func parseDaemonRunArgs(args []string) (daemonRunOpts, error) {
 			o.noNotify = true
 		case arg == "--agent-bridge":
 			o.agentBridge = true
+		case arg == "--agent-strict":
+			o.agentStrict = true
 		case arg == "--foreground":
 			// accepted and ignored: `run` is always foreground; the service
 			// manager backgrounds it.

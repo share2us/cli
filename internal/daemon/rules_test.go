@@ -68,7 +68,7 @@ func TestAppendSystemPrompt(t *testing.T) {
 
 func TestBuildClaudeInjectArgs(t *testing.T) {
 	p := Policy{DisallowedTools: []string{"Bash(git push:*)", "Bash(rm:*)"}, Advisory: []string{"be careful"}}
-	args := buildClaudeInjectArgs("sess-1", "do the thing", p)
+	args := buildClaudeInjectArgs("sess-1", "do the thing", p, claudeMode(false))
 	joined := strings.Join(args, " ")
 	// resume + restricted mode, never bypass.
 	if !strings.Contains(joined, "--resume sess-1") || !strings.Contains(joined, "--permission-mode acceptEdits") {
@@ -86,5 +86,22 @@ func TestBuildClaudeInjectArgs(t *testing.T) {
 	// -p must come last so it bounds the variadic --disallowedTools.
 	if args[len(args)-2] != "-p" || args[len(args)-1] != "do the thing" {
 		t.Fatalf("-p <prompt> must be last to bound --disallowedTools: %v", args)
+	}
+}
+
+func TestStrictModesAreReadOnlyAndNeverBypass(t *testing.T) {
+	// permissive defaults
+	if claudeMode(false) != "acceptEdits" || codexSandbox(false) != "workspace-write" || geminiApproval(false) != "auto_edit" {
+		t.Fatalf("default modes changed: %s/%s/%s", claudeMode(false), codexSandbox(false), geminiApproval(false))
+	}
+	// --agent-strict => read-only across all three
+	if claudeMode(true) != "plan" || codexSandbox(true) != "read-only" || geminiApproval(true) != "plan" {
+		t.Fatalf("strict modes wrong: %s/%s/%s", claudeMode(true), codexSandbox(true), geminiApproval(true))
+	}
+	// no mode may ever be a bypass
+	for _, m := range []string{claudeMode(false), claudeMode(true), codexSandbox(false), codexSandbox(true), geminiApproval(false), geminiApproval(true)} {
+		if strings.Contains(m, "bypass") || strings.Contains(m, "yolo") || strings.Contains(m, "danger") {
+			t.Fatalf("mode %q is a bypass", m)
+		}
 	}
 }

@@ -78,10 +78,10 @@ func parseCodexIndex(path string, now time.Time) ([]DiscoveredSession, error) {
 // RunCodexInject resumes a Codex session non-interactively with the injected
 // prompt, under a workspace-write sandbox (writes confined to the workspace, no
 // network — which blocks push/deploy/fetch). Never bypasses the sandbox.
-func RunCodexInject(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
+func RunCodexInject(ctx context.Context, sessionID, cwd, prompt string, strict bool) (string, error) {
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "codex", buildCodexInjectArgs(sessionID, cwd, prompt)...)
+	cmd := exec.CommandContext(cctx, "codex", buildCodexInjectArgs(sessionID, cwd, prompt, codexSandbox(strict))...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -91,8 +91,8 @@ func RunCodexInject(ctx context.Context, sessionID, cwd, prompt string) (string,
 
 // buildCodexInjectArgs assembles the codex args. The sandbox is the hard gate;
 // -c sandbox_mode is a config override that resume accepts.
-func buildCodexInjectArgs(sessionID, cwd, prompt string) []string {
-	args := []string{"exec", "resume", "-c", "sandbox_mode=workspace-write"}
+func buildCodexInjectArgs(sessionID, cwd, prompt, sandbox string) []string {
+	args := []string{"exec", "resume", "-c", "sandbox_mode=" + sandbox}
 	if cwd != "" {
 		args = append(args, "-C", cwd)
 	}
@@ -100,13 +100,22 @@ func buildCodexInjectArgs(sessionID, cwd, prompt string) []string {
 	return args
 }
 
-// CodexRunner adapts the Codex CLI to the AgentRunner interface.
-type CodexRunner struct{}
+// codexSandbox picks the sandbox: read-only under --agent-strict, else
+// workspace-write (writes in the workspace, no network). Never bypasses.
+func codexSandbox(strict bool) string {
+	if strict {
+		return "read-only"
+	}
+	return "workspace-write"
+}
+
+// CodexRunner adapts the Codex CLI. Strict selects the read-only sandbox.
+type CodexRunner struct{ Strict bool }
 
 func (CodexRunner) Tool() string { return "codex" }
 func (CodexRunner) Discover(ctx context.Context) ([]DiscoveredSession, error) {
 	return DiscoverCodex(ctx)
 }
-func (CodexRunner) Run(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
-	return RunCodexInject(ctx, sessionID, cwd, prompt)
+func (r CodexRunner) Run(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
+	return RunCodexInject(ctx, sessionID, cwd, prompt, r.Strict)
 }

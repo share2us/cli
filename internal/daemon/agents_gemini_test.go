@@ -35,7 +35,7 @@ func TestGeminiIndexForUUID(t *testing.T) {
 }
 
 func TestBuildGeminiInjectArgs(t *testing.T) {
-	args := buildGeminiInjectArgs("3", "do the task")
+	args := buildGeminiInjectArgs("3", "do the task", geminiApproval(false))
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-p do the task") || !strings.Contains(joined, "-r 3") {
 		t.Fatalf("args missing headless prompt/resume: %v", args)

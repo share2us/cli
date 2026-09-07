@@ -99,11 +99,11 @@ func claudeStatus(e claudeAgentEntry) string {
 // the advisory rules in the system prompt. cwd is the session's project dir, used
 // to locate .s2u.rules. Returns the run's combined output. (Phase 4 adds the
 // delivered file.)
-func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
+func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string, strict bool) (string, error) {
 	policy := CompileRules(LoadRules(cwd))
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "claude", buildClaudeInjectArgs(sessionID, prompt, policy)...)
+	cmd := exec.CommandContext(cctx, "claude", buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(strict))...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -114,8 +114,8 @@ func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string) (string
 // buildClaudeInjectArgs assembles the `claude` args for a guarded injected run.
 // --disallowedTools is variadic, so it is placed immediately before -p (a flag)
 // which bounds it.
-func buildClaudeInjectArgs(sessionID, prompt string, policy Policy) []string {
-	args := []string{"--resume", sessionID, "--permission-mode", "acceptEdits"}
+func buildClaudeInjectArgs(sessionID, prompt string, policy Policy, mode string) []string {
+	args := []string{"--resume", sessionID, "--permission-mode", mode}
 	if sp := policy.AppendSystemPrompt(); sp != "" {
 		args = append(args, "--append-system-prompt", sp)
 	}
@@ -127,13 +127,23 @@ func buildClaudeInjectArgs(sessionID, prompt string, policy Policy) []string {
 	return args
 }
 
-// ClaudeRunner adapts the Claude Code CLI to the AgentRunner interface.
-type ClaudeRunner struct{}
+// claudeMode picks the injected run's permission mode: "plan" (read-only) under
+// --agent-strict, else "acceptEdits" (do the work, deny-listed tools still hard
+// blocked). Never bypassPermissions.
+func claudeMode(strict bool) string {
+	if strict {
+		return "plan"
+	}
+	return "acceptEdits"
+}
+
+// ClaudeRunner adapts the Claude Code CLI. Strict selects the read-only mode.
+type ClaudeRunner struct{ Strict bool }
 
 func (ClaudeRunner) Tool() string { return "claude" }
 func (ClaudeRunner) Discover(ctx context.Context) ([]DiscoveredSession, error) {
 	return DiscoverClaude(ctx)
 }
-func (ClaudeRunner) Run(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
-	return RunClaudeInject(ctx, sessionID, cwd, prompt)
+func (r ClaudeRunner) Run(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
+	return RunClaudeInject(ctx, sessionID, cwd, prompt, r.Strict)
 }

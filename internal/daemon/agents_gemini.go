@@ -90,7 +90,7 @@ func parseGeminiSessions(listing, project string) []DiscoveredSession {
 // RunGeminiInject resumes a Gemini session headlessly with the prompt, under a
 // restricted approval mode (auto-approve edits, never yolo). Resume is by index,
 // so it re-lists to find the index of the target UUID.
-func RunGeminiInject(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
+func RunGeminiInject(ctx context.Context, sessionID, cwd, prompt string, strict bool) (string, error) {
 	if cwd == "" {
 		return "", fmt.Errorf("gemini inject needs the session's project directory")
 	}
@@ -104,15 +104,24 @@ func RunGeminiInject(ctx context.Context, sessionID, cwd, prompt string) (string
 	}
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "gemini", buildGeminiInjectArgs(idx, prompt)...)
+	cmd := exec.CommandContext(cctx, "gemini", buildGeminiInjectArgs(idx, prompt, geminiApproval(strict))...)
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-func buildGeminiInjectArgs(index, prompt string) []string {
+func buildGeminiInjectArgs(index, prompt, approval string) []string {
 	// -p headless, -r <index> resume, restricted approval (never -y/yolo).
-	return []string{"-p", prompt, "-r", index, "--approval-mode", "auto_edit"}
+	return []string{"-p", prompt, "-r", index, "--approval-mode", approval}
+}
+
+// geminiApproval picks the approval mode: "plan" (read-only) under --agent-strict,
+// else "auto_edit". Never yolo.
+func geminiApproval(strict bool) string {
+	if strict {
+		return "plan"
+	}
+	return "auto_edit"
 }
 
 // geminiIndexForUUID finds the list index whose line carries the given UUID.
@@ -141,13 +150,13 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// GeminiRunner adapts the Gemini CLI to the AgentRunner interface.
-type GeminiRunner struct{}
+// GeminiRunner adapts the Gemini CLI. Strict selects the read-only plan mode.
+type GeminiRunner struct{ Strict bool }
 
 func (GeminiRunner) Tool() string { return "gemini" }
 func (GeminiRunner) Discover(ctx context.Context) ([]DiscoveredSession, error) {
 	return DiscoverGemini(ctx)
 }
-func (GeminiRunner) Run(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
-	return RunGeminiInject(ctx, sessionID, cwd, prompt)
+func (r GeminiRunner) Run(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
+	return RunGeminiInject(ctx, sessionID, cwd, prompt, r.Strict)
 }
