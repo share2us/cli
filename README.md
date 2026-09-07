@@ -170,6 +170,22 @@ or using a personal API token? The transfer is accepted once and nothing is trus
 Transfers are secured with TLS 1.3 and a PAKE handshake; peers can be discovered
 by mDNS and saved as aliases/trusted peers.
 
+**Convert on download**
+
+A text or office-document share can be converted as you fetch it — the server
+renders it, so nothing extra is installed locally and the file is saved with the
+converted extension:
+
+```sh
+s2u get s.share2.us/7Kf9aQ2m --convert-pdf     # saves notes.pdf
+s2u get 7Kf9aQ2m --convert-docx                # saves notes.docx
+```
+
+The two flags cannot be combined. Conversion needs the plaintext, so it is not
+available for an end-to-end encrypted share (fetch it with its key instead), and
+it is rate limited server-side — if you hit the limit, wait rather than retrying
+in a loop.
+
 **Other**
 
 ```sh
