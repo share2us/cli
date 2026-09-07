@@ -153,3 +153,34 @@ func TestSelfProtectionCannotBeOptedOut(t *testing.T) {
 		}
 	}
 }
+
+// Codex and Gemini have no deny layer, so the compiled rules must survive into
+// the prompt — otherwise .s2u.rules silently applied to Claude only.
+func TestPromptPreambleCarriesRulesForToolsWithoutDenyLayer(t *testing.T) {
+	p := CompileRules([]string{"never touch the payment code"})
+	got := p.PromptPreamble()
+	if got == "" {
+		t.Fatal("baseline guardrails must always produce a preamble")
+	}
+	if !strings.Contains(got, "run `git push`") {
+		t.Errorf("baseline push deny must be humanized into the preamble:\n%s", got)
+	}
+	if !strings.Contains(got, "edit **/.s2u.rules") {
+		t.Errorf("self-protection must be stated in the preamble:\n%s", got)
+	}
+	if !strings.Contains(got, "never touch the payment code") {
+		t.Errorf("advisory rules must ride along:\n%s", got)
+	}
+}
+
+func TestHumanizeDeny(t *testing.T) {
+	for pattern, want := range map[string]string{
+		"Bash(git push:*)":    "run `git push`",
+		"Edit(**/.s2u.rules)": "edit **/.s2u.rules",
+		"WeirdPattern":        "WeirdPattern",
+	} {
+		if got := humanizeDeny(pattern); got != want {
+			t.Errorf("humanizeDeny(%q) = %q, want %q", pattern, got, want)
+		}
+	}
+}

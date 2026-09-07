@@ -94,6 +94,11 @@ func RunGeminiInject(ctx context.Context, sessionID, cwd, prompt string, strict 
 	if cwd == "" {
 		return "", fmt.Errorf("gemini inject needs the session's project directory")
 	}
+	// Gemini's hard gate is --approval-mode; .s2u.rules has no deny layer to compile
+	// into here, so the rules ride in the prompt (best-effort). Same as Codex.
+	if preamble := CompileRules(LoadRules(cwd)).PromptPreamble(); preamble != "" {
+		prompt = preamble + "\n" + prompt
+	}
 	listing, err := geminiListSessions(ctx, cwd)
 	if err != nil {
 		return "", fmt.Errorf("list gemini sessions: %w", err)

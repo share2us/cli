@@ -187,6 +187,46 @@ func (p Policy) AppendSystemPrompt() string {
 	return b.String()
 }
 
+// PromptPreamble renders the rules as prompt text for tools that have no per-tool
+// deny layer to compile into. Claude gets hard --disallowedTools patterns; Codex
+// and Gemini only have a sandbox / approval mode, which stops writes and network
+// but knows nothing about "never push". So for those the compiled denies are
+// restated in the prompt — best-effort, and honestly labelled as such in the ADR.
+func (p Policy) PromptPreamble() string {
+	if len(p.DisallowedTools) == 0 && len(p.Advisory) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("[Share2Us] The owner of this machine set these rules for remotely injected\n")
+	b.WriteString("prompts. They override the request that follows; refuse anything that breaks them.\n")
+	for _, d := range p.DisallowedTools {
+		b.WriteString("- never " + humanizeDeny(d) + "\n")
+	}
+	for _, a := range p.Advisory {
+		b.WriteString("- " + a + "\n")
+	}
+	return b.String()
+}
+
+// humanizeDeny turns a Claude permission pattern into plain English for the
+// preamble ("Bash(git push:*)" -> "run `git push`").
+func humanizeDeny(pattern string) string {
+	open := strings.Index(pattern, "(")
+	if open < 0 || !strings.HasSuffix(pattern, ")") {
+		return pattern
+	}
+	tool, inner := pattern[:open], pattern[open+1:len(pattern)-1]
+	inner = strings.TrimSuffix(inner, ":*")
+	switch tool {
+	case "Bash":
+		return "run `" + inner + "`"
+	case "Edit", "Write":
+		return "edit " + inner
+	default:
+		return tool + " " + inner
+	}
+}
+
 func hasAnyPrefix(s string, prefixes []string) bool {
 	for _, p := range prefixes {
 		if strings.HasPrefix(s, p) {

@@ -4,84 +4,153 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
 // Codex adapter (ADR-036 P5). Codex has no `--json` discovery, so sessions are
-// read from ~/.codex/session_index.jsonl ({id, thread_name, updated_at}); it has
-// no live busy/idle signal and the index carries no cwd, so both are reported
-// "unknown"/empty for now. Injection uses `codex exec resume <id> <prompt>`
-// (headless) under a restricted sandbox (never --dangerously-bypass...).
+// read from the rollout store at ~/.codex/sessions/<yyyy>/<mm>/<dd>/rollout-*.jsonl.
+// Each rollout's first line is a `session_meta` record carrying the session id and
+// the session's cwd. Injection uses `codex exec resume <id> <prompt>` (headless)
+// under a restricted sandbox (never --dangerously-bypass-...).
 //
-// NOTE: the injection path is not yet verified against a live Codex session (the
-// exact sandbox flag/mode and resume behaviour need a real run); discovery is.
+// Verified 2026-09-07 against codex 0.152.0 on a live session:
+//   - ~/.codex/session_index.jsonl is NOT the session store (5 entries vs 157
+//     rollouts, and a `codex exec` session never appears in it) — reading it meant
+//     discovery missed essentially every session. The rollout store is the source.
+//   - `codex exec resume` accepts NEITHER `-C` nor `--sandbox`; it takes the cwd
+//     from the process working directory and the sandbox via `-c sandbox_mode=`.
+//     Resume also filters candidates by cwd (cf. its `--all` flag), so running in
+//     the session's own directory is required, not just cosmetic.
+//   - THE SANDBOX ALONE IS NOT A GUARDRAIL. With only sandbox_mode set, a denied
+//     command is escalated through Codex's approval flow, and a host whose
+//     config.toml enables auto-approval (e.g. approvals_reviewer = "auto_review")
+//     silently re-runs it UNSANDBOXED — a read-only inject wrote a file in the
+//     workspace. Pinning approval_policy=never makes the sandbox actually hold
+//     ("read-only file system"). Both must be set on every injected run.
 
-// codexIndexEntry is one line of ~/.codex/session_index.jsonl.
-type codexIndexEntry struct {
-	ID         string `json:"id"`
-	ThreadName string `json:"thread_name"`
-	UpdatedAt  string `json:"updated_at"`
-}
-
-// codexRecentWindow bounds how far back a session may have been updated to still
+// codexRecentWindow bounds how recently a session must have been touched to still
 // be advertised (Codex has no live status, so this stands in for "live-ish").
 const codexRecentWindow = 48 * time.Hour
 
-// DiscoverCodex lists recent Codex sessions from the session index.
+// codexMetaScanLimit bounds how far into a rollout we read looking for a display
+// name, so discovery stays cheap on large transcripts.
+const codexMetaScanLimit = 400
+
+// codexRollout is the first line of a rollout file.
+type codexRollout struct {
+	Type    string `json:"type"`
+	Payload struct {
+		SessionID string `json:"session_id"`
+		Cwd       string `json:"cwd"`
+		Role      string `json:"role"`
+		Content   []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	} `json:"payload"`
+}
+
+// DiscoverCodex lists recent Codex sessions from the rollout store.
 func DiscoverCodex(ctx context.Context) ([]DiscoveredSession, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
 	}
-	return parseCodexIndex(filepath.Join(home, ".codex", "session_index.jsonl"), time.Now())
+	return discoverCodexIn(filepath.Join(home, ".codex", "sessions"), time.Now())
 }
 
-func parseCodexIndex(path string, now time.Time) ([]DiscoveredSession, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+// discoverCodexIn walks the rollout tree, keeping files touched inside the recent
+// window. Only the header (plus a bounded prefix, for the name) is parsed.
+func discoverCodexIn(root string, now time.Time) ([]DiscoveredSession, error) {
+	var out []DiscoveredSession
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil // best-effort: skip unreadable dirs
 		}
+		if d.IsDir() || !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(d.Name(), ".jsonl") {
+			return nil
+		}
+		info, ierr := d.Info()
+		if ierr != nil || now.Sub(info.ModTime()) > codexRecentWindow {
+			return nil
+		}
+		if s, ok := parseCodexRollout(path); ok {
+			out = append(out, s)
+		}
+		return nil
+	})
+	if err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
-	defer f.Close()
-	// Keep the most recent entry per id (the index appends revisions).
-	byID := map[string]DiscoveredSession{}
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for sc.Scan() {
-		var e codexIndexEntry
-		if err := json.Unmarshal(sc.Bytes(), &e); err != nil || e.ID == "" {
-			continue
-		}
-		if ts, err := time.Parse(time.RFC3339Nano, e.UpdatedAt); err == nil && now.Sub(ts) > codexRecentWindow {
-			continue
-		}
-		byID[e.ID] = DiscoveredSession{
-			SessionID: e.ID,
-			Tool:      "codex",
-			Name:      e.ThreadName,
-			Project:   "",
-			Status:    "unknown",
-		}
-	}
-	out := make([]DiscoveredSession, 0, len(byID))
-	for _, s := range byID {
-		out = append(out, s)
-	}
 	return out, nil
+}
+
+// parseCodexRollout reads a rollout's session_meta header and derives a display
+// name from the first real user message (synthetic <...> context blocks skipped).
+func parseCodexRollout(path string) (DiscoveredSession, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return DiscoveredSession{}, false
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4<<20)
+	if !sc.Scan() {
+		return DiscoveredSession{}, false
+	}
+	var head codexRollout
+	if err := json.Unmarshal(sc.Bytes(), &head); err != nil || head.Type != "session_meta" || head.Payload.SessionID == "" {
+		return DiscoveredSession{}, false
+	}
+	s := DiscoveredSession{
+		SessionID: head.Payload.SessionID,
+		Tool:      "codex",
+		Project:   head.Payload.Cwd,
+		Status:    "unknown",
+	}
+	for i := 0; i < codexMetaScanLimit && sc.Scan(); i++ {
+		var rec codexRollout
+		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil || rec.Payload.Role != "user" || len(rec.Payload.Content) == 0 {
+			continue
+		}
+		text := strings.TrimSpace(rec.Payload.Content[0].Text)
+		if text == "" || strings.HasPrefix(text, "<") {
+			continue // synthetic context block, not something the user typed
+		}
+		s.Name = codexTruncate(text, 60)
+		break
+	}
+	if s.Name == "" {
+		s.Name = filepath.Base(head.Payload.Cwd)
+	}
+	return s, true
+}
+
+func codexTruncate(s string, n int) string {
+	s = strings.TrimSpace(strings.ReplaceAll(s, "\n", " "))
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }
 
 // RunCodexInject resumes a Codex session non-interactively with the injected
 // prompt, under a workspace-write sandbox (writes confined to the workspace, no
 // network — which blocks push/deploy/fetch). Never bypasses the sandbox.
+//
+// Codex has no per-tool deny layer to compile .s2u.rules into, so the rules ride
+// in the prompt (best-effort) and the sandbox is the hard gate.
 func RunCodexInject(ctx context.Context, sessionID, cwd, prompt string, strict bool) (string, error) {
+	if preamble := CompileRules(LoadRules(cwd)).PromptPreamble(); preamble != "" {
+		prompt = preamble + "\n" + prompt
+	}
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "codex", buildCodexInjectArgs(sessionID, cwd, prompt, codexSandbox(strict))...)
+	cmd := exec.CommandContext(cctx, "codex", buildCodexInjectArgs(sessionID, prompt, codexSandbox(strict))...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -90,14 +159,22 @@ func RunCodexInject(ctx context.Context, sessionID, cwd, prompt string, strict b
 }
 
 // buildCodexInjectArgs assembles the codex args. The sandbox is the hard gate;
-// -c sandbox_mode is a config override that resume accepts.
-func buildCodexInjectArgs(sessionID, cwd, prompt, sandbox string) []string {
-	args := []string{"exec", "resume", "-c", "sandbox_mode=" + sandbox}
-	if cwd != "" {
-		args = append(args, "-C", cwd)
+// `-c sandbox_mode=` is the only way to set it on `resume`, and it is only load
+// bearing together with approval_policy=never (see the escalation note above).
+// There is no cwd flag — the caller sets the process directory.
+// --skip-git-repo-check keeps injection working in a project that is not a git
+// repo (codex otherwise refuses headlessly).
+func buildCodexInjectArgs(sessionID, prompt, sandbox string) []string {
+	return []string{
+		"exec", "resume",
+		"-c", "sandbox_mode=" + sandbox,
+		// Without this the sandbox is advisory: a denied command escalates to the
+		// approval flow, which the host's config may auto-approve, re-running it
+		// with no sandbox at all. Verified 2026-09-07.
+		"-c", "approval_policy=never",
+		"--skip-git-repo-check",
+		sessionID, prompt,
 	}
-	args = append(args, sessionID, prompt)
-	return args
 }
 
 // codexSandbox picks the sandbox: read-only under --agent-strict, else
