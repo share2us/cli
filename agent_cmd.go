@@ -46,7 +46,7 @@ func (a app) agent(ctx context.Context, args []string) int {
 }
 
 func (a app) agentUsage() int {
-	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|pending|allow>\n", commandName)
+	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|pending|approve|allow|revoke|allowed|rules>\n", commandName)
 	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
 	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P [--file PATH]   inject a prompt (+ optional file)\n")
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
