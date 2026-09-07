@@ -32,7 +32,7 @@ func TestCompileRulesHardVsAdvisory(t *testing.T) {
 		t.Errorf("network should deny curl/wget; got %v", p.DisallowedTools)
 	}
 	// self-protection is always present.
-	if !denies(p, "Edit(**/.s2u.rules)") || !denies(p, "Write(**/.claude/settings.json)") {
+	if !denies(p, "Edit(**/.s2u.rules)") || !denies(p, "Edit(**/.claude/settings.json)") {
 		t.Errorf("self-protection denies missing; got %v", p.DisallowedTools)
 	}
 	// fuzzy rule is advisory, not a deny; allowance is neither.
@@ -77,6 +77,9 @@ func TestBuildClaudeInjectArgs(t *testing.T) {
 	if strings.Contains(joined, "bypassPermissions") || strings.Contains(joined, "dangerously") {
 		t.Fatalf("must never bypass permissions: %v", args)
 	}
+	if !strings.Contains(joined, "--fork-session") {
+		t.Fatalf("a live session can only be injected via a fork: %v", args)
+	}
 	if !strings.Contains(joined, "--disallowedTools Bash(git push:*) Bash(rm:*)") {
 		t.Fatalf("disallowedTools not passed as a bounded variadic: %v", args)
 	}
@@ -103,5 +106,19 @@ func TestStrictModesAreReadOnlyAndNeverBypass(t *testing.T) {
 		if strings.Contains(m, "bypass") || strings.Contains(m, "yolo") || strings.Contains(m, "danger") {
 			t.Fatalf("mode %q is a bypass", m)
 		}
+	}
+}
+
+func TestSelfProtectionUsesEditNotWrite(t *testing.T) {
+	// Claude ignores Write(path) deny rules; only Edit(path) is enforced. A
+	// Write(...) rule here would be a silent no-op — i.e. no self-protection.
+	p := CompileRules(nil)
+	for _, d := range p.DisallowedTools {
+		if strings.HasPrefix(d, "Write(") {
+			t.Fatalf("Write(...) deny is a no-op in Claude; use Edit(...): %q", d)
+		}
+	}
+	if !denies(p, "Edit(**/.s2u.rules)") {
+		t.Fatalf("self-protection missing: %v", p.DisallowedTools)
 	}
 }

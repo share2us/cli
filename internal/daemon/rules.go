@@ -26,10 +26,15 @@ type Policy struct {
 
 // selfProtection is always denied so an injected run cannot weaken its own
 // guardrails by editing the rules or the compiled Claude settings.
+// NOTE: only Edit(path) rules are matched by Claude's file-permission checks —
+// Write(path) deny rules are silently ignored (verified 2026-09-07: Claude warns
+// "Write(...) is not matched by file permission checks ... Edit rules cover all
+// file-editing tools"). So these MUST be Edit(...) or the self-protection is a
+// no-op.
 var selfProtection = []string{
-	"Edit(**/.s2u.rules)", "Write(**/.s2u.rules)",
-	"Edit(**/.claude/settings.json)", "Write(**/.claude/settings.json)",
-	"Edit(**/.claude/settings.local.json)", "Write(**/.claude/settings.local.json)",
+	"Edit(**/.s2u.rules)",
+	"Edit(**/.claude/settings.json)",
+	"Edit(**/.claude/settings.local.json)",
 }
 
 // hardRule maps a keyword found in a prohibition to the deny patterns it compiles

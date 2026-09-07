@@ -115,7 +115,12 @@ func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string, strict 
 // --disallowedTools is variadic, so it is placed immediately before -p (a flag)
 // which bounds it.
 func buildClaudeInjectArgs(sessionID, prompt string, policy Policy, mode string) []string {
-	args := []string{"--resume", sessionID, "--permission-mode", mode}
+	// A live session (interactive OR background) cannot be resumed in place
+	// headlessly — Claude refuses with "running as a background session ... add
+	// --fork-session to branch off a copy" (verified 2026-09-07 on a real run).
+	// Discovery only surfaces live sessions, so the injected run always branches a
+	// copy: same project + history, new session id.
+	args := []string{"--resume", sessionID, "--fork-session", "--permission-mode", mode}
 	if sp := policy.AppendSystemPrompt(); sp != "" {
 		args = append(args, "--append-system-prompt", sp)
 	}
