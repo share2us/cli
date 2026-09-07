@@ -243,6 +243,10 @@ jobs:
           NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          # GPL-3.0-only: the licence text must travel with the package, and npm
+          # packs this directory alone. Copied at publish time so the repo keeps
+          # ONE copy of the licence rather than a duplicate that can drift.
+          cp ../LICENSE ./LICENSE
           npm pkg set "share2usCliVersion=v${VERSION}"
           npm version "0.1.${GITHUB_RUN_NUMBER}" --no-git-tag-version --allow-same-version
           # npm is a SECOND user-facing channel: publishing without a dist-tag

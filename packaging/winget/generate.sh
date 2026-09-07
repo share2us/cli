@@ -68,8 +68,8 @@ PublisherUrl: https://share2.us
 PublisherSupportUrl: https://github.com/${REPO}/issues
 PackageName: Share2Us CLI
 PackageUrl: https://share2.us
-License: MIT
-LicenseUrl: https://github.com/${REPO}/blob/main/LICENSE.md
+License: GPL-3.0-only
+LicenseUrl: https://github.com/${REPO}/blob/main/LICENSE
 ShortDescription: Share files and folders by link, to your devices, or directly over the local network.
 Description: |-
   The Share2Us command line (s2u): share files and folders by link, send them to

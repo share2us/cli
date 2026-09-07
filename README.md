@@ -249,4 +249,14 @@ This repo is the CLI itself; the shared logic lives in
 
 ## License
 
-[MIT](LICENSE.md) © Share2Us
+[GNU General Public License v3.0 only](LICENSE) © 2026 Hassan Khurram
+
+The Share2Us client is free software: you may use, study, share and modify it.
+If you distribute it — modified or not — you must pass on the same freedoms and
+make the corresponding source available under the GPL. Building your own copy
+for your own use carries no obligation.
+
+Releases published before 2026-09-07 remain under the MIT licence they were
+issued with; a licence already granted cannot be withdrawn. The change applies
+to this and later versions. Third-party dependency licences are listed in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
