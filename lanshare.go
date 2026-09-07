@@ -702,6 +702,19 @@ func parseLanSendArgs(args []string) (lanSendOpts, error) {
 			o.dest = v
 		case strings.HasPrefix(arg, "--dest="):
 			o.dest = strings.TrimPrefix(arg, "--dest=")
+		// --pin names the receiver's certificate fingerprint directly, which is
+		// what makes a bare --dest=<ip> safe: the TLS session is pinned to that
+		// exact certificate, so an on-path attacker cannot substitute its own.
+		// Two error paths already told people to use this; until now the flag did
+		// not exist, so the advice could not be followed.
+		case arg == "--pin":
+			v, ok := next()
+			if !ok {
+				return o, fmt.Errorf("--pin needs a certificate fingerprint")
+			}
+			o.pin = v
+		case strings.HasPrefix(arg, "--pin="):
+			o.pin = strings.TrimPrefix(arg, "--pin=")
 		case arg == "--password" || arg == "-p":
 			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				i++
