@@ -149,7 +149,7 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	// A delivered file (ADR-036 P4b): download the ciphertext, open its content
 	// key with this device's key, decrypt it into the session's .s2u-inbox, and
 	// point the prompt at it.
-	if req.ObjectKey != "" && env.FileName != "" && deps.DownloadContent != nil && deps.OpenContentKey != nil {
+	if req.HasFile && env.FileName != "" && deps.DownloadContent != nil && deps.OpenContentKey != nil {
 		ciphertext, derr := deps.DownloadContent(ctx, req.ID)
 		if derr != nil {
 			deps.logf("agent-bridge: download file for %s: %v", req.ID, derr)
