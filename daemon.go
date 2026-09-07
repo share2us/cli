@@ -86,7 +86,7 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		LANDiscoverable: settings.LANDiscoverable && !opts.noLAN,
 		Notify:          settings.Notify && !opts.noNotify,
 		ApprovalPolicy:  settings.ApprovalPolicy,
-		TrustedIPs:      loadLocalConfig().TrustedIPs(),
+		IsTrustedSender: trustedSender,
 	}
 
 	// The daemon runs LAN receive with no account — the LAN listener needs no
