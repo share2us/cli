@@ -16,11 +16,33 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      ship while this section is empty (HTML comments do not count). -->
 
 ### Added
+- **Send a file and a prompt to a coding-agent session on another machine.**
+  With the daemon running as `share2us daemon run --agent-bridge`, a session on
+  this machine can be listed from your other devices (`share2us agent list`) and
+  sent work: `share2us agent send --device <id> --session <id> --file shot.png
+  --prompt "what is wrong here?"`. Claude Code, Codex and Gemini are supported.
+  The prompt and the file are end-to-end encrypted to the target device — the
+  server never sees either.
+
+  A device you have not sent to before is **not** trusted automatically: the
+  first request waits for the target machine to approve it
+  (`share2us agent pending`, then `share2us agent approve <id>` for that one
+  request, or `share2us agent allow <device>` for standing access, which
+  `share2us agent revoke <device>` withdraws and `share2us agent allowed` lists).
+
+  Injected runs are **guardrailed by default, with no setup**: pushing,
+  deleting, and outbound network are blocked, and a remote prompt can never edit
+  your rules or your Claude settings. Write a plain-text `.s2u.rules` (start one
+  with `share2us setup`) to block more, or opt out per item with a line like
+  `allow network`. `share2us agent rules` shows which of your rules are hard
+  enforced and which are advisory, and how each tool enforces them.
+
+  Requires a Pro or Max plan, and is off unless you pass `--agent-bridge`.
+
 - `share2us daemon` can now run **LAN receive without an account**: start it
   while logged out to receive account-free LAN transfers (unknown senders are
   still declined). Log in to also receive account device shares.
 
-### Added
 - Background service: `share2us daemon install` runs an optional, off-by-default
   per-user service that keeps receiving device and LAN shares (with desktop
   notifications) while no terminal or app is open, and refreshes the trusted-
