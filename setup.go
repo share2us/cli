@@ -11,19 +11,23 @@ import (
 const rulesTemplate = `# Share2Us agent rules (.s2u.rules) — plain-text dos and don'ts for prompts that
 # other devices inject into this project's agent sessions (ADR-036).
 #
-# Lines starting with "don't" / "never" / "no" are prohibitions. Ones s2u can map
-# to a HARD block (push, commit, delete/rm, network) are ENFORCED on the injected
-# run and cannot be overridden even if the prompt asks. Others are ADVISORY
-# (best-effort, in the prompt). Run "s2u agent rules" to see which is which.
+# ENFORCED BY DEFAULT even with no rules here: push, delete (rm), and outbound
+# network are blocked on injected runs, and an injected run can never edit these
+# rules or the Claude settings. You do not need to write those lines.
+#
+# Add "don't"/"never"/"no" lines to block MORE. Ones s2u can map to a hard block
+# are ENFORCED (the prompt cannot talk its way past them); the rest are ADVISORY
+# (best-effort). Run "s2u agent rules" to see which is which.
+#
+# To OPT OUT of a default guardrail for this project, use an "allow" line:
+#   allow push          # let injected runs push
+#   allow network       # let injected runs reach the network
+#   allow delete        # let injected runs delete files
+# (Self-protection cannot be opted out of.)
 
-# Never push, commit, or force-push from an injected prompt.
-never push
-never force push
+# Examples — block more than the default:
 never commit
-# No destructive file deletion.
-do not delete files
-# No outbound network from the agent.
-no network
+don't touch the payment code
 `
 
 // setup writes a starter .s2u.rules for this project (or --global for the home
@@ -84,7 +88,8 @@ func (a app) agentRules(args []string) int {
 	}
 	policy := daemon.CompileRules(daemon.LoadRules(project))
 	fmt.Fprintf(a.stdout, "Rules for %s (+ global ~/.s2u.rules)\n\n", project)
-	fmt.Fprintln(a.stdout, "HARD (enforced on injected runs, cannot be overridden):")
+	fmt.Fprintln(a.stdout, "HARD (enforced on injected runs, cannot be overridden — includes the")
+	fmt.Fprintln(a.stdout, "default baseline: push / delete / network, plus self-protection):")
 	for _, d := range policy.DisallowedTools {
 		fmt.Fprintf(a.stdout, "  deny  %s\n", d)
 	}

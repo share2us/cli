@@ -30,8 +30,14 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentStatus(ctx, args[1:])
 	case "pending":
 		return a.agentPending(ctx)
+	case "approve":
+		return a.agentApprove(ctx, args[1:])
 	case "allow":
 		return a.agentAllow(ctx, args[1:])
+	case "revoke":
+		return a.agentRevoke(ctx, args[1:])
+	case "allowed":
+		return a.agentAllowed(ctx)
 	case "rules":
 		return a.agentRules(args[1:])
 	default:
@@ -45,7 +51,10 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P [--file PATH]   inject a prompt (+ optional file)\n")
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
-	fmt.Fprintf(a.stderr, "  allow <sender-device-id>                   always-allow a device to inject into this one\n")
+	fmt.Fprintf(a.stderr, "  approve <request-id>                       approve ONE pending request (no standing access)\n")
+	fmt.Fprintf(a.stderr, "  allow <sender-device-id>                   ALWAYS-allow a device (standing access)\n")
+	fmt.Fprintf(a.stderr, "  revoke <sender-device-id>                  withdraw a device's standing access\n")
+	fmt.Fprintf(a.stderr, "  allowed                                    list devices with standing access\n")
 	fmt.Fprintf(a.stderr, "  rules [--project DIR]                      show which .s2u.rules are hard-enforced vs advisory\n")
 	return 2
 }
@@ -232,8 +241,10 @@ func (a app) agentPending(ctx context.Context) int {
 		return 0
 	}
 	for _, q := range reqs {
-		fmt.Fprintf(a.stdout, "%s  from device %s  -> %s session %s   (approve: %s agent allow %s)\n",
-			shorten(q.ID), shorten(q.SenderDeviceID), q.Tool, shorten(q.TargetSessionID), commandName, q.SenderDeviceID)
+		fmt.Fprintf(a.stdout, "%s  from device %s  -> %s session %s\n",
+			shorten(q.ID), shorten(q.SenderDeviceID), q.Tool, shorten(q.TargetSessionID))
+		fmt.Fprintf(a.stdout, "    just this one : %s agent approve %s\n", commandName, q.ID)
+		fmt.Fprintf(a.stdout, "    always allow  : %s agent allow %s   (standing access until revoked)\n", commandName, q.SenderDeviceID)
 	}
 	return 0
 }
@@ -250,7 +261,8 @@ func (a app) agentAllow(ctx context.Context, args []string) int {
 	if err := client.AgentAllow(ctx, args[0]); err != nil {
 		return a.fail("allow", err)
 	}
-	fmt.Fprintln(a.stdout, "Allowed. That device's requests will now inject without per-request approval.")
+	fmt.Fprintf(a.stdout, "Allowed. That device now has STANDING access — its prompts inject without further approval.\n")
+	fmt.Fprintf(a.stdout, "Withdraw it any time: %s agent revoke %s\n", commandName, args[0])
 	return 0
 }
 
@@ -259,4 +271,59 @@ func shorten(s string) string {
 		return s[:12]
 	}
 	return s
+}
+
+// agentApprove approves ONE pending request without granting standing access.
+func (a app) agentApprove(ctx context.Context, args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintf(a.stderr, "usage: %s agent approve <request-id>\n", commandName)
+		return 2
+	}
+	client, ok := a.agentClient()
+	if !ok {
+		return 1
+	}
+	if err := client.AgentApproveOnce(ctx, args[0]); err != nil {
+		return a.fail("approve", err)
+	}
+	fmt.Fprintln(a.stdout, "Approved this request only. The sender was NOT given standing access.")
+	return 0
+}
+
+// agentRevoke withdraws a sender device's standing access to this device.
+func (a app) agentRevoke(ctx context.Context, args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintf(a.stderr, "usage: %s agent revoke <sender-device-id>\n", commandName)
+		return 2
+	}
+	client, ok := a.agentClient()
+	if !ok {
+		return 1
+	}
+	if err := client.AgentRevoke(ctx, args[0]); err != nil {
+		return a.fail("revoke", err)
+	}
+	fmt.Fprintln(a.stdout, "Revoked. That device can no longer inject without a fresh approval.")
+	return 0
+}
+
+// agentAllowed lists devices holding standing access to this device.
+func (a app) agentAllowed(ctx context.Context) int {
+	client, ok := a.agentClient()
+	if !ok {
+		return 1
+	}
+	grants, err := client.AgentAllowed(ctx)
+	if err != nil {
+		return a.fail("list grants", err)
+	}
+	if len(grants) == 0 {
+		fmt.Fprintln(a.stdout, "No devices have standing access to this one.")
+		return 0
+	}
+	for _, g := range grants {
+		fmt.Fprintf(a.stdout, "%s  since %s   (revoke: %s agent revoke %s)\n",
+			g.SenderDeviceID, g.ApprovedAt, commandName, g.SenderDeviceID)
+	}
+	return 0
 }

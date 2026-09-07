@@ -122,3 +122,34 @@ func TestSelfProtectionUsesEditNotWrite(t *testing.T) {
 		t.Fatalf("self-protection missing: %v", p.DisallowedTools)
 	}
 }
+
+func TestBaselineIsEnforcedWithNoRulesFile(t *testing.T) {
+	// The default state (no .s2u.rules) must NOT be wide open.
+	p := CompileRules(nil)
+	for _, must := range []string{"Bash(git push:*)", "Bash(rm:*)", "Bash(curl:*)", "Edit(**/.s2u.rules)"} {
+		if !denies(p, must) {
+			t.Fatalf("baseline missing %q — default would be unrestricted: %v", must, p.DisallowedTools)
+		}
+	}
+}
+
+func TestBaselineOptOut(t *testing.T) {
+	p := CompileRules([]string{"allow push", "# but nothing else"})
+	if denies(p, "Bash(git push:*)") {
+		t.Fatal("explicit `allow push` should opt out of the push baseline")
+	}
+	// other baseline items stay enforced
+	if !denies(p, "Bash(rm:*)") || !denies(p, "Bash(curl:*)") {
+		t.Fatalf("opting out of push must not drop other baselines: %v", p.DisallowedTools)
+	}
+}
+
+func TestSelfProtectionCannotBeOptedOut(t *testing.T) {
+	// No phrasing may disable the guardrails' own protection.
+	for _, line := range []string{"allow editing .s2u.rules", "allow rules", "permit settings edit", "enable everything"} {
+		p := CompileRules([]string{line})
+		if !denies(p, "Edit(**/.s2u.rules)") || !denies(p, "Edit(**/.claude/settings.json)") {
+			t.Fatalf("self-protection was removed by %q: %v", line, p.DisallowedTools)
+		}
+	}
+}

@@ -52,18 +52,67 @@ var hardRules = []struct {
 	{[]string{"reset --hard", "git reset"}, []string{"Bash(git reset:*)"}},
 }
 
+// baselineRules are ENFORCED BY DEFAULT on every injected run, even with no
+// .s2u.rules file: the irreversible or outbound actions. Without this an allowed
+// device had unrestricted code execution on the target by default. A project can
+// opt OUT of an individual item with an "allow ..." line (see allowPrefixes);
+// self-protection can never be opted out of.
+var baselineRules = []struct {
+	name string
+	deny []string
+}{
+	{"push", []string{"Bash(git push:*)", "Bash(git push --force:*)", "Bash(git push -f:*)"}},
+	{"delete", []string{"Bash(rm:*)", "Bash(rmdir:*)"}},
+	{"network", []string{"Bash(curl:*)", "Bash(wget:*)", "Bash(nc:*)"}},
+}
+
+// allowKeywords maps an "allow ..." line to the baseline item it opts out of.
+var allowKeywords = map[string][]string{
+	"push":    {"push"},
+	"delete":  {"delete", "rm ", "remove"},
+	"network": {"network", "internet", "curl", "wget", "download"},
+}
+
 // prohibitionPrefixes mark a line as a "don't".
 var prohibitionPrefixes = []string{"don't", "dont", "do not", "never", "no ", "disallow", "block", "forbid"}
+
+// allowPrefixes mark a line as an explicit opt-out of a baseline guardrail.
+var allowPrefixes = []string{"allow ", "permit ", "enable "}
 
 // CompileRules turns plain-text rules into a Policy. Lines starting with a
 // prohibition word are matched against the hard-rule vocabulary; matched ones
 // become deny patterns, unmatched prohibitions become advisory. Self-protection
 // deny patterns are always included. Comments (#) and blank lines are ignored.
 func CompileRules(lines []string) Policy {
+	// Start from the enforced baseline: self-protection (never removable) plus the
+	// default denies. Rules can ADD more, or opt OUT of a baseline item.
 	p := Policy{DisallowedTools: append([]string{}, selfProtection...)}
 	seen := map[string]bool{}
 	for _, d := range p.DisallowedTools {
 		seen[d] = true
+	}
+	optedOut := map[string]bool{}
+	for _, raw := range lines {
+		low := strings.ToLower(strings.TrimSpace(raw))
+		if !hasAnyPrefix(low, allowPrefixes) {
+			continue
+		}
+		for item, kws := range allowKeywords {
+			if containsAny(low, kws) {
+				optedOut[item] = true
+			}
+		}
+	}
+	for _, b := range baselineRules {
+		if optedOut[b.name] {
+			continue // explicit opt-out for this project
+		}
+		for _, d := range b.deny {
+			if !seen[d] {
+				seen[d] = true
+				p.DisallowedTools = append(p.DisallowedTools, d)
+			}
+		}
 	}
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
