@@ -28,14 +28,17 @@ const (
 
 // Options configures a daemon run. Zero values fall back to sensible defaults.
 type Options struct {
-	DestDir         string        // where received files land ("" = lanshare/receiveInboxOnce default)
-	LANDiscoverable bool          // run the background LAN receiver
-	RunInbox        bool          // run the account-inbox poll (false under a PAT)
-	Notify          bool          // post desktop notifications
-	Instance        string        // mDNS advertised name ("" = hostname)
-	Bind            string        // LAN bind address ("" = all interfaces)
-	Port            int           // LAN port (0 = auto)
-	TrustedIPs      []string      // IPs auto-accepted for LAN (trust-by-IP)
+	DestDir         string // where received files land ("" = lanshare/receiveInboxOnce default)
+	LANDiscoverable bool   // run the background LAN receiver
+	RunInbox        bool   // run the account-inbox poll (false under a PAT)
+	Notify          bool   // post desktop notifications
+	Instance        string // mDNS advertised name ("" = hostname)
+	Bind            string // LAN bind address ("" = all interfaces)
+	Port            int    // LAN port (0 = auto)
+	// IsTrustedSender reports whether a verified LAN sender key is a trusted
+	// device (ADR-034). Replaces the old trust-by-IP, which a LAN attacker could
+	// claim by taking the address (todo W-M5).
+	IsTrustedSender func(senderKey []byte) bool
 	InboxInterval   time.Duration // inbox poll cadence (0 = default 5s)
 	ApprovalPolicy  string        // LAN approval policy (clicore.ApprovalPolicy*)
 	AgentBridge     bool          // ADR-036: register sessions + receive inject requests
@@ -205,13 +208,13 @@ func (rt *Runtime) lanLoop(ctx context.Context, opts Options, deps Deps) {
 	}
 	var mdns io.Closer
 	ropts := lanshare.ReceiveOptions{
-		Bind:       opts.Bind,
-		Port:       opts.Port,
-		NoPassword: true,
-		TrustedIPs: opts.TrustedIPs,
-		DestDir:    opts.DestDir,
-		Loop:       true,
-		OnRequest:  rt.approve(opts.ApprovalPolicy, deps),
+		Bind:            opts.Bind,
+		Port:            opts.Port,
+		NoPassword:      true,
+		IsTrustedSender: opts.IsTrustedSender,
+		DestDir:         opts.DestDir,
+		Loop:            true,
+		OnRequest:       rt.approve(opts.ApprovalPolicy, deps),
 		OnListen: func(info lanshare.ListenInfo) {
 			if c, err := lanshare.Advertise(instance, info); err == nil {
 				mdns = c

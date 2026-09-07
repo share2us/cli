@@ -15,6 +15,20 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Security
+- **Trusting a nearby device no longer depends on its IP address.** A receiver
+  that had set a password would still accept a transfer with *no* password from
+  any device at a "trusted" IP — and an IP is something another machine on the
+  same network can take. Trust is now keyed on the device's verified identity,
+  the same MFA-gated trust used everywhere else, so taking an address gets you
+  nothing.
+
+  `share2us config set device trusted <alias|ip>` has been **removed** as a
+  result; it can no longer grant anything. Existing entries are inert and can be
+  cleared with `share2us config delete device trusted <alias|ip>`. To let a
+  device send without your password, trust it when a transfer arrives (press `t`
+  and enter your verification code) and see it in `share2us lan trusted`.
+
 ### Added
 - **Send a file and a prompt to a coding-agent session on another machine.**
   With the daemon running as `share2us daemon run --agent-bridge`, a session on
