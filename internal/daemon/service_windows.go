@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode/utf16"
 )
 
 const taskName = "Share2Us-Daemon"
@@ -26,12 +27,32 @@ func windowsLogPath() string {
 // runs `<exe> daemon run [--dest <destDir>]` at the user's own privilege level,
 // with no time limit (it is long-running) and a single-instance policy. XML
 // avoids the notorious `schtasks /tr` quoting problems.
+// utf16LEWithBOM encodes the task definition the way schtasks demands.
+//
+// `schtasks /create /xml` does NOT read UTF-8: it wants UTF-16LE with a byte
+// order mark, and rejects anything else with the unhelpful
+//
+//	ERROR: The task XML is malformed.
+//	(1,40)::ERROR: unable to switch the encoding
+//
+// where 1,40 is the position of the encoding declaration. Verified on Windows 10
+// 19045 (2026-09-07): identical XML fails as UTF-8 and is accepted as UTF-16LE.
+func utf16LEWithBOM(s string) []byte {
+	codes := utf16.Encode([]rune(s))
+	out := make([]byte, 0, 2+len(codes)*2)
+	out = append(out, 0xFF, 0xFE) // BOM: little-endian
+	for _, c := range codes {
+		out = append(out, byte(c), byte(c>>8))
+	}
+	return out
+}
+
 func renderTaskXML(exePath, destDir string) string {
 	args := "daemon run"
 	if strings.TrimSpace(destDir) != "" {
 		args += ` --dest "` + xmlEscape(destDir) + `"`
 	}
-	return `<?xml version="1.0" encoding="UTF-8"?>
+	return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
     <Description>Share2Us background receiver (s2u daemon)</Description>
@@ -72,7 +93,7 @@ func ServiceSupported() bool { return true }
 // use the desktop app instead (ADR-035).
 func ServiceInstall(exePath, destDir string, out io.Writer) error {
 	xmlPath := filepath.Join(os.TempDir(), "share2us-daemon-task.xml")
-	if err := os.WriteFile(xmlPath, []byte(renderTaskXML(exePath, destDir)), 0o600); err != nil {
+	if err := os.WriteFile(xmlPath, utf16LEWithBOM(renderTaskXML(exePath, destDir)), 0o600); err != nil {
 		return err
 	}
 	defer os.Remove(xmlPath)
@@ -88,6 +109,13 @@ func ServiceInstall(exePath, destDir string, out io.Writer) error {
 }
 
 func ServiceUninstall(out io.Writer) error {
+	// Stop the running instance FIRST. Deleting the task alone leaves the daemon
+	// running until the user logs out, so "uninstall" would appear to succeed
+	// while the thing it uninstalled kept receiving files (seen on Windows 10
+	// 19045, 2026-09-07). Linux gets this right via `systemctl --user disable
+	// --now`; /end is the schtasks equivalent. Best-effort: it fails harmlessly
+	// when the task is not currently running.
+	_ = run("schtasks", "/end", "/tn", taskName)
 	if err := run("schtasks", "/delete", "/tn", taskName, "/f"); err != nil {
 		return err
 	}
