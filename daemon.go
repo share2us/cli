@@ -115,6 +115,7 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		return 4
 	}
 
+	logw := daemon.LogWriter(a.stderr)
 	deps := daemon.Deps{
 		ReceiveOnce: func(c context.Context, dir string) (int, error) {
 			return receiveInboxOnce(c, client, credential, dir, a.stdout)
@@ -122,7 +123,9 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		RefreshTrust: a.refreshTrustList,
 		CheckUpdate:  a.daemonUpdateCheck,
 		Cleanup:      func(c context.Context) error { return cleanupStaging(destDir) },
-		Logf:         func(format string, args ...any) { fmt.Fprintf(a.stderr, format+"\n", args...) },
+		Logf: func(format string, args ...any) {
+			fmt.Fprintf(logw, format+"\n", args...)
+		},
 	}
 
 	// Agent-session bridge (ADR-036): register this machine's coding-agent sessions

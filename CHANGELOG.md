@@ -15,6 +15,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Added
+- **The background service now runs on Windows.** `share2us daemon install`
+  registers a per-user scheduled task that starts at logon, so the inbox and LAN
+  receiver keep running with no terminal open — the same thing Linux and macOS
+  already had. `daemon status|start|stop|logs|uninstall` all work, and
+  `uninstall` now stops the running daemon rather than leaving it going until
+  you log out.
+
 ### Changed
 - The embedded MCP server (`s2u mcp serve`) is now GPLv3 too, so the whole
   shipped client is under one licence. Same code as before — the module was
