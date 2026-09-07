@@ -99,6 +99,7 @@ s2u rca.md --to alex@acme.dev --expires 7d   # recipient-restricted, expiring li
 s2u get s.share2.us/7Kf9aQ2m       # download a share to the current directory
 s2u ls                             # list your shares
 s2u revoke 7Kf9aQ2m                # kill a share
+s2u daemon install                 # optional: keep receiving in the background
 ```
 
 Prefer a shorter verb? `alias share=s2u`.
@@ -170,6 +171,13 @@ or using a personal API token? The transfer is accepted once and nothing is trus
 Transfers are secured with TLS 1.3 and a PAKE handshake; peers can be discovered
 by mDNS and saved as aliases/trusted peers.
 
+**Sending to a device you found by name.** Discovery is unauthenticated — any
+machine on the network can advertise a given name — so when you send to a
+discovered device *without* a password, the receiver shows a short **verify
+code** and you are asked to confirm you see the same one. Sending to an IP, to a
+pasted pairing string, or with a password identifies the receiver already and
+never prompts.
+
 **Convert on download**
 
 A text or office-document share can be converted as you fetch it — the server
@@ -185,6 +193,51 @@ The two flags cannot be combined. Conversion needs the plaintext, so it is not
 available for an end-to-end encrypted share (fetch it with its key instead), and
 it is rate limited server-side — if you hit the limit, wait rather than retrying
 in a loop.
+
+**Run it in the background** (optional, off by default)
+
+Without this, you only receive while something is open. The daemon keeps the
+inbox and the LAN receiver alive with no terminal and no app running, shows
+desktop notifications, and refreshes the trusted-device list on a schedule.
+
+```sh
+s2u daemon install                 # enable it for your user (systemd --user)
+s2u daemon status | stop | logs    # inspect it
+s2u daemon uninstall               # remove it
+s2u daemon run                     # run in the foreground instead, to watch it
+```
+
+It never trusts a device on its own and declines unknown senders, exactly as the
+CLI does. Linux and macOS today; Windows to follow. macOS support is new and has
+not yet been exercised on a Mac, so treat it as provisional.
+
+**Send work to a coding-agent session on another machine** (Pro/Max)
+
+Take a screenshot on one machine and hand it, with a prompt, to a Claude Code,
+Codex or Gemini session running on another — the agent acts on it there.
+
+```sh
+s2u daemon run --agent-bridge      # on the machine with the agent sessions
+s2u agent list                     # from anywhere: sessions you can reach
+s2u agent send --device <id> --session <id> --file shot.png \
+      --prompt "what is wrong here?"
+```
+
+The prompt and the file are end-to-end encrypted to the target device; the
+server never sees either. A device you have not sent to before is **not**
+trusted automatically — the first request waits for the target machine
+(`s2u agent pending`, then `s2u agent approve <id>` for that one request, or
+`s2u agent allow <device>` for standing access, which `s2u agent revoke`
+withdraws).
+
+Injected runs are guardrailed by default with no setup: pushing, deleting and
+outbound network are blocked, and a remote prompt can never edit your rules.
+Write a plain-text `.s2u.rules` to block more:
+
+```sh
+s2u setup                          # start a .s2u.rules for this project
+s2u agent rules                    # what is hard-enforced vs advisory, per tool
+```
 
 **Other**
 
