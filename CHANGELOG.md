@@ -15,6 +15,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Changed
+- **Share2Us is now free software under the GPLv3.** The CLI was MIT; it is now
+  [GPL-3.0-only](LICENSE). You may use, study, share and modify it, and if you
+  distribute it you must pass on those same freedoms with the source. Building
+  your own copy for your own use carries no obligation. Releases before this one
+  stay MIT — a licence already granted cannot be withdrawn.
+
 ### Security
 - **Sending to a device found on the network now asks you to confirm it.** Device
   discovery is unauthenticated — any machine on the same network can advertise
