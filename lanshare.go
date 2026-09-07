@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 package main
 
 import (
@@ -88,7 +91,6 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 		fmt.Fprintln(a.stderr, "WARNING: --no-password means any device that can reach this port may send you a file. Prefer a password or --allow-ip.")
 	}
 
-	trustedIPs := loadLocalConfig().TrustedIPs()
 	printed := false
 	var mdnsCloser io.Closer
 	defer func() {
@@ -108,14 +110,14 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 	// a peer once is what makes later transfers from it land without a prompt.
 	openMode := opts.noPassword && opts.password == "" && len(opts.allowIPs) == 0
 	ropts := lanshare.ReceiveOptions{
-		Bind:       opts.bind,
-		Port:       opts.port,
-		Password:   opts.password,
-		NoPassword: opts.noPassword,
-		AllowIPs:   opts.allowIPs,
-		TrustedIPs: trustedIPs,
-		DestDir:    opts.path,
-		Overwrite:  opts.overwrite,
+		Bind:            opts.bind,
+		Port:            opts.port,
+		Password:        opts.password,
+		NoPassword:      opts.noPassword,
+		AllowIPs:        opts.allowIPs,
+		IsTrustedSender: trustedSender,
+		DestDir:         opts.path,
+		Overwrite:       opts.overwrite,
 		OnListen: func(info lanshare.ListenInfo) {
 			printed = true
 			a.printReceiveBanner(info, opts)
@@ -180,6 +182,58 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 // session's channel binding. Trusting stores that key, so trust cannot be
 // spoofed by taking an address, which is the weakness of the older TrustedIPs
 // mechanism this sits alongside.
+// trustedSender reports whether a VERIFIED sender key belongs to a device this
+// machine has trusted through the server-signed list (ADR-034). It is what lets a
+// known device send without this receiver's password.
+//
+// It is deliberately keyed on the proven Ed25519 identity, never on the peer
+// address: the old TrustedIPs mechanism granted the same bypass to whoever
+// currently answered on a trusted IP, so anyone able to take that address on the
+// LAN downgraded this receiver from a PAKE to no authentication (todo W-M5).
+func trustedSender(senderKey []byte) bool {
+	if len(senderKey) == 0 {
+		return false // anonymous senders are never trusted
+	}
+	_, ok := lanid.Lookup(lanshare.IdentityFingerprint(senderKey))
+	return ok
+}
+
+// confirmDiscoveredPeer asks the user to compare the receiver's short verify code
+// with the one printed on the receiver's own screen, before trusting a
+// fingerprint that arrived over unauthenticated mDNS.
+//
+// It fails CLOSED: with no terminal to ask (a script, a pipe), it refuses rather
+// than sending, and points at the two ways to name the receiver that are not
+// attacker-choosable. --yes deliberately does not answer this: --yes means "do
+// not ask me about the transfer", not "trust whoever answered to that name".
+func (a app) confirmDiscoveredPeer(dest, fingerprint string) bool {
+	return a.confirmDiscoveredPeerWith(dest, fingerprint, isTerminalReader(a.input()))
+}
+
+// confirmDiscoveredPeerWith is confirmDiscoveredPeer with the terminal check
+// injected, so both branches are testable without a pty.
+func (a app) confirmDiscoveredPeerWith(dest, fingerprint string, interactive bool) bool {
+	code := lanshare.VerifyCode(fingerprint)
+	if code == "" {
+		fmt.Fprintln(a.stderr, "the discovered device advertised no fingerprint to verify; use a pairing string or --dest=<ip> --pin=<fingerprint>")
+		return false
+	}
+	if !interactive {
+		fmt.Fprintf(a.stderr, "refusing to send to a device found over the network without confirming it (verify code %s).\n", code)
+		fmt.Fprintln(a.stderr, "Anyone on this network can advertise that name. Re-run where you can answer the prompt, or")
+		fmt.Fprintln(a.stderr, "name the receiver in a way that cannot be impersonated: paste its pairing string, or use")
+		fmt.Fprintln(a.stderr, "--dest=<ip> --pin=<fingerprint>. A --password also removes the need to confirm.")
+		return false
+	}
+	fmt.Fprintf(a.stderr, "Found a device at %s. It should be showing the verify code:\n\n    %s\n\n", dest, code)
+	fmt.Fprint(a.stderr, "Does the receiver show exactly that code? [y/N] ")
+	if !a.readYesNo() {
+		fmt.Fprintln(a.stderr, "Not sent. If the codes differ, another device on this network answered to that name.")
+		return false
+	}
+	return true
+}
+
 func (a app) approveInbound(yes bool) func(lanshare.RequestInfo) bool {
 	return func(r lanshare.RequestInfo) bool {
 		what := fmt.Sprintf("%s (%s)", r.Name, humanBytes(max64(r.Size, 0)))
@@ -340,6 +394,13 @@ func (a app) printReceiveBanner(info lanshare.ListenInfo, opts lanReceiveOpts) {
 		fmt.Fprintf(a.stderr, "Only accepting from: %s\n", strings.Join(opts.allowIPs, ", "))
 	}
 	fmt.Fprintf(a.stderr, "On the sender:  %s\n", sender)
+	// The sender computes this same code from the certificate it is about to pin.
+	// mDNS is unauthenticated — anyone on the network can advertise this device's
+	// name with THEIR fingerprint — so reading these two codes aloud is what
+	// distinguishes this receiver from an impersonator (todo W-M4).
+	if code := lanshare.VerifyCode(info.Fingerprint); code != "" {
+		fmt.Fprintf(a.stderr, "Verify code:    %s   (the sender is asked to confirm this)\n", code)
+	}
 
 	// A pairing string bundles address + fingerprint (+ passphrase); one paste on
 	// the sender's --dest is all that's needed and it pins the receiver identity.
@@ -478,6 +539,11 @@ func (a app) lanSend(ctx context.Context, args []string) int {
 		fmt.Fprintln(a.stderr, "send needs --dest=<ip|alias|pairing-string>")
 		return 2
 	}
+	// Whether the pinned fingerprint came from mDNS (attacker-choosable) rather
+	// than a pairing string, an alias, or an explicit --pin. Only that case needs
+	// out-of-band confirmation.
+	pinFromDiscovery := false
+
 	// A bare name resolves via a saved alias first, then LAN mDNS discovery.
 	if !lanshare.IsPairingString(opts.dest) && !looksLikeAddr(opts.dest) {
 		if addr, ok := loadLocalConfig().ResolveDeviceAlias(opts.dest); ok {
@@ -492,6 +558,7 @@ func (a app) lanSend(ctx context.Context, args []string) int {
 			opts.dest = pi.Addr()
 			if opts.pin == "" {
 				opts.pin = pi.Fingerprint
+				pinFromDiscovery = true
 			}
 		}
 	}
@@ -518,6 +585,18 @@ func (a app) lanSend(ctx context.Context, args []string) int {
 			return 1
 		}
 		opts.password = pw
+	}
+
+	// mDNS is unauthenticated: any device on the network can advertise the name we
+	// just looked up, carrying ITS certificate fingerprint, and we would pin the
+	// impersonator and hand it the file. A password closes this on its own (the
+	// PAKE is bound to the TLS channel, so a wrong peer cannot complete it), so
+	// the confirmation is only needed for a password-less send to a DISCOVERED
+	// address (todo W-M4).
+	if pinFromDiscovery && opts.password == "" {
+		if !a.confirmDiscoveredPeer(opts.dest, opts.pin) {
+			return 1
+		}
 	}
 
 	info, statErr := os.Stat(opts.path)
@@ -1042,17 +1121,17 @@ func (a app) configSetDevice(args []string) int {
 		fmt.Fprintf(a.stdout, "device alias %q -> %s\n", args[2], args[3])
 		return 0
 	case "trusted":
-		if len(args) != 3 {
-			fmt.Fprintf(a.stderr, "usage: %s config set device trusted <alias|ip>\n", commandName)
-			return 2
-		}
-		cfg.SetTrustedPeer(args[2])
-		if err := clicore.SaveConfig(cfg); err != nil {
-			return a.fail("save config", err)
-		}
-		fmt.Fprintf(a.stdout, "device %q trusted: inbound transfers from it are auto-accepted without a password.\n", args[2])
-		fmt.Fprintln(a.stderr, "WARNING: trust is by IP and can be spoofed on an untrusted network. Untrust it with: "+commandName+" config delete device trusted "+args[2])
-		return 0
+		// Retired (todo W-M5): this granted a password bypass on the strength of an
+		// IP address, which anyone on the same LAN can take. Trust is now keyed on a
+		// device's verified identity key and is granted through the MFA-gated flow.
+		// Refuse rather than accept a setting that no longer does anything, so no one
+		// believes they have configured trust that is not there.
+		fmt.Fprintf(a.stderr, "`%s config set device trusted` has been removed: it trusted a device by IP address,\n", commandName)
+		fmt.Fprintf(a.stderr, "which anyone on the same network can take. Trust a device by its verified identity instead:\n")
+		fmt.Fprintf(a.stderr, "  %s lan trusted            list trusted devices\n", commandName)
+		fmt.Fprintf(a.stderr, "  accept a transfer with `t` to trust the sending device (asks for your verification code)\n")
+		fmt.Fprintf(a.stderr, "Existing entries no longer grant anything; remove them with: %s config delete device trusted <alias|ip>\n", commandName)
+		return 2
 	default:
 		fmt.Fprintf(a.stderr, "unknown: config set device %s (want alias|trusted)\n", args[1])
 		return 2

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 package daemon
 
 import (
@@ -28,16 +31,20 @@ const (
 
 // Options configures a daemon run. Zero values fall back to sensible defaults.
 type Options struct {
-	DestDir         string        // where received files land ("" = lanshare/receiveInboxOnce default)
-	LANDiscoverable bool          // run the background LAN receiver
-	RunInbox        bool          // run the account-inbox poll (false under a PAT)
-	Notify          bool          // post desktop notifications
-	Instance        string        // mDNS advertised name ("" = hostname)
-	Bind            string        // LAN bind address ("" = all interfaces)
-	Port            int           // LAN port (0 = auto)
-	TrustedIPs      []string      // IPs auto-accepted for LAN (trust-by-IP)
+	DestDir         string // where received files land ("" = lanshare/receiveInboxOnce default)
+	LANDiscoverable bool   // run the background LAN receiver
+	RunInbox        bool   // run the account-inbox poll (false under a PAT)
+	Notify          bool   // post desktop notifications
+	Instance        string // mDNS advertised name ("" = hostname)
+	Bind            string // LAN bind address ("" = all interfaces)
+	Port            int    // LAN port (0 = auto)
+	// IsTrustedSender reports whether a verified LAN sender key is a trusted
+	// device (ADR-034). Replaces the old trust-by-IP, which a LAN attacker could
+	// claim by taking the address (todo W-M5).
+	IsTrustedSender func(senderKey []byte) bool
 	InboxInterval   time.Duration // inbox poll cadence (0 = default 5s)
 	ApprovalPolicy  string        // LAN approval policy (clicore.ApprovalPolicy*)
+	AgentBridge     bool          // ADR-036: register sessions + receive inject requests
 }
 
 // Deps are the behaviours the daemon composes, injected from package main so this
@@ -52,6 +59,16 @@ type Deps struct {
 	CheckUpdate func(ctx context.Context) (available bool, message string)
 	// Cleanup removes stale temp/staging files (best-effort).
 	Cleanup func(ctx context.Context) error
+	// AgentClient + AgentRunner drive the agent-session bridge (ADR-036); nil when
+	// the bridge is off.
+	AgentClient  AgentClient
+	AgentRunners []AgentRunner
+	// Unseal opens a prompt/envelope sealed to this device (ADR-036 E2E); nil = plaintext.
+	Unseal func(sealed string) (string, error)
+	// DownloadContent fetches an injected file's ciphertext by request id; nil = no files.
+	DownloadContent func(ctx context.Context, id string) ([]byte, error)
+	// OpenContentKey opens a sealed file content key with this device's key.
+	OpenContentKey func(sealed string) ([]byte, error)
 	// Logf writes an operational log line (to stderr/journal).
 	Logf func(format string, args ...any)
 }
@@ -122,6 +139,10 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 	}
 	wg.Add(1)
 	go func() { defer wg.Done(); rt.scheduler(ctx, opts, deps) }()
+	if opts.AgentBridge && deps.AgentClient != nil && len(deps.AgentRunners) > 0 {
+		wg.Add(1)
+		go func() { defer wg.Done(); rt.agentBridge(ctx, deps.AgentClient, deps.AgentRunners, deps) }()
+	}
 
 	<-ctx.Done()
 	deps.logf("share2us daemon stopping")
@@ -190,13 +211,13 @@ func (rt *Runtime) lanLoop(ctx context.Context, opts Options, deps Deps) {
 	}
 	var mdns io.Closer
 	ropts := lanshare.ReceiveOptions{
-		Bind:       opts.Bind,
-		Port:       opts.Port,
-		NoPassword: true,
-		TrustedIPs: opts.TrustedIPs,
-		DestDir:    opts.DestDir,
-		Loop:       true,
-		OnRequest:  rt.approve(opts.ApprovalPolicy, deps),
+		Bind:            opts.Bind,
+		Port:            opts.Port,
+		NoPassword:      true,
+		IsTrustedSender: opts.IsTrustedSender,
+		DestDir:         opts.DestDir,
+		Loop:            true,
+		OnRequest:       rt.approve(opts.ApprovalPolicy, deps),
 		OnListen: func(info lanshare.ListenInfo) {
 			if c, err := lanshare.Advertise(instance, info); err == nil {
 				mdns = c

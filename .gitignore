@@ -7,3 +7,6 @@ coverage.*
 
 # winget manifests are generated at release time from generate.sh
 packaging/winget/manifests/
+
+# Copied in at publish time by the release workflow (single source of truth: ./LICENSE)
+npm/LICENSE

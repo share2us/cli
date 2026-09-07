@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 package daemon
 
 // Notifier delivers native desktop notifications. The daemon runs with no

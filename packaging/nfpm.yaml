@@ -19,8 +19,12 @@ description: |
   other devices, or directly over the local network.
 vendor: Share2Us
 homepage: https://share2.us
-license: MIT
+license: GPL-3.0-only
 contents:
+  # GPL-3.0-only obliges us to ship the licence text alongside the binary, not
+  # merely link to it. Debian's own convention is /usr/share/doc/<pkg>/copyright.
+  - src: ./LICENSE
+    dst: /usr/share/doc/s2u/copyright
   - src: ./dist/deb/share2us
     dst: /usr/bin/share2us
     file_info:

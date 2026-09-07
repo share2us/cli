@@ -1,6 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright (C) 2026 Hassan Khurram
+
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -57,7 +61,7 @@ func (a app) daemon(ctx context.Context, args []string) int {
 
 func (a app) daemonUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s daemon <run|status|start|stop|install|uninstall|logs>\n", commandName)
-	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify]   run the background receiver (foreground)\n")
+	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify] [--agent-bridge [--agent-strict]]  run the receiver\n")
 	fmt.Fprintf(a.stderr, "  install [--dest DIR]                         install + start the per-user service\n")
 	fmt.Fprintf(a.stderr, "  status | stop | start | logs [-f] | uninstall\n")
 	return 2
@@ -85,7 +89,7 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		LANDiscoverable: settings.LANDiscoverable && !opts.noLAN,
 		Notify:          settings.Notify && !opts.noNotify,
 		ApprovalPolicy:  settings.ApprovalPolicy,
-		TrustedIPs:      loadLocalConfig().TrustedIPs(),
+		IsTrustedSender: trustedSender,
 	}
 
 	// The daemon runs LAN receive with no account — the LAN listener needs no
@@ -122,6 +126,44 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(logw, format+"\n", args...)
 		},
+	}
+
+	// Agent-session bridge (ADR-036): register this machine's coding-agent sessions
+	// and receive relayed inject requests. Needs the authenticated device client.
+	if opts.agentBridge {
+		if client != nil {
+			runOpts.AgentBridge = true
+			deps.AgentClient = client
+			deps.AgentRunners = []daemon.AgentRunner{
+				daemon.ClaudeRunner{Strict: opts.agentStrict},
+				daemon.CodexRunner{Strict: opts.agentStrict},
+				daemon.GeminiRunner{Strict: opts.agentStrict},
+			}
+			// E2E: unseal injected prompts with this device's key (ADR-036 P4).
+			if credential.DevicePublicKey != "" && credential.DevicePrivateKey != "" {
+				pub, priv := credential.DevicePublicKey, credential.DevicePrivateKey
+				deps.Unseal = func(sealed string) (string, error) {
+					b, err := clicore.OpenSealedForDevice(sealed, pub, priv)
+					if err != nil {
+						return "", err
+					}
+					return string(b), nil
+				}
+				deps.OpenContentKey = func(sealed string) ([]byte, error) {
+					return clicore.OpenSealedContentKey(sealed, pub, priv)
+				}
+				cl := client
+				deps.DownloadContent = func(c context.Context, id string) ([]byte, error) {
+					var buf bytes.Buffer
+					if err := cl.AgentDownloadContent(c, id, &buf); err != nil {
+						return nil, err
+					}
+					return buf.Bytes(), nil
+				}
+			}
+		} else {
+			fmt.Fprintln(a.stderr, "note: --agent-bridge needs an interactive login; the agent bridge is off")
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -223,9 +265,11 @@ func (a app) daemonUpdateCheck(ctx context.Context) (bool, string) {
 }
 
 type daemonRunOpts struct {
-	dest     string
-	noLAN    bool
-	noNotify bool
+	dest        string
+	noLAN       bool
+	noNotify    bool
+	agentBridge bool
+	agentStrict bool
 }
 
 func parseDaemonRunArgs(args []string) (daemonRunOpts, error) {
@@ -245,6 +289,10 @@ func parseDaemonRunArgs(args []string) (daemonRunOpts, error) {
 			o.noLAN = true
 		case arg == "--no-notify":
 			o.noNotify = true
+		case arg == "--agent-bridge":
+			o.agentBridge = true
+		case arg == "--agent-strict":
+			o.agentStrict = true
 		case arg == "--foreground":
 			// accepted and ignored: `run` is always foreground; the service
 			// manager backgrounds it.

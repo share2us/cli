@@ -144,8 +144,19 @@ jobs:
           # build from <sha>" line. Falls back to the sha only for a beta.
           NOTES_FILE=notes.md
           unreleased() { awk '/^## \[Unreleased\]/{f=1;next} /^## /{f=0} f' CHANGELOG.md | sed '/<!--/,/-->/d'; }
-          if [ -f CHANGELOG.md ] && unreleased | grep -q '[^[:space:]]'; then
-            unreleased > "$NOTES_FILE"
+          # Capture ONCE, then test the captured text. The previous form piped
+          # into `grep -q`, which exits on its first match and closes the pipe;
+          # sed then dies of SIGPIPE ("couldn't flush stdout: Broken pipe") and
+          # under `set -o pipefail` that made the condition false, so a
+          # PERFECTLY GOOD changelog was reported empty and the release aborted.
+          # It is a race on how fast sed drains, so it failed intermittently —
+          # it blocked release 20260907101315 while the identical changelog had
+          # released fine ten minutes earlier. `tr` reads all of its input, so
+          # there is no early close and nothing to race.
+          NOTES=""
+          if [ -f CHANGELOG.md ]; then NOTES="$(unreleased)"; fi
+          if [ -n "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
+            printf '%s\n' "$NOTES" > "$NOTES_FILE"
           else
             if [ "${{ inputs.channel || 'stable' }}" = stable ]; then
               echo "::error::CHANGELOG.md [Unreleased] is empty - a stable release needs release notes."
@@ -243,6 +254,10 @@ jobs:
           NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          # GPL-3.0-only: the licence text must travel with the package, and npm
+          # packs this directory alone. Copied at publish time so the repo keeps
+          # ONE copy of the licence rather than a duplicate that can drift.
+          cp ../LICENSE ./LICENSE
           npm pkg set "share2usCliVersion=v${VERSION}"
           npm version "0.1.${GITHUB_RUN_NUMBER}" --no-git-tag-version --allow-same-version
           # npm is a SECOND user-facing channel: publishing without a dist-tag

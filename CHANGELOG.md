@@ -15,18 +15,78 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Changed
+- The embedded MCP server (`s2u mcp serve`) is now GPLv3 too, so the whole
+  shipped client is under one licence. Same code as before — the module was
+  relicensed, not changed.
+- **Share2Us is now free software under the GPLv3.** The CLI was MIT; it is now
+  [GPL-3.0-only](LICENSE). You may use, study, share and modify it, and if you
+  distribute it you must pass on those same freedoms with the source. Building
+  your own copy for your own use carries no obligation. Releases before this one
+  stay MIT — a licence already granted cannot be withdrawn.
+
+### Security
+- **Sending to a device found on the network now asks you to confirm it.** Device
+  discovery is unauthenticated — any machine on the same network can advertise
+  another device's name — so `s2u <file> --dest=<name>` could hand your file to
+  whoever answered to that name. The receiver now prints a short **verify code**,
+  and a password-less send to a discovered device asks you to confirm the same
+  code before anything is sent. If there is no terminal to ask on, it refuses
+  rather than guessing.
+
+  Unaffected: sending to an IP, to a pasted pairing string, or with a password —
+  those already identify the receiver, and none of them prompt.
+
+- **Trusting a nearby device no longer depends on its IP address.** A receiver
+  that had set a password would still accept a transfer with *no* password from
+  any device at a "trusted" IP — and an IP is something another machine on the
+  same network can take. Trust is now keyed on the device's verified identity,
+  the same MFA-gated trust used everywhere else, so taking an address gets you
+  nothing.
+
+  `share2us config set device trusted <alias|ip>` has been **removed** as a
+  result; it can no longer grant anything. Existing entries are inert and can be
+  cleared with `share2us config delete device trusted <alias|ip>`. To let a
+  device send without your password, trust it when a transfer arrives (press `t`
+  and enter your verification code) and see it in `share2us lan trusted`.
+
 ### Added
+- **Send a file and a prompt to a coding-agent session on another machine.**
+  With the daemon running as `share2us daemon run --agent-bridge`, a session on
+  this machine can be listed from your other devices (`share2us agent list`) and
+  sent work: `share2us agent send --device <id> --session <id> --file shot.png
+  --prompt "what is wrong here?"`. Claude Code, Codex and Gemini are supported.
+  The prompt and the file are end-to-end encrypted to the target device — the
+  server never sees either.
+
+  A device you have not sent to before is **not** trusted automatically: the
+  first request waits for the target machine to approve it
+  (`share2us agent pending`, then `share2us agent approve <id>` for that one
+  request, or `share2us agent allow <device>` for standing access, which
+  `share2us agent revoke <device>` withdraws and `share2us agent allowed` lists).
+
+  Injected runs are **guardrailed by default, with no setup**: pushing,
+  deleting, and outbound network are blocked, and a remote prompt can never edit
+  your rules or your Claude settings. Write a plain-text `.s2u.rules` (start one
+  with `share2us setup`) to block more, or opt out per item with a line like
+  `allow network`. `share2us agent rules` shows which of your rules are hard
+  enforced and which are advisory, and how each tool enforces them.
+
+  Requires a Pro or Max plan, and is off unless you pass `--agent-bridge`.
+
 - `share2us daemon` can now run **LAN receive without an account**: start it
   while logged out to receive account-free LAN transfers (unknown senders are
   still declined). Log in to also receive account device shares.
 
-### Added
 - Background service: `share2us daemon install` runs an optional, off-by-default
   per-user service that keeps receiving device and LAN shares (with desktop
   notifications) while no terminal or app is open, and refreshes the trusted-
   device list and checks for updates on a schedule. `share2us daemon
   run|status|stop|logs|uninstall` manage it. Linux (systemd --user) in this
-  release; macOS and Windows to follow. Honors the same device-trust rules as
+  release, plus **macOS** (launchd LaunchAgent) — note that macOS support has
+  not yet been exercised on a real Mac, so treat `daemon install` there as
+  provisional and report anything that misbehaves. Windows to follow. Honors the
+  same device-trust rules as
   the CLI: it never trusts a new device on its own, and unknown senders are
   declined.
 
