@@ -1,17 +1,17 @@
 Package: s2u
-Version: 20260907095048
+Version: 20260907100328
 Architecture: arm64
 Maintainer: Share2Us <support@share2.us>
-Installed-Size: 16960
-Filename: pool/stable/main/s/s2u/s2u_20260907095048_arm64.deb
-Size: 6784104
-MD5sum: 2d424cf0abbb72a4f893d206ae9a510f
-SHA1: 48ba8be086fb839557143dd5b975fb803bdd78f2
-SHA256: 2b40a4b8e76a6466e2c6167d520cc23c7299923d737139f420d71be65cec48f1
+Installed-Size: 16994
+Filename: pool/stable/main/s/s2u/s2u_20260907100328_arm64.deb
+Size: 6797062
+MD5sum: 2ba722a02f8057929b1c5cd5371d515a
+SHA1: a94f5c90415625dfff76bedd9a0ca441154d527d
+SHA256: bca5010ba3339c4c1a69c6f8ec08939d85a35ce445b38ec97b34bb59b14309ed
 Section: utils
 Priority: optional
 Homepage: https://share2.us
 Description: Share2Us command line (s2u): share files and folders by link, to your
  other devices, or directly over the local network.
-License: MIT
+License: GPL-3.0-only
 
