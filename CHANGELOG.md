@@ -48,7 +48,10 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   notifications) while no terminal or app is open, and refreshes the trusted-
   device list and checks for updates on a schedule. `share2us daemon
   run|status|stop|logs|uninstall` manage it. Linux (systemd --user) in this
-  release; macOS and Windows to follow. Honors the same device-trust rules as
+  release, plus **macOS** (launchd LaunchAgent) — note that macOS support has
+  not yet been exercised on a real Mac, so treat `daemon install` there as
+  provisional and report anything that misbehaves. Windows to follow. Honors the
+  same device-trust rules as
   the CLI: it never trusts a new device on its own, and unknown senders are
   declined.
 
