@@ -44,6 +44,13 @@ import (
 
 const commandName = "share2us"
 
+// Where this program came from. Printed by `version`; the clients are
+// GPL-3.0-only, so the source location is not decoration.
+const (
+	projectHomeURL   = "https://share2.us"
+	projectSourceURL = "https://github.com/share2us"
+)
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -162,7 +169,12 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 		fmt.Fprint(a.stdout, clicore.Usage(commandName))
 		return 0
 	case "version", "-v", "--version":
+		// Also say where this came from. Share2Us is GPL-3.0-only, and a copyleft
+		// binary that never tells anyone where its source lives is a poor showing —
+		// `--version` is where people look for it.
 		fmt.Fprintf(a.stdout, "%s %s\n", commandName, clicore.FullVersion())
+		fmt.Fprintf(a.stdout, "home:    %s\n", projectHomeURL)
+		fmt.Fprintf(a.stdout, "source:  %s (GPL-3.0-only)\n", projectSourceURL)
 		return 0
 	case "login":
 		return a.login(ctx, args[1:])

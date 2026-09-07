@@ -2817,3 +2817,24 @@ func TestManagedInstallDetectsWinget(t *testing.T) {
 		t.Fatal("an exe outside WinGet\\Packages must not be winget-managed")
 	}
 }
+
+// The clients are GPL-3.0-only, so `version` is where someone looks for the
+// source. It used to print the build string and nothing else.
+func TestVersionPrintsHomeAndSource(t *testing.T) {
+	var out bytes.Buffer
+	code := app{stdout: &out, stderr: io.Discard}.runCommand(context.Background(), []string{"version"})
+	if code != 0 {
+		t.Fatalf("exit %d", code)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"share2us " + clicore.FullVersion(),
+		"https://share2.us",
+		"https://github.com/share2us",
+		"GPL-3.0-only",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("version output is missing %q:\n%s", want, got)
+		}
+	}
+}
