@@ -100,5 +100,10 @@ func (a app) agentRules(args []string) int {
 	for _, adv := range policy.Advisory {
 		fmt.Fprintf(a.stdout, "  - %s\n", adv)
 	}
+	fmt.Fprintln(a.stdout, "\nHow each tool enforces the HARD rules:")
+	fmt.Fprintln(a.stdout, "  claude  permission denies    — the rule itself is enforced")
+	fmt.Fprintln(a.stdout, "  gemini  policy-engine denies — the rule itself is enforced")
+	fmt.Fprintln(a.stdout, "  codex   sandbox             — blocks writes outside the workspace and all")
+	fmt.Fprintln(a.stdout, "                                network; individual rules are prompt-level only")
 	return 0
 }

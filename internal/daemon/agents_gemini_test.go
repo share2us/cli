@@ -35,7 +35,7 @@ func TestGeminiIndexForUUID(t *testing.T) {
 }
 
 func TestBuildGeminiInjectArgs(t *testing.T) {
-	args := buildGeminiInjectArgs("3", "do the task", geminiApproval(false))
+	args := buildGeminiInjectArgs("3", "do the task", geminiApproval(false), "/tmp/pol")
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-p do the task") || !strings.Contains(joined, "-r 3") {
 		t.Fatalf("args missing headless prompt/resume: %v", args)
@@ -45,5 +45,39 @@ func TestBuildGeminiInjectArgs(t *testing.T) {
 	}
 	if strings.Contains(joined, "yolo") || strings.Contains(joined, "-y") {
 		t.Fatalf("must never use yolo: %v", args)
+	}
+	// The approval mode is not the gate; the admin-tier policy file is.
+	if !strings.Contains(joined, "--admin-policy /tmp/pol") {
+		t.Fatalf("guardrails must be passed as an admin policy: %v", args)
+	}
+}
+
+func TestGeminiPolicyTOMLCompilesDenies(t *testing.T) {
+	toml := geminiPolicyTOML(CompileRules(nil)) // baseline only
+	if !strings.Contains(toml, `commandPrefix = 'git push'`) {
+		t.Errorf("baseline push deny must compile to a shell rule:\n%s", toml)
+	}
+	if !strings.Contains(toml, `commandPrefix = 'curl'`) {
+		t.Errorf("baseline network deny must compile:\n%s", toml)
+	}
+	if !strings.Contains(toml, `toolName = ["write_file", "replace"]`) {
+		t.Errorf("self-protection must compile to a write-tool rule:\n%s", toml)
+	}
+	if !strings.Contains(toml, `argsPattern = '\.s2u\.rules'`) {
+		t.Errorf("self-protection must match the rules file:\n%s", toml)
+	}
+	if strings.Count(toml, `decision = "deny"`) < 4 {
+		t.Errorf("every compiled rule must deny:\n%s", toml)
+	}
+	// A permissive rule would defeat the point.
+	if strings.Contains(toml, `"allow"`) || strings.Contains(toml, "yolo") {
+		t.Errorf("policy must never allow:\n%s", toml)
+	}
+}
+
+func TestGlobToArgsPatternEscapes(t *testing.T) {
+	got := globToArgsPattern("**/.s2u.rules")
+	if got != `\.s2u\.rules` {
+		t.Fatalf("glob tail must be regex-escaped, got %q", got)
 	}
 }

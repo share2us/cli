@@ -17,9 +17,14 @@ import (
 // Discovery runs `gemini --list-sessions` in each project from ~/.gemini/
 // projects.json. Resume is by INDEX, so injection re-lists to map UUID -> index.
 //
-// NOTE: the injection path is not yet verified against a live Gemini session
-// (resume-by-index + approval-mode behaviour need a real run); it is marked held,
-// like the Codex inject path.
+// Guardrails are enforced through Gemini's POLICY ENGINE (admin tier, per-run
+// TOML), not --approval-mode: a `deny` rule removes the tool from the model's
+// list outright, whereas the approval mode only decides what is auto-approved.
+//
+// NOTE: the model round-trip is still unverified against a live session (this dev
+// host has no valid Gemini credential). Flag acceptance, session resolution and
+// resume-by-index are verified; whether a deny actually blocks a determined
+// prompt is NOT — see ADR-036.
 
 // geminiSessionLine parses "  N. <title> (<age>) [<uuid>]".
 var geminiSessionLine = regexp.MustCompile(`^\s*(\d+)\.\s+(.+?)\s+\(([^)]+)\)\s+\[([0-9a-fA-F-]{36})\]\s*$`)
@@ -94,11 +99,23 @@ func RunGeminiInject(ctx context.Context, sessionID, cwd, prompt string, strict 
 	if cwd == "" {
 		return "", fmt.Errorf("gemini inject needs the session's project directory")
 	}
-	// Gemini's hard gate is --approval-mode; .s2u.rules has no deny layer to compile
-	// into here, so the rules ride in the prompt (best-effort). Same as Codex.
-	if preamble := CompileRules(LoadRules(cwd)).PromptPreamble(); preamble != "" {
+	// Guardrails: the compiled rules become admin-tier policy-engine denies (the
+	// hard gate), and also ride in the prompt for the advisory ones that cannot be
+	// compiled. --approval-mode is NOT the gate; it only decides auto-approval.
+	policy := CompileRules(LoadRules(cwd))
+	if preamble := policy.PromptPreamble(); preamble != "" {
 		prompt = preamble + "\n" + prompt
 	}
+	// Fail closed: with a system policy present, Gemini ignores supplemental
+	// --admin-policy paths, so our denies would silently not apply.
+	if geminiSystemPolicyPresent() {
+		return "", fmt.Errorf("refusing to inject: %s holds system policies, so Share2Us guardrails would be ignored (add the rules there instead)", geminiAdminPolicyDir)
+	}
+	policyDir, cleanupPolicy, err := writeGeminiPolicy(policy)
+	if err != nil {
+		return "", fmt.Errorf("write gemini policy: %w", err)
+	}
+	defer cleanupPolicy()
 	listing, err := geminiListSessions(ctx, cwd)
 	if err != nil {
 		return "", fmt.Errorf("list gemini sessions: %w", err)
@@ -109,15 +126,20 @@ func RunGeminiInject(ctx context.Context, sessionID, cwd, prompt string, strict 
 	}
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "gemini", buildGeminiInjectArgs(idx, prompt, geminiApproval(strict))...)
+	cmd := exec.CommandContext(cctx, "gemini", buildGeminiInjectArgs(idx, prompt, geminiApproval(strict), policyDir)...)
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-func buildGeminiInjectArgs(index, prompt, approval string) []string {
-	// -p headless, -r <index> resume, restricted approval (never -y/yolo).
-	return []string{"-p", prompt, "-r", index, "--approval-mode", approval}
+func buildGeminiInjectArgs(index, prompt, approval, policyDir string) []string {
+	// -p headless, -r <index> resume, restricted approval (never -y/yolo), and the
+	// admin-tier policy file that carries the actual denies.
+	args := []string{"-p", prompt, "-r", index, "--approval-mode", approval}
+	if policyDir != "" {
+		args = append(args, "--admin-policy", policyDir)
+	}
+	return args
 }
 
 // geminiApproval picks the approval mode: "plan" (read-only) under --agent-strict,
