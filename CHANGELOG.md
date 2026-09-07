@@ -16,6 +16,9 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      ship while this section is empty (HTML comments do not count). -->
 
 ### Changed
+- The embedded MCP server (`s2u mcp serve`) is now GPLv3 too, so the whole
+  shipped client is under one licence. Same code as before — the module was
+  relicensed, not changed.
 - **Share2Us is now free software under the GPLv3.** The CLI was MIT; it is now
   [GPL-3.0-only](LICENSE). You may use, study, share and modify it, and if you
   distribute it you must pass on those same freedoms with the source. Building
