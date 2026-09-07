@@ -34,6 +34,7 @@ type discoverOpts struct {
 	path     string // download destination dir
 	trust    bool   // auto-trust the source after a download
 	interval time.Duration
+	sweep    bool // --scan: also probe every address on the local subnet
 }
 
 func parseDiscoverArgs(args []string) (discoverOpts, error) {
@@ -55,6 +56,12 @@ func parseDiscoverArgs(args []string) (discoverOpts, error) {
 			o.plain = true
 		case arg == "--json":
 			o.json = true
+		case arg == "--scan":
+			// Sweep the local subnet as well as listening for announcements. Off by
+			// default: it touches every address on the segment, which is ordinary
+			// TLS traffic but still traffic some networks would rather not see, and
+			// mDNS already covers the common case.
+			o.sweep = true
 		case arg == "--trust":
 			o.trust = true
 		case arg == "--timeout":
@@ -115,7 +122,7 @@ func (a app) discover(ctx context.Context, args []string) int {
 
 	// Non-interactive download by name: one scan, then pull the matching offer.
 	if opts.download != "" {
-		peers, err := scanPeers(ctx, opts.timeout)
+		peers, err := scanPeersOpt(ctx, opts.timeout, opts.sweep)
 		if err != nil {
 			return a.fail("scan", err)
 		}
@@ -130,7 +137,7 @@ func (a app) discover(ctx context.Context, args []string) int {
 	// Plain/JSON or no TTY -> one-shot scan + print (no interactive UI).
 	if opts.plain || opts.json || a.stdoutIsTTY == nil || !a.stdoutIsTTY(a.stdout) {
 		fmt.Fprintf(a.stderr, "Scanning the local network for %s...\n", opts.timeout)
-		peers, err := scanPeers(ctx, opts.timeout)
+		peers, err := scanPeersOpt(ctx, opts.timeout, opts.sweep)
 		if err != nil {
 			return a.fail("scan", err)
 		}
@@ -149,10 +156,43 @@ func (a app) discover(ctx context.Context, args []string) int {
 }
 
 // scanPeers browses the LAN and returns discovered peers, offers first, sorted.
-func scanPeers(ctx context.Context, timeout time.Duration) ([]lanshare.Peer, error) {
+// scanPeers finds nearby receivers by listening for mDNS announcements, and
+// optionally by probing.
+//
+// mDNS is the normal path and it works on every platform we ship, Windows
+// included — that was verified on real hardware after an earlier diagnosis
+// wrongly blamed Windows for what turned out to be test receivers dying with
+// their SSH session.
+//
+// Probing adds two things mDNS cannot do. It reaches TAILNET peers, which are
+// never on a shared segment, and it finds a receiver whose announcement is lost
+// while its port is still reachable. Tailnet peers are enumerated and probed by
+// default because that is a handful of known addresses; sweeping the local
+// SUBNET is opt-in (--scan), because touching every address on a segment is
+// traffic some networks would rather not see and mDNS already covers that case.
+func scanPeersOpt(ctx context.Context, timeout time.Duration, sweep bool) ([]lanshare.Peer, error) {
 	peers, err := lanshare.Browse(ctx, timeout)
 	if err != nil {
 		return nil, err
+	}
+	known := make(map[string]bool, len(peers))
+	for _, p := range peers {
+		known[p.Host] = true
+	}
+	// Tailnet peers always; the local segment only when asked.
+	found, serr := lanshare.Scan(ctx, lanshare.ScanOptions{SkipLocalSubnets: !sweep})
+	if serr == nil {
+		for _, sp := range found {
+			if known[sp.Host] {
+				continue // it announced itself, and that entry carries a name
+			}
+			peers = append(peers, lanshare.Peer{
+				Host:        sp.Host,
+				Port:        sp.Port,
+				Fingerprint: sp.Fingerprint,
+				Mode:        lanshare.ModeOpen,
+			})
+		}
 	}
 	sortPeers(peers)
 	return peers, nil
@@ -312,7 +352,7 @@ func (m discoverModel) tickCmd() tea.Cmd {
 
 func scanCmd(ctx context.Context, timeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
-		peers, err := scanPeers(ctx, timeout)
+		peers, err := scanPeersOpt(ctx, timeout, false)
 		if err != nil {
 			return peersMsg(nil)
 		}

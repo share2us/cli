@@ -16,6 +16,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      ship while this section is empty (HTML comments do not count). -->
 
 ### Added
+- **`share2us discover` now finds devices on your tailnet**, not just the local
+  segment. Tailnet peers are looked up directly (never scanned), so machines in
+  different places — which mDNS can never reach — show up alongside nearby ones.
+  `--scan` additionally probes every address on the local subnet, for a receiver
+  whose announcement is being lost; it is off by default because sweeping a
+  segment is traffic some networks would rather not see.
+
+### Added
 - **The background service now runs on Windows.** `share2us daemon install`
   registers a per-user scheduled task that starts at logon, so the inbox and LAN
   receiver keep running with no terminal open — the same thing Linux and macOS
