@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -2456,6 +2457,48 @@ func TestGetConvertUsesDispositionFilename(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "report.docx")); err != nil {
 		t.Fatalf("expected report.docx from Content-Disposition: %v", err)
+	}
+}
+
+// The gateway refuses conversion for a non-text share. The CLI must say so in
+// its own words rather than leaking the raw HTTP body (todo T).
+func TestGetConvertUnsupportedMapsCleanError(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnsupportedMediaType)
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "unsupported_conversion", "message": "conversion is only available for text and office document shares"}})
+	}))
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"get", "pub-1", "--convert-pdf", "--output", filepath.Join(t.TempDir(), "x.pdf")}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "can't be converted") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+// Conversion is rate limited server-side (20/min, same as the browser). The CLI
+// reports it plainly and does NOT retry — a retry storm is what the limit exists
+// to prevent (todo T).
+func TestGetConvertRateLimitedMapsCleanErrorAndDoesNotRetry(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	var attempts int32
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "rate_limited", "message": "too many requests"}})
+	}))
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"get", "pub-1", "--convert-pdf", "--output", filepath.Join(t.TempDir(), "x.pdf")}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "too many conversion requests") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Fatalf("made %d requests, want exactly 1 — a rate limit must not trigger a retry storm", got)
 	}
 }
 
