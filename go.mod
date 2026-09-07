@@ -3,7 +3,7 @@ module github.com/share2us/cli
 go 1.25.0
 
 require (
-	github.com/share2us/cli-core v0.26.0
+	github.com/share2us/cli-core v0.28.0
 	github.com/share2us/mcp v0.2.0
 )
 
