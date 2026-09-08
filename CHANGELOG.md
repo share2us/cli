@@ -15,6 +15,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Changed
+- **`discover --download` now checks who is offering the file.** A device's name
+  on the network can be claimed by anything, so before pulling an offer the
+  command shows the verify code and asks whether the other device is displaying
+  the same one. In a script, where nobody can compare anything, it refuses and
+  tells you to pass `--yes` if you accept that risk.
+
 ## [20260908103258] - 2026-09-08
 
 ### Added
