@@ -129,3 +129,71 @@ func TestReceiveBannerOmitsTheApprovalLineOutsideOpenMode(t *testing.T) {
 		}
 	}
 }
+
+// The pull direction. A broadcast name is claimable by anything on the network
+// and its advertised fingerprint is what gets pinned, so downloading "from
+// kestrel" can mean downloading from whatever answered to that name.
+func TestConfirmBroadcaster(t *testing.T) {
+	const fp = "aa:bb:cc:dd:ee:ff:00:11"
+	code := lanshare.VerifyCode(fp)
+
+	t.Run("shows the code and accepts a yes", func(t *testing.T) {
+		var stderr bytes.Buffer
+		a := app{stdout: io.Discard, stderr: &stderr, stdin: strings.NewReader("y\n")}
+		if !a.confirmBroadcaster("kestrel", "192.168.1.5:4300", fp, true) {
+			t.Fatal("a confirmed download must proceed")
+		}
+		out := stderr.String()
+		if !strings.Contains(out, code) {
+			t.Errorf("the code is the whole point of the prompt:\n%s", out)
+		}
+		if !strings.Contains(out, "kestrel") {
+			t.Errorf("name the device being checked:\n%s", out)
+		}
+	})
+
+	t.Run("anything but yes declines", func(t *testing.T) {
+		for _, answer := range []string{"n\n", "\n", "maybe\n"} {
+			var stderr bytes.Buffer
+			a := app{stdout: io.Discard, stderr: &stderr, stdin: strings.NewReader(answer)}
+			if a.confirmBroadcaster("kestrel", "192.168.1.5:4300", fp, true) {
+				t.Errorf("answer %q must not be taken as consent", answer)
+			}
+		}
+	})
+
+	t.Run("refuses without a terminal, and names the escape", func(t *testing.T) {
+		var stderr bytes.Buffer
+		a := app{stdout: io.Discard, stderr: &stderr, stdin: strings.NewReader("y\n")}
+		if a.confirmBroadcaster("kestrel", "192.168.1.5:4300", fp, false) {
+			t.Fatal("no terminal means nobody compared anything")
+		}
+		out := stderr.String()
+		if !strings.Contains(out, "--yes") {
+			t.Errorf("a script needs to be told how to proceed deliberately:\n%s", out)
+		}
+	})
+
+	t.Run("an offer with no fingerprint is refused outright", func(t *testing.T) {
+		var stderr bytes.Buffer
+		a := app{stdout: io.Discard, stderr: &stderr, stdin: strings.NewReader("y\n")}
+		if a.confirmBroadcaster("kestrel", "192.168.1.5:4300", "", true) {
+			t.Fatal("nothing to compare means nothing to confirm")
+		}
+	})
+}
+
+// --yes is the deliberate escape on the pull path. It must be parsed, and it
+// must NOT exist on the send path, where the stakes are a file of yours leaving.
+func TestDiscoverParsesYes(t *testing.T) {
+	o, err := parseDiscoverArgs([]string{"--download", "a.zip", "--yes"})
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !o.yes {
+		t.Fatal("--yes was not parsed")
+	}
+	if o2, _ := parseDiscoverArgs([]string{"--download", "a.zip"}); o2.yes {
+		t.Fatal("--yes must be off unless asked for")
+	}
+}

@@ -245,6 +245,36 @@ func (a app) confirmDiscoveredPeerWith(dest, fingerprint string, interactive boo
 	return true
 }
 
+// confirmBroadcaster is confirmDiscoveredPeer for the PULL direction. A broadcast
+// name is claimable by anything on the network and its advertised fingerprint is
+// what gets pinned, so "downloading from kestrel" can mean downloading whatever
+// answered to that name.
+//
+// The stakes differ from sending, and the wording says so: an impostor here feeds
+// you its file and learns you are listening, rather than taking a file of yours.
+// That is why --yes exists on this path and deliberately does not exist on the
+// send path.
+func (a app) confirmBroadcaster(name, dest, fingerprint string, interactive bool) bool {
+	code := lanshare.VerifyCode(fingerprint)
+	if code == "" {
+		fmt.Fprintln(a.stderr, "that offer advertised no fingerprint, so there is nothing to check it against. Not downloading.")
+		return false
+	}
+	if !interactive {
+		fmt.Fprintf(a.stderr, "refusing to download from a device found over the network without confirming it (verify code %s).\n", code)
+		fmt.Fprintln(a.stderr, "Anyone on this network can advertise that name, so the file may not be from who you think.")
+		fmt.Fprintln(a.stderr, "Re-run where you can answer the prompt, or pass --yes if you accept that risk.")
+		return false
+	}
+	fmt.Fprintf(a.stderr, "\n%s is offering this file. It should be showing the verify code:\n\n    %s\n\n", name, code)
+	fmt.Fprint(a.stderr, "Does it show exactly that code? [y/N] ")
+	if !a.readYesNo() {
+		fmt.Fprintln(a.stderr, "Not downloaded. If the codes differ, another device on this network answered to that name.")
+		return false
+	}
+	return true
+}
+
 func (a app) approveInbound(yes bool) func(lanshare.RequestInfo) bool {
 	return func(r lanshare.RequestInfo) bool {
 		what := fmt.Sprintf("%s (%s)", r.Name, humanBytes(max64(r.Size, 0)))

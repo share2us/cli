@@ -35,6 +35,7 @@ type discoverOpts struct {
 	trust    bool   // auto-trust the source after a download
 	interval time.Duration
 	sweep    bool // --scan: also probe every address on the local subnet
+	yes      bool // skip the broadcaster confirmation (scripts)
 }
 
 func parseDiscoverArgs(args []string) (discoverOpts, error) {
@@ -80,6 +81,8 @@ func parseDiscoverArgs(args []string) (discoverOpts, error) {
 				return o, fmt.Errorf("invalid --timeout")
 			}
 			o.timeout = d
+		case arg == "--yes" || arg == "-y":
+			o.yes = true
 		case arg == "--download":
 			v, ok := next()
 			if !ok {
@@ -131,7 +134,7 @@ func (a app) discover(ctx context.Context, args []string) int {
 			fmt.Fprintf(a.stderr, "no broadcast offering %q found nearby\n", opts.download)
 			return 1
 		}
-		return a.downloadOffer(ctx, peer, opts.path, opts.trust)
+		return a.downloadOffer(ctx, peer, opts.path, opts.trust, opts.yes)
 	}
 
 	// Plain/JSON or no TTY -> one-shot scan + print (no interactive UI).
@@ -245,7 +248,12 @@ func (a app) printPeers(peers []lanshare.Peer) {
 
 // downloadOffer pulls a broadcast offer into destDir and (optionally / on prompt)
 // trusts the verified source device.
-func (a app) downloadOffer(ctx context.Context, peer lanshare.Peer, destDir string, autoTrust bool) int {
+func (a app) downloadOffer(ctx context.Context, peer lanshare.Peer, destDir string, autoTrust, yes bool) int {
+	// The pin comes straight off mDNS, which anyone on this network can write.
+	// Confirm the offer is from who it claims before pulling it (todo §W, pull).
+	if !yes && !a.confirmBroadcaster(peer.Name, net.JoinHostPort(peer.Host, strconv.Itoa(peer.Port)), peer.Fingerprint, isTerminalReader(a.input())) {
+		return 1
+	}
 	id, idErr := lanid.Identity()
 	if idErr != nil {
 		return a.fail("load device identity", idErr)
@@ -334,7 +342,7 @@ func (a app) discoverTUI(ctx context.Context, opts discoverOpts) int {
 	}
 	fm := res.(discoverModel)
 	if fm.selected != nil {
-		return a.downloadOffer(ctx, *fm.selected, opts.path, opts.trust)
+		return a.downloadOffer(ctx, *fm.selected, opts.path, opts.trust, opts.yes)
 	}
 	return 0
 }
