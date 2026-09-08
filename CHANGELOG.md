@@ -15,6 +15,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+## [20260908110903] - 2026-09-08
+
 ### Changed
 - **`discover --download` now checks who is offering the file.** A device's name
   on the network can be claimed by anything, so before pulling an offer the
