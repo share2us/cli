@@ -15,6 +15,18 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Changed
+- **`--receive --no-password` now says that you get to approve each transfer.**
+  It always did, but nothing on screen mentioned it, and the warning above said
+  any device "may send you a file" — which stopped being true when the approval
+  prompt was added. Nothing is written unless you accept it, and the banner says
+  so. With `--yes` there is no prompt, so the warning now points at `--yes`
+  rather than at open mode.
+- **`--serve` tells you it is reachable on every address, and that `--bind`
+  exists.** It listens on all interfaces by default, which on a machine with a
+  VPN, a tailnet or container bridges is more places than people expect. `--bind`
+  has always accepted a single address; it was documented nowhere.
+
 ### Added
 - **`share2us discover` now finds devices on your tailnet**, not just the local
   segment. Tailnet peers are looked up directly (never scanned), so machines in

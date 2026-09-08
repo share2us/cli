@@ -152,6 +152,21 @@ s2u big.iso --dest 192.168.1.5 --resume   # restart an interrupted send where it
 s2u ./folder --serve --qr
 ```
 
+**Choosing which network to listen on.** By default the receiver, the broadcaster
+and `--serve` listen on every interface, so a peer can reach you on whichever one
+it resolves — LAN, Tailscale or WireGuard. `--bind` narrows that to a single
+address:
+
+```sh
+s2u --receive --bind 192.168.1.5   # this LAN only
+s2u ./folder --serve --bind 100.x.y.z   # tailnet only, not the local Wi-Fi
+```
+
+Worth knowing for `--serve` in particular: it is an **unauthenticated** HTTP file
+server, so the address it listens on is the only thing limiting who can reach it.
+On a machine that is also on a VPN or a guest network, `--bind` is how you keep it
+off them.
+
 **Trusting a device.** When an open-mode prompt asks about a sender, answer `t` to
 trust it: you choose whether it should still **ask** before each transfer (default,
 no code to compare) or save its files **automatically**. Trust is an account

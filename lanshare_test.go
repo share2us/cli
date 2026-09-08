@@ -78,3 +78,54 @@ func TestReceiveBannerShowsTheVerifyCode(t *testing.T) {
 		t.Fatalf("banner omits the verify code %q:\n%s", code, stderr.String())
 	}
 }
+
+// The approval prompt is the strongest thing about open mode, and the banner
+// never mentioned it — it advertised the VERIFY code, which is what the SENDER
+// is asked to confirm, so nothing on screen told the receiver a prompt was
+// coming (todo W-L2).
+func TestReceiveBannerAdvertisesTheApprovalPrompt(t *testing.T) {
+	var stderr bytes.Buffer
+	a := app{stdout: io.Discard, stderr: &stderr}
+	a.printReceiveBanner(lanshare.ListenInfo{
+		BindAddr: "127.0.0.1", Port: 7000, Fingerprint: "aa:bb", Mode: lanshare.ModeOpen,
+	}, lanReceiveOpts{bind: "127.0.0.1"})
+	out := stderr.String()
+	if !strings.Contains(out, "asked to accept or reject") {
+		t.Fatalf("banner does not say a transfer is approved before it lands:\n%s", out)
+	}
+	if !strings.Contains(out, "before anything is written") {
+		t.Errorf("the promise that matters is that nothing is written first:\n%s", out)
+	}
+}
+
+// With --yes there is no prompt, so the banner must not claim there is one.
+func TestReceiveBannerIsHonestUnderYes(t *testing.T) {
+	var stderr bytes.Buffer
+	a := app{stdout: io.Discard, stderr: &stderr}
+	a.printReceiveBanner(lanshare.ListenInfo{
+		BindAddr: "127.0.0.1", Port: 7000, Fingerprint: "aa:bb", Mode: lanshare.ModeOpen,
+	}, lanReceiveOpts{bind: "127.0.0.1", yes: true})
+	out := stderr.String()
+	if strings.Contains(out, "asked to accept") {
+		t.Fatalf("--yes accepts automatically; the banner must not promise a prompt:\n%s", out)
+	}
+	if !strings.Contains(out, "accepted automatically") {
+		t.Errorf("--yes should say so plainly:\n%s", out)
+	}
+}
+
+// Password and allow-ip modes are not open mode; the prompt line belongs only to
+// the mode that has a prompt.
+func TestReceiveBannerOmitsTheApprovalLineOutsideOpenMode(t *testing.T) {
+	for _, mode := range []string{lanshare.ModePassword, lanshare.ModeAllowIP} {
+		var stderr bytes.Buffer
+		a := app{stdout: io.Discard, stderr: &stderr}
+		a.printReceiveBanner(lanshare.ListenInfo{
+			BindAddr: "127.0.0.1", Port: 7000, Fingerprint: "aa:bb",
+			Mode: mode, Passphrase: "swift-otter-lamp",
+		}, lanReceiveOpts{bind: "127.0.0.1", allowIPs: []string{"10.0.0.2"}})
+		if strings.Contains(stderr.String(), "asked to accept or reject") {
+			t.Errorf("mode %q has no approval prompt but the banner claims one:\n%s", mode, stderr.String())
+		}
+	}
+}
