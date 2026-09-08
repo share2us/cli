@@ -2838,3 +2838,63 @@ func TestVersionPrintsHomeAndSource(t *testing.T) {
 		}
 	}
 }
+
+// A Store (MSIX) install lives under WindowsApps, which is read-only even to an
+// administrator: self-replacing the binary would fail partway. `s2u update` must
+// hand off to the Store instead, the way it already does for winget and apt.
+func TestManagedInstallRecognisesTheMicrosoftStore(t *testing.T) {
+	prevOS, prevExe := managedGOOS, managedExecutable
+	t.Cleanup(func() { managedGOOS, managedExecutable = prevOS, prevExe })
+	managedGOOS = "windows"
+
+	for _, tc := range []struct {
+		name string
+		exe  string
+		want string
+	}{
+		{
+			name: "store package",
+			exe:  `C:\Program Files\WindowsApps\Share2Us.Share2us_1.0.7.0_x64__abc123\s2u.exe`,
+			want: "the Microsoft Store",
+		},
+		{
+			// The alias shim a user actually invokes also sits under WindowsApps.
+			name: "execution alias shim",
+			exe:  `C:\Users\me\AppData\Local\Microsoft\WindowsApps\s2u.exe`,
+			want: "the Microsoft Store",
+		},
+		{
+			name: "winget still wins its own path",
+			exe:  `C:\Users\me\AppData\Local\Microsoft\WinGet\Packages\Share2Us.CLI\s2u.exe`,
+			want: "winget",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			managedExecutable = func() (string, error) { return tc.exe, nil }
+			got, ok := managedInstall()
+			if !ok {
+				t.Fatalf("managedInstall() said unmanaged for %s", tc.exe)
+			}
+			if got.name != tc.want {
+				t.Errorf("name = %q, want %q", got.name, tc.want)
+			}
+			if got.upgradeCommand == "" {
+				t.Error("a managed install must say how to upgrade it")
+			}
+		})
+	}
+}
+
+// A plain download is not managed by anything and must keep self-updating.
+func TestManagedInstallLeavesAPlainInstallAlone(t *testing.T) {
+	prevOS, prevExe, prevMarker := managedGOOS, managedExecutable, managedInstallMarker
+	t.Cleanup(func() {
+		managedGOOS, managedExecutable, managedInstallMarker = prevOS, prevExe, prevMarker
+	})
+	managedGOOS = "windows"
+	managedExecutable = func() (string, error) { return `C:\Tools\s2u\s2u.exe`, nil }
+	managedInstallMarker = t.TempDir() + "/absent"
+	if _, ok := managedInstall(); ok {
+		t.Fatal("a plain install must not be reported as package-managed")
+	}
+}
