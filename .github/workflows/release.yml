@@ -211,11 +211,22 @@ jobs:
           if [ -n "$(printf '%s' "$NOTES" | tr -d '[:space:]')" ]; then
             printf '%s\n' "$NOTES" > "$NOTES_FILE"
           else
-            if [ "${{ inputs.channel || 'stable' }}" = stable ]; then
+            if [ "${{ inputs.channel || 'stable' }}" != stable ]; then
+              echo "Beta build from ${GITHUB_SHA}. Not served to stable users." > "$NOTES_FILE"
+            elif [ "${{ github.event_name }}" = workflow_dispatch ]; then
+              # A person asked for this release by hand and there is nothing to
+              # tell anyone about it. Refusing loudly is right.
               echo "::error::CHANGELOG.md [Unreleased] is empty - a stable release needs release notes."
               exit 1
+            else
+              # Reached by a merge to main. An empty [Unreleased] is the author
+              # saying this changed nothing a user sees - a refactor, a test, a CI
+              # tweak - so nothing ships. This used to fail the run, which painted
+              # the build red for doing the right thing; a red build nobody can act
+              # on is one everybody learns to ignore. Matches the gui.
+              echo "::notice::[Unreleased] is empty - nothing user-facing to ship, so no release was cut for ${GITHUB_SHA}."
+              exit 0
             fi
-            echo "Beta build from ${GITHUB_SHA}. Not served to stable users." > "$NOTES_FILE"
           fi
           printf '\n\nInstall: `curl -fsSL https://share2.us/install.sh | sh`\n' >> "$NOTES_FILE"
 
@@ -229,6 +240,42 @@ jobs:
             --title "Share2Us CLI ${VERSION}" \
             --notes-file "$NOTES_FILE" \
             $LATEST_FLAGS
+
+          # Roll [Unreleased] under the version that just shipped, so the NEXT
+          # release does not republish these notes. This was manual and got
+          # skipped, which is why 20260908065959 told people about the tailnet
+          # discover, the Windows daemon and the GPLv3 relicense - all of which
+          # had shipped in earlier releases. The gui automated this first; same
+          # script, same reasoning.
+          if [ "${{ inputs.channel || 'stable' }}" = stable ] && [ "${{ github.event_name }}" = push ]; then
+            python3 - "$VERSION" <<'ROLL'
+          import datetime, re, sys
+          version = sys.argv[1]
+          text = open('CHANGELOG.md').read()
+          marker = '## [Unreleased]'
+          start = text.index(marker) + len(marker)
+          nxt = text.find('\n## [', start)
+          body = text[start:nxt if nxt != -1 else len(text)]
+          content = re.sub(r'<!--.*?-->', '', body, flags=re.S).strip()
+          if content:
+              kept = re.findall(r'<!--.*?-->', body, flags=re.S)
+              header = marker + '\n\n' + ('\n'.join(kept) + '\n\n' if kept else '')
+              rolled = f'## [{version}] - {datetime.date.today().isoformat()}\n\n{content}\n'
+              text = text[:text.index(marker)] + header + rolled + text[nxt if nxt != -1 else len(text):]
+              open('CHANGELOG.md', 'w').write(text)
+              print(f'rolled [Unreleased] under {version}')
+          else:
+              print('[Unreleased] was empty; nothing to roll')
+          ROLL
+            if ! git diff --quiet CHANGELOG.md; then
+              git config user.name  "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git add CHANGELOG.md
+              git commit -m "docs(changelog): roll [Unreleased] under ${VERSION}"
+              git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+              git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning::could not push the changelog roll; do it by hand"
+            fi
+          fi
 
       # Publish the apt repository: a signed static tree on the gh-pages branch of
       # THIS repo (served by GitHub Pages at https://apt.share2.us). Same-repo push,
