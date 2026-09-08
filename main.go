@@ -5142,13 +5142,25 @@ var managedExecutable = os.Executable
 var managedGOOS = runtime.GOOS
 
 // managedInstall reports whether this binary was installed by a package manager
-// that should also be the one to update it: apt (marker file from the .deb) or
-// winget (executable path on Windows). `s2u update` then points at that manager
+// that should also be the one to update it: apt (marker file from the .deb), or
+// on Windows the Microsoft Store or winget (both recognised by the executable's
+// path). `s2u update` then points at that manager
 // instead of self-replacing a file it does not own.
 func managedInstall() (managedInstallInfo, bool) {
 	if managedGOOS == "windows" {
 		if exe, err := managedExecutable(); err == nil {
 			low := strings.ToLower(exe)
+			// An MSIX from the Microsoft Store installs under WindowsApps, which
+			// is read-only even to an administrator: a self-update would fail
+			// partway and leave a confusing mess. The Store owns this copy, so
+			// point at it. Checked BEFORE winget because a Store package can sit
+			// under a path containing neither winget marker.
+			if strings.Contains(low, `\windowsapps\`) {
+				return managedInstallInfo{
+					name:           "the Microsoft Store",
+					upgradeCommand: "open the Microsoft Store, then Library > Get updates",
+				}, true
+			}
 			if strings.Contains(low, `\winget\packages\`) || strings.Contains(low, `\microsoft\winget\`) {
 				return managedInstallInfo{name: "winget", upgradeCommand: "winget upgrade Share2Us.CLI"}, true
 			}
