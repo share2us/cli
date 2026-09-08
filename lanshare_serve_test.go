@@ -275,3 +275,78 @@ func TestParseLanReceiveYesFlag(t *testing.T) {
 		t.Fatal("yes must default to false, or headless receives silently auto-accept again")
 	}
 }
+
+// `--serve` is an open HTTP file server: no pairing, no approval prompt, nothing.
+// A password is the only thing that gates it, so the gate has to actually gate.
+func TestServePasswordGatesEveryRequest(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	h := requireServePassword(serveHandler(dir, true), "hunter2")
+
+	for _, tc := range []struct {
+		name       string
+		user, pass string
+		useAuth    bool
+		want       int
+	}{
+		{name: "no credentials", want: http.StatusUnauthorized},
+		{name: "wrong password", user: "x", pass: "nope", useAuth: true, want: http.StatusUnauthorized},
+		{name: "empty password", user: "x", pass: "", useAuth: true, want: http.StatusUnauthorized},
+		// One secret, not two: asking someone to invent a username as well is a
+		// second thing to get wrong, so any username is accepted.
+		{name: "any username, right password", user: "whoever", pass: "hunter2", useAuth: true, want: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/a.txt", nil)
+			if tc.useAuth {
+				req.SetBasicAuth(tc.user, tc.pass)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
+			}
+			if tc.want == http.StatusOK && rec.Body.String() != "secret" {
+				t.Errorf("body = %q, want the file contents", rec.Body.String())
+			}
+			if tc.want == http.StatusUnauthorized {
+				if got := rec.Header().Get("WWW-Authenticate"); !strings.Contains(got, "Basic") {
+					t.Errorf("a 401 must challenge with Basic so a browser prompts; got %q", got)
+				}
+				if strings.Contains(rec.Body.String(), "secret") {
+					t.Error("the refusal leaked the file contents")
+				}
+			}
+		})
+	}
+}
+
+// Without a password the banner must say so in terms nobody has to interpret.
+func TestServeBannerWarnsWhenCompletelyOpen(t *testing.T) {
+	var stderr bytes.Buffer
+	a := app{stdout: io.Discard, stderr: &stderr}
+	a.printServeBanner("/tmp/x", true, "127.0.0.1", 15900, false, "")
+	out := stderr.String()
+	if !strings.Contains(out, "NO PASSWORD") {
+		t.Fatalf("an unauthenticated file server must say so:\n%s", out)
+	}
+	if !strings.Contains(out, "--password") {
+		t.Errorf("the warning should name the flag that fixes it:\n%s", out)
+	}
+}
+
+// With one, it must not overstate what plain HTTP gives you.
+func TestServeBannerDoesNotOversellThePassword(t *testing.T) {
+	var stderr bytes.Buffer
+	a := app{stdout: io.Discard, stderr: &stderr}
+	a.printServeBanner("/tmp/x", true, "127.0.0.1", 15900, false, "hunter2")
+	out := stderr.String()
+	if strings.Contains(out, "NO PASSWORD") {
+		t.Fatalf("a password was set; the open-server warning must not fire:\n%s", out)
+	}
+	if !strings.Contains(out, "in the clear") {
+		t.Errorf("plain HTTP gates access, it does not hide content; say so:\n%s", out)
+	}
+}

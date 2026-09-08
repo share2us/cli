@@ -6,6 +6,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"io"
@@ -766,6 +767,12 @@ type lanServeOpts struct {
 	bind string
 	port int
 	qr   bool
+	// password gates the HTTP server with Basic auth. Empty means NO
+	// authentication at all, which is the default and is warned about loudly.
+	password string
+	// prompt asks for the password with echo off, so it never reaches shell
+	// history or `ps` — same convention as receive and send.
+	prompt bool
 }
 
 const (
@@ -780,6 +787,30 @@ const (
 // like anything else (.env, .git/config, .netrc in a project folder), and a
 // symlink pointing out of the tree was followed transparently by http.Dir, so a
 // single link could re-expose exactly what the guard blocks.
+// requireServePassword wraps h in HTTP Basic auth. Any username is accepted —
+// there is one secret and asking a person to invent a username as well adds a
+// second thing to get wrong.
+//
+// Be clear about what this does and does not do. `--serve` is plain HTTP, so the
+// password and the file contents both cross the network in the clear: this is
+// ACCESS CONTROL, not confidentiality. It stops whoever else is on the Wi-Fi from
+// browsing the directory because they found the port. It does not stop someone
+// already positioned to read the traffic, and nothing at this layer could, because
+// the files themselves are already in the clear.
+func requireServePassword(h http.Handler, password string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, given, ok := r.BasicAuth()
+		// Constant time: a length-independent comparison keeps the failure from
+		// leaking the password one character at a time.
+		if !ok || subtle.ConstantTimeCompare([]byte(given), []byte(password)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="Share2Us", charset="UTF-8"`)
+			http.Error(w, "password required", http.StatusUnauthorized)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 func serveHandler(abs string, isDir bool) http.Handler {
 	if isDir {
 		// http.FileServer cleans paths and rejects traversal; index.html is
@@ -902,7 +933,19 @@ func (a app) lanServe(ctx context.Context, args []string) int {
 		return 1
 	}
 
+	if opts.password == "" && opts.prompt {
+		pw, perr := a.readPassword("Serve password: ", a.stderr)
+		if perr != nil {
+			fmt.Fprintln(a.stderr, perr)
+			return 1
+		}
+		opts.password = pw
+	}
+
 	handler := serveHandler(abs, info.IsDir())
+	if opts.password != "" {
+		handler = requireServePassword(handler, opts.password)
+	}
 
 	bind := opts.bind
 	if bind == "" {
@@ -922,7 +965,7 @@ func (a app) lanServe(ctx context.Context, args []string) int {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	a.printServeBanner(abs, info.IsDir(), bind, port, opts.qr)
+	a.printServeBanner(abs, info.IsDir(), bind, port, opts.qr, opts.password)
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(ln) }()
@@ -1005,12 +1048,24 @@ func pathAtOrUnder(path, base string) bool {
 	return strings.HasPrefix(path, base+sep)
 }
 
-func (a app) printServeBanner(abs string, isDir bool, bind string, port int, qr bool) {
+func (a app) printServeBanner(abs string, isDir bool, bind string, port int, qr bool, password string) {
 	kind := "file"
 	if isDir {
 		kind = "directory"
 	}
 	fmt.Fprintf(a.stderr, "Serving %s %s over HTTP (Ctrl-C to stop)\n", kind, abs)
+	// Say plainly what this is when nothing gates it. `--serve` is an open HTTP
+	// file server: no password, no pairing, no approval prompt — unlike --receive,
+	// where every transfer is approved. Anyone who can reach the port can read
+	// everything under the served path, and the banner below prints exactly which
+	// addresses that is.
+	if password == "" {
+		fmt.Fprintln(a.stderr, "WARNING: NO PASSWORD. Anyone who can reach these addresses can browse and download everything here. Add -p (or --password) to require one.")
+	} else {
+		// Do not oversell it: this is plain HTTP, so the password and the files
+		// both travel in the clear. It controls access, not confidentiality.
+		fmt.Fprintln(a.stderr, "Password required to browse (sent in the clear over HTTP, so it gates access rather than hiding content).")
+	}
 	a.warnIfFirewallBlocks()
 	primary := bind
 	if bind == "0.0.0.0" || bind == "::" {
@@ -1107,6 +1162,16 @@ func parseLanServeArgs(args []string) (lanServeOpts, error) {
 			o.bind = v
 		case strings.HasPrefix(arg, "--bind="):
 			o.bind = strings.TrimPrefix(arg, "--bind=")
+		// Same shape as receive and send: a bare flag prompts with echo off, so
+		// the password never reaches shell history or `ps`.
+		case arg == "--password" || arg == "-p":
+			if v, ok := next(); ok {
+				o.password = v
+			} else {
+				o.prompt = true
+			}
+		case strings.HasPrefix(arg, "--password="):
+			o.password = strings.TrimPrefix(arg, "--password=")
 		case arg == "--port" || arg == "-P":
 			v, ok := next()
 			if !ok {

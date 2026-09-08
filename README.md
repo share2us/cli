@@ -150,7 +150,15 @@ s2u big.iso --dest 192.168.1.5 --resume   # restart an interrupted send where it
 
 # Or serve over HTTP to any browser on the network:
 s2u ./folder --serve --qr
+s2u ./folder --serve -p            # ask for a password, then require it to browse
 ```
+
+**`--serve` has no protection unless you give it one.** Unlike `--receive`, where
+you approve each transfer, a served folder is an open HTTP file server: anyone who
+can reach the address can browse and download everything under it. `-p` (or
+`--password`) requires a password; the bare flag prompts for one so it never lands
+in your shell history. It is plain HTTP, so the password and the files both travel
+in the clear: it controls **access**, not confidentiality.
 
 **Choosing which network to listen on.** By default the receiver, the broadcaster
 and `--serve` listen on every interface, so a peer can reach you on whichever one
