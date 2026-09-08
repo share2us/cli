@@ -15,6 +15,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+## [20260908103258] - 2026-09-08
+
 ### Added
 - **`--serve` can require a password.** `-p` (or `--password`) gates the served
   folder; the bare flag prompts so it never reaches your shell history. Any
