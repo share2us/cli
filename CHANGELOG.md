@@ -15,6 +15,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+## [20260908065959] - 2026-09-08
+
 ### Changed
 - **`--receive --no-password` now says that you get to approve each transfer.**
   It always did, but nothing on screen mentioned it, and the warning above said
