@@ -88,7 +88,17 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 		opts.password = pw
 	}
 	if opts.noPassword && opts.password == "" && len(opts.allowIPs) == 0 {
-		fmt.Fprintln(a.stderr, "WARNING: --no-password means any device that can reach this port may send you a file. Prefer a password or --allow-ip.")
+		// This used to read "any device that can reach this port may send you a
+		// file", which was true before the approval prompt existed and has been
+		// wrong since. Nothing is written without a human answering y, so the
+		// warning overstated the risk — and a warning people know is overblown is
+		// one they learn to silence, in this case with --yes, which is the single
+		// flag that actually removes the protection.
+		if opts.yes {
+			fmt.Fprintln(a.stderr, "WARNING: --no-password with --yes accepts files from ANY device that can reach this port, without asking. Drop --yes, or use a password or --allow-ip.")
+		} else {
+			fmt.Fprintln(a.stderr, "Open mode: any device that can reach this port may OFFER you a file. Each one is shown to you and nothing is saved unless you accept it.")
+		}
 	}
 
 	printed := false
@@ -409,6 +419,17 @@ func (a app) printReceiveBanner(info lanshare.ListenInfo, opts lanReceiveOpts) {
 	if opts.qr {
 		if art, err := clicore.RenderQR(pairing); err == nil {
 			fmt.Fprintln(a.stderr, art)
+		}
+	}
+	// Say that the approval gate exists. It is the strongest property of open
+	// mode and it was invisible: the banner mentioned the VERIFY code, which is
+	// what the SENDER is asked to confirm, and nothing about the receiver's own
+	// accept/reject prompt (todo W-L2).
+	if info.Mode == lanshare.ModeOpen {
+		if opts.yes {
+			fmt.Fprintln(a.stderr, "Each transfer:  accepted automatically (--yes)")
+		} else {
+			fmt.Fprintln(a.stderr, "Each transfer:  you are asked to accept or reject it before anything is written")
 		}
 	}
 	if opts.keep {
@@ -994,8 +1015,17 @@ func (a app) printServeBanner(abs string, isDir bool, bind string, port int, qr 
 	primary := bind
 	if bind == "0.0.0.0" || bind == "::" {
 		primary = primaryLANIP()
-		for _, ip := range allIPv4() {
+		addrs := allIPv4()
+		for _, ip := range addrs {
 			fmt.Fprintf(a.stderr, "  http://%s:%d/\n", ip, port)
+		}
+		// `--serve` is an unauthenticated file server, so the addresses it
+		// answers on are the only thing limiting who can reach it. When there is
+		// more than one — a VPN, a tailnet, a guest network, a container bridge —
+		// say that --bind exists. It always has; it was documented nowhere, which
+		// made the wide default the only default anyone knew about (todo W-H1).
+		if len(addrs) > 1 {
+			fmt.Fprintf(a.stderr, "Reachable on all %d addresses above. Use --bind <address> to serve on just one.\n", len(addrs))
 		}
 	} else {
 		fmt.Fprintf(a.stderr, "  http://%s:%d/\n", bind, port)
