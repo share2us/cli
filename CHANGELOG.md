@@ -15,6 +15,19 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Added
+- **`--serve` can require a password.** `-p` (or `--password`) gates the served
+  folder; the bare flag prompts so it never reaches your shell history. Any
+  username works, since there is only one secret to get right.
+
+### Changed
+- **`--serve` now says when it is completely open**, because it is: unlike
+  `--receive`, nothing approves a request, so anyone who can reach the address can
+  browse and download everything under the served path. The banner says so and
+  names the flag that fixes it. With a password set it says what that does and does
+  not buy you, since plain HTTP carries both the password and the files in the
+  clear.
+
 ## [20260908065959] - 2026-09-08
 
 ### Changed
