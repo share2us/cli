@@ -57,6 +57,10 @@ jobs:
     env:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
       APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+      # Optional Windows code signing. Absent by default, and the build is
+      # unchanged when it is absent — see the "Prepare Windows signing" step.
+      SIGN_PFX_B64: ${{ secrets.SIGN_PFX_B64 }}
+      SIGN_PFX_PASSWORD: ${{ secrets.SIGN_PFX_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
 
@@ -65,7 +69,44 @@ jobs:
           go-version: "1.25"
           check-latest: true
 
+      # Windows Smart App Control blocks UNSIGNED executables outright: no per-file
+      # unblock, and clearing the mark-of-the-web does not help. A real user hit
+      # this on `s2u login` (todo §RR). No code change makes an unsigned binary
+      # pass, so the only fix is a signature from a certificate Windows already
+      # trusts — which the project does not have yet (paid signing is blocked for
+      # a Pakistani individual, see [[share2us-gui-signing]]).
+      #
+      # This wires the signing so it starts happening the DAY a certificate
+      # exists, with no workflow edit under time pressure. Absent the secret the
+      # build is byte-for-byte what it was.
+      #
+      # Deliberately NO self-signed fallback, unlike the GUI. The GUI falls back
+      # because its updater pins a publisher thumbprint and needs *a* signature.
+      # For the CLI a self-signed signature would satisfy nothing — Smart App
+      # Control still refuses it — while making the binary LOOK signed to anyone
+      # inspecting it. Unsigned and honest beats signed by nobody.
+      - name: Prepare Windows signing (skipped unless a certificate is configured)
+        id: winsign
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGN_PFX_B64:-}" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SIGN_PFX_B64 is not set - the Windows CLI ships unsigned (todo RR)."
+            exit 0
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq osslsigncode
+          printf '%s' "$SIGN_PFX_B64" | base64 -d > "$RUNNER_TEMP/signing.pfx"
+          # -readpass, not -pass: a password on the command line is visible in the
+          # process list to anything else on the runner.
+          printf '%s' "${SIGN_PFX_PASSWORD:-}" > "$RUNNER_TEMP/signing.pass"
+          chmod 600 "$RUNNER_TEMP/signing.pfx" "$RUNNER_TEMP/signing.pass"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Windows binaries will be Authenticode-signed."
+
       - name: Build all platforms
+        env:
+          SIGN_ENABLED: ${{ steps.winsign.outputs.enabled }}
         run: |
           set -euo pipefail
           VERSION="$(date -u +%Y%m%d%H%M%S)"
@@ -82,6 +123,18 @@ jobs:
               -ldflags "-s -w -X github.com/share2us/cli-core.BuildVersion=$VERSION" \
               -o "dist/$bin" .
             if [ "$os" = windows ]; then
+              # Sign before archiving, so the signature is what users extract.
+              # Timestamped, so signatures stay valid after the certificate expires.
+              if [ "${SIGN_ENABLED:-false}" = true ]; then
+                osslsigncode sign \
+                  -pkcs12 "$RUNNER_TEMP/signing.pfx" -readpass "$RUNNER_TEMP/signing.pass" \
+                  -h sha256 -ts http://timestamp.digicert.com \
+                  -n "Share2Us CLI" -i https://share2.us \
+                  -in "dist/$bin" -out "dist/$bin.signed"
+                mv "dist/$bin.signed" "dist/$bin"
+                osslsigncode verify -in "dist/$bin" > /dev/null
+                echo "    signed $bin"
+              fi
               archive="share2us_${os}_${arch}.zip"
               ( cd dist && zip -q -X "$archive" "$bin" )
             else
