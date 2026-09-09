@@ -5,6 +5,8 @@ package daemon
 
 import (
 	"fmt"
+	"sync"
+	"time"
 
 	clicore "github.com/share2us/cli-core"
 	"github.com/share2us/cli-core/lanid"
@@ -28,6 +30,47 @@ import (
 // lanid.Lookup, which never grants trust (ADR-034).
 var lookupTrusted = lanid.Lookup
 
+// A REFUSED attempt is attacker-controlled: anything on the network can open a
+// connection and be declined, as fast as it likes. Firing a desktop
+// notification per refusal turned that into a notification flood -- unusable
+// desktop, and the real "approve it in Share2Us" message buried among hundreds
+// (§AJ #31). Refusals are therefore collapsed per peer: one notification, then
+// silence for the cooldown however many more arrive. Accepted transfers, which
+// only a trusted device can cause, are not rate limited.
+const refusalNotifyCooldown = 5 * time.Minute
+
+type refusalNotices struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+	now  func() time.Time
+}
+
+// shouldNotify reports whether this peer's refusal is worth a notification now.
+func (n *refusalNotices) shouldNotify(peer string) bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.now == nil {
+		n.now = time.Now
+	}
+	now := n.now()
+	if n.last == nil {
+		n.last = map[string]time.Time{}
+	}
+	// Bound the map: a peer that has been quiet for a cooldown is forgotten.
+	if len(n.last) > 1024 {
+		for k, t := range n.last {
+			if now.Sub(t) >= refusalNotifyCooldown {
+				delete(n.last, k)
+			}
+		}
+	}
+	if at, ok := n.last[peer]; ok && now.Sub(at) < refusalNotifyCooldown {
+		return false
+	}
+	n.last[peer] = now
+	return true
+}
+
 func (rt *Runtime) approve(policy string, deps Deps) func(lanshare.RequestInfo) bool {
 	return func(r lanshare.RequestInfo) bool {
 		fp := lanshare.IdentityFingerprint(r.SenderKey)
@@ -41,13 +84,17 @@ func (rt *Runtime) approve(policy string, deps Deps) func(lanshare.RequestInfo) 
 				}
 				// trusted + ask: needs a human decision the daemon can't render.
 				deps.logf("declined %s from %s (ask mode; needs approval in the app)", r.Name, label)
-				rt.notify("Share2Us", fmt.Sprintf("%s tried to send %q — approve it in Share2Us", label, r.Name))
+				if rt.refusals.shouldNotify(label) {
+					rt.notify("Share2Us", fmt.Sprintf("%s tried to send %q — approve it in Share2Us", label, r.Name))
+				}
 				_ = policy // notify-wait vs strict diverge here once action buttons exist
 				return false
 			}
 		}
 		deps.logf("blocked %s from untrusted %s", r.Name, label)
-		rt.notify("Share2Us", fmt.Sprintf("Blocked a file from %s — open Share2Us to trust it", label))
+		if rt.refusals.shouldNotify(label) {
+			rt.notify("Share2Us", fmt.Sprintf("Blocked a file from %s — open Share2Us to trust it", label))
+		}
 		return false
 	}
 }

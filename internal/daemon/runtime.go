@@ -76,7 +76,9 @@ type Deps struct {
 // Runtime holds run state (start time, what it owns, the stop hook) so the
 // control server can answer status/owns-receiver and honour a stop request.
 type Runtime struct {
-	notifier  Notifier
+	notifier Notifier
+	// refusals collapses repeated "declined" notifications per peer (§AJ #31).
+	refusals  refusalNotices
 	startedAt time.Time
 	ownsLAN   bool
 	ownsInbox bool
@@ -140,8 +142,15 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 	wg.Add(1)
 	go func() { defer wg.Done(); rt.scheduler(ctx, opts, deps) }()
 	if opts.AgentBridge && deps.AgentClient != nil && len(deps.AgentRunners) > 0 {
-		wg.Add(1)
-		go func() { defer wg.Done(); rt.agentBridge(ctx, deps.AgentClient, deps.AgentRunners, deps) }()
+		// Belt and braces with handleInject: without a device key nothing can
+		// be unsealed, so there is no point registering sessions the server
+		// would then relay plaintext prompts to (§AJ #8).
+		if deps.Unseal == nil {
+			deps.logf("agent bridge is off: this device has no encryption key (sign in again with the CLI to create one)")
+		} else {
+			wg.Add(1)
+			go func() { defer wg.Done(); rt.agentBridge(ctx, deps.AgentClient, deps.AgentRunners, deps) }()
+		}
 	}
 
 	<-ctx.Done()
