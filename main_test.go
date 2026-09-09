@@ -3639,3 +3639,92 @@ func TestTrustSyncLearnsAccountBinding(t *testing.T) {
 		t.Fatal("bound cache not honoured")
 	}
 }
+
+// §AJ #24: the download name comes from the SENDER (Content-Disposition), and
+// was written straight to disk -- replacing whatever already had that name.
+func TestPlainDownloadNeverOverwritesASenderNamedFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="notes.txt"`)
+		_, _ = w.Write([]byte("theirs"))
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	a := app{stdout: &stdout, stderr: &stderr}
+	if code := a.downloadPlainShare(context.Background(), srv.URL+"/d/pub-1", "", ""); code != 0 {
+		t.Fatalf("code = %d stderr = %s", code, stderr.String())
+	}
+	if body, _ := os.ReadFile(filepath.Join(dir, "notes.txt")); string(body) != "mine" {
+		t.Fatalf("the existing file was overwritten: %q", body)
+	}
+	if body, err := os.ReadFile(filepath.Join(dir, "notes (1).txt")); err != nil || string(body) != "theirs" {
+		t.Fatalf("the download did not land beside it: %v %q", err, body)
+	}
+	if !strings.Contains(stdout.String(), "notes (1).txt") {
+		t.Fatalf("the saved name was not reported: %s", stdout.String())
+	}
+}
+
+// A name the user typed is their own choice and is honoured as asked.
+func TestExplicitOutputIsWrittenAsAsked(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "chosen.txt")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="whatever.txt"`)
+		_, _ = w.Write([]byte("new"))
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	a := app{stdout: &stdout, stderr: &stderr}
+	if code := a.downloadPlainShare(context.Background(), srv.URL+"/d/pub-1", target, ""); code != 0 {
+		t.Fatalf("code = %d stderr = %s", code, stderr.String())
+	}
+	if body, _ := os.ReadFile(target); string(body) != "new" {
+		t.Fatalf("an explicit --output was not honoured: %q", body)
+	}
+}
+
+// §AJ #25: DecryptStream detects a truncated or tampered payload, but the
+// plaintext was written straight into the destination, so unverified bytes were
+// left behind under the name the user asked for.
+func TestTruncatedEncryptedShareLeavesNoPlaintext(t *testing.T) {
+	dir := t.TempDir()
+	key := bytes.Repeat([]byte{7}, 32)
+	var sealed bytes.Buffer
+	if err := clicore.EncryptStream(&sealed, strings.NewReader("the secret contents, long enough to matter"), key); err != nil {
+		t.Fatal(err)
+	}
+	truncated := sealed.Bytes()[:sealed.Len()-8]
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(truncated)
+	}))
+	defer srv.Close()
+	t.Setenv("SHARE2US_API_BASE", srv.URL)
+
+	out := filepath.Join(dir, "secret.txt")
+	var stdout, stderr bytes.Buffer
+	a := app{stdout: &stdout, stderr: &stderr}
+	code := a.get(context.Background(), []string{srv.URL + "/d/pub-1", "--key", clicore.EncodeKey(key), "--output", out})
+	if code == 0 {
+		t.Fatal("a truncated payload was reported as a successful download")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		body, _ := os.ReadFile(out)
+		t.Fatalf("unverified plaintext was left on disk: %q", body)
+	}
+	// Nor any leftover staging file.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		t.Fatalf("left behind %q", e.Name())
+	}
+}

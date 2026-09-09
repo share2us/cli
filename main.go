@@ -3445,18 +3445,41 @@ func (a app) get(ctx context.Context, args []string) int {
 	if err := client.DownloadURL(ctx, downloadURL, &ciphertext); err != nil {
 		return a.fail("download encrypted share", err)
 	}
-	var out io.Writer = a.stdout
-	var file *os.File
-	if opts.output != "" {
-		file, err = os.Create(opts.output)
-		if err != nil {
-			return a.fail("create output", err)
+	if opts.output == "" {
+		// Straight to stdout: nothing to stage, and a truncated stream is the
+		// caller's to notice.
+		if err := clicore.DecryptStream(a.stdout, strings.NewReader(ciphertext.String()), key); err != nil {
+			return a.fail("decrypt encrypted share", err)
 		}
-		defer file.Close()
-		out = file
+		return 0
 	}
-	if err := clicore.DecryptStream(out, strings.NewReader(ciphertext.String()), key); err != nil {
-		return a.fail("decrypt encrypted share", err)
+	// Stage the plaintext in a temp file and rename only after DecryptStream
+	// returns cleanly. It used to decrypt straight into the destination, so a
+	// truncated or tampered payload -- which DecryptStream DOES detect -- left
+	// unverified plaintext sitting there under the name the user asked for, and
+	// every other caller in this file already removes on failure (§AJ #25).
+	dir := filepath.Dir(opts.output)
+	if dir == "" {
+		dir = "."
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(opts.output)+".tmp-*")
+	if err != nil {
+		return a.fail("create output", err)
+	}
+	tmpName := tmp.Name()
+	decryptErr := clicore.DecryptStream(tmp, strings.NewReader(ciphertext.String()), key)
+	closeErr := tmp.Close()
+	if decryptErr != nil {
+		os.Remove(tmpName)
+		return a.fail("decrypt encrypted share", decryptErr)
+	}
+	if closeErr != nil {
+		os.Remove(tmpName)
+		return a.fail("write output", closeErr)
+	}
+	if err := os.Rename(tmpName, opts.output); err != nil {
+		os.Remove(tmpName)
+		return a.fail("save output", err)
 	}
 	return 0
 }
@@ -3480,7 +3503,12 @@ func (a app) downloadPlainShare(ctx context.Context, downloadURL, output, mode s
 	}
 	defer resp.Body.Close()
 
+	// A name the user typed with --output is their own choice and is written as
+	// asked. A name that came from the SENDER (Content-Disposition) is not: it
+	// used to overwrite whatever already had that name -- .bashrc, a Makefile,
+	// a document being edited -- silently and unrecoverably (§AJ #24).
 	outPath := output
+	senderChoseTheName := outPath == ""
 	if outPath == "" {
 		outPath = filenameFromDisposition(resp.Header.Get("Content-Disposition"))
 	}
@@ -3489,6 +3517,9 @@ func (a app) downloadPlainShare(ctx context.Context, downloadURL, output, mode s
 		if mode == "pdf" || mode == "docx" {
 			outPath += "." + mode
 		}
+	}
+	if senderChoseTheName {
+		outPath = clicore.UniquePath(outPath)
 	}
 
 	dir := filepath.Dir(outPath)
@@ -5244,6 +5275,12 @@ func receiveInboxSelected(ctx context.Context, client *clicore.Client, credentia
 		if err != nil {
 			return count, err
 		}
+		// The file name comes from the sender, so it must never replace
+		// something already on disk (§AJ #24). An explicit --output FILE is the
+		// receiver's own choice and inboxOutputPath returns it verbatim.
+		if output == "" || isDirTarget(output) {
+			outPath = clicore.UniquePath(outPath)
+		}
 		if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
 			return count, err
 		}
@@ -5778,4 +5815,18 @@ func managedInstall() (managedInstallInfo, bool) {
 	default:
 		return managedInstallInfo{}, false
 	}
+}
+
+// isDirTarget reports whether an --output value names a directory (existing, or
+// written with a trailing separator), in which case the file name inside it
+// still comes from the sender.
+func isDirTarget(output string) bool {
+	if output == "" {
+		return true
+	}
+	if strings.HasSuffix(output, string(filepath.Separator)) {
+		return true
+	}
+	info, err := os.Stat(output)
+	return err == nil && info.IsDir()
 }
