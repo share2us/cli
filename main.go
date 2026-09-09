@@ -486,9 +486,24 @@ func (a app) handleLoginDeviceLimit(ctx context.Context, client *clicore.Client,
 	return a.handleLoginDeviceLimitDetails(ctx, client, code, opts, details)
 }
 
+// parseOnOff reads a boolean setting the way people type one. Deliberately
+// strict about what it REJECTS: an unrecognised word is an error rather than a
+// silent "off", because silently disabling a receive setting looks exactly like
+// the feature being broken.
+func parseOnOff(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "on", "true", "yes", "y", "1", "enable", "enabled":
+		return true, nil
+	case "off", "false", "no", "n", "0", "disable", "disabled":
+		return false, nil
+	default:
+		return false, fmt.Errorf("expected on or off, got %q", value)
+	}
+}
+
 func (a app) config(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintf(a.stderr, "usage: %s config set-base-url <domain>\n       %s config set-host <url>\n       %s config show\n       %s config set-default <key> <value>\n       %s config unset-default <key>\n       %s config defaults\n       %s config set device alias <name> <ip|pairing>\n       %s config set device trusted <alias|ip>\n       %s config delete device alias|trusted <name>\n", commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName)
+		fmt.Fprintf(a.stderr, "usage: %s config set-base-url <domain>\n       %s config set-host <url>\n       %s config set-receive-dir <path>\n       %s config set-receive-auto on|off\n       %s config show\n       %s config set-default <key> <value>\n       %s config unset-default <key>\n       %s config defaults\n       %s config set device alias <name> <ip|pairing>\n       %s config set device trusted <alias|ip>\n       %s config delete device alias|trusted <name>\n", commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName)
 		return 2
 	}
 	switch args[0] {
@@ -530,6 +545,37 @@ func (a app) config(args []string) int {
 		}
 		fmt.Fprintf(a.stdout, "API host set to %s\n", host)
 		return 0
+	case "set-receive-dir":
+		if len(args) != 2 {
+			fmt.Fprintf(a.stderr, "usage: %s config set-receive-dir <path>   (empty path restores the default)\n", commandName)
+			return 2
+		}
+		if err := clicore.SetReceiveDir(args[1]); err != nil {
+			return a.fail("save config", err)
+		}
+		cfg, _ := clicore.LoadConfig()
+		fmt.Fprintf(a.stdout, "Files sent to this device will be saved to %s\n", cfg.ReceiveSettings().Dir)
+		return 0
+	case "set-receive-auto":
+		if len(args) != 2 {
+			fmt.Fprintf(a.stderr, "usage: %s config set-receive-auto on|off\n", commandName)
+			return 2
+		}
+		auto, err := parseOnOff(args[1])
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 2
+		}
+		if err := clicore.SetReceiveAuto(auto); err != nil {
+			return a.fail("save config", err)
+		}
+		if auto {
+			cfg, _ := clicore.LoadConfig()
+			fmt.Fprintf(a.stdout, "Incoming files will be saved automatically to %s\n", cfg.ReceiveSettings().Dir)
+		} else {
+			fmt.Fprintf(a.stdout, "Incoming files will wait until you run `%s receive`\n", commandName)
+		}
+		return 0
 	case "show", "get-host":
 		host, source, err := resolveAPIBase()
 		if err != nil {
@@ -548,6 +594,18 @@ func (a app) config(args []string) int {
 			return a.fail("resolve share base", err)
 		}
 		fmt.Fprintf(a.stdout, "Base URL: %s\nBase URL source: %s\nAPI base: %s\nAPI base source: %s\nShare base: %s\nShare base source: %s\n", baseURL, baseSource, host, source, shareBase, shareSource)
+		// Where incoming files land is the setting people most often go looking
+		// for, and it used to be three different unwritten answers (§AG).
+		cfg, _ := clicore.LoadConfig()
+		recv := cfg.ReceiveSettings()
+		auto := "ask on first arrival"
+		if recv.AutoAnswered {
+			auto = "off (run `" + commandName + " receive`)"
+			if recv.Auto {
+				auto = "on"
+			}
+		}
+		fmt.Fprintf(a.stdout, "Receive folder: %s\nReceive automatically: %s\n", recv.Dir, auto)
 		return 0
 	case "set-default":
 		if len(args) != 3 {
@@ -4488,6 +4546,16 @@ func p2pOutputWriter(output, room string, stdout io.Writer) (io.Writer, string, 
 	return f, target, func() { _ = f.Close() }, nil
 }
 
+// receive downloads files sent to this device. Its shape follows §AG:
+//
+//   - a bare `receive` LISTS what is waiting (see the deprecation note below);
+//   - `receive [DIR]` on a terminal offers a numbered picker, because several
+//     files can be waiting and taking all of them is a decision, not a default;
+//   - `--all` and `--id` are the non-interactive forms, and a non-TTY MUST use
+//     one of them rather than hang waiting for input that will never come.
+//
+// The destination now comes from the shared receive setting instead of the
+// CURRENT WORKING DIRECTORY, which is where this command used to drop files.
 func (a app) receive(ctx context.Context, args []string) int {
 	opts, err := parseReceiveArgs(args)
 	if err != nil {
@@ -4503,22 +4571,185 @@ func (a app) receive(ctx context.Context, args []string) int {
 	if err != nil {
 		return a.fail("ensure device key", err)
 	}
-	for {
-		received, err := receiveInboxOnce(ctx, client, credential, opts.output, a.stdout)
-		if err != nil {
-			return a.fail("receive", err)
-		}
-		if !opts.watch {
-			if received == 0 {
-				fmt.Fprintln(a.stdout, "No new device shares")
-				if pending, err := client.ListPendingInbox(ctx); err == nil && len(pending.Shares) > 0 {
-					fmt.Fprintf(a.stdout, "%d file(s) awaiting your approval — run '%s incoming'\n", len(pending.Shares), commandName)
-				}
+	dest := a.receiveDir(opts.output)
+
+	// --watch is a daemon-shaped loop: it takes everything, as it always has.
+	if opts.watch {
+		for {
+			if _, err := receiveInboxOnce(ctx, client, credential, dest, a.stdout); err != nil {
+				return a.fail("receive", err)
 			}
-			return 0
+			a.sleep(5 * time.Second)
 		}
-		a.sleep(5 * time.Second)
 	}
+
+	waiting, err := a.waitingInbox(ctx, client, credential)
+	if err != nil {
+		return a.fail("receive", err)
+	}
+	if len(waiting) == 0 {
+		fmt.Fprintln(a.stdout, "No new device shares")
+		a.reportPendingApprovals(ctx, client)
+		return 0
+	}
+
+	// --id: take exactly the named shares.
+	if len(opts.ids) > 0 {
+		only := map[string]bool{}
+		known := map[string]bool{}
+		for _, s := range waiting {
+			known[s.PublicID] = true
+		}
+		for _, id := range opts.ids {
+			if !known[id] {
+				fmt.Fprintf(a.stderr, "%s is not waiting to be received (run `%s receive` to see what is)\n", id, commandName)
+				return 1
+			}
+			only[id] = true
+		}
+		return a.saveInbox(ctx, client, credential, dest, only)
+	}
+	if opts.all {
+		return a.saveInbox(ctx, client, credential, dest, nil)
+	}
+
+	// Neither --all nor --id was given, so WHICH files is still an open question.
+	// One rule decides it: ask if there is somebody to ask.
+	//
+	//   TTY, no destination  -> list what is waiting (nothing is written)
+	//   TTY, a destination   -> the numbered picker
+	//   not a TTY            -> take everything, as this command always has,
+	//                           and warn that the next release will require --all
+	//
+	// The non-TTY branch is what keeps every existing script working. Erroring
+	// there today would break `receive --out DIR` in a cron job with no warning,
+	// which is exactly what the staged rollout exists to avoid (§AG D5); it
+	// becomes an error one release later.
+	if !a.inputIsTTY() {
+		fmt.Fprintf(a.stderr, "warning: `%s receive` without --all or --id will stop taking every waiting file in the next release. Add --all to keep this behaviour.\n", commandName)
+		return a.saveInbox(ctx, client, credential, dest, nil)
+	}
+	if !opts.explicitDest {
+		a.printWaiting(waiting, dest)
+		a.reportPendingApprovals(ctx, client)
+		return 0
+	}
+	only, ok := a.pickInbox(waiting)
+	if !ok {
+		return 0 // cancelled: not an error
+	}
+	return a.saveInbox(ctx, client, credential, dest, only)
+}
+
+// waitingInbox lists the shares this device can actually decrypt and has not
+// already saved — what a person means by "waiting".
+func (a app) waitingInbox(ctx context.Context, client *clicore.Client, credential clicore.Credential) ([]clicore.InboxShare, error) {
+	inbox, err := client.Inbox(ctx)
+	if err != nil {
+		return nil, err
+	}
+	received, err := loadReceivedInbox()
+	if err != nil {
+		return nil, err
+	}
+	var out []clicore.InboxShare
+	for _, share := range inbox.Shares {
+		if strings.TrimSpace(share.PublicID) == "" || strings.TrimSpace(share.SealedKey) == "" {
+			continue
+		}
+		if _, done := received[share.PublicID]; done {
+			continue
+		}
+		out = append(out, share)
+	}
+	return out, nil
+}
+
+func (a app) printWaiting(waiting []clicore.InboxShare, dest string) {
+	fmt.Fprintf(a.stdout, "%d file(s) waiting:\n", len(waiting))
+	for _, s := range waiting {
+		fmt.Fprintf(a.stdout, "  %s  %s  %s%s\n", s.PublicID, s.FileName, humanSize(int64(s.SizeBytes)), fromSuffix(s.FromDeviceName))
+	}
+	fmt.Fprintf(a.stdout, "\nTo save them: %s receive %s   (or --id <public-id> for one)\n", commandName, dest)
+}
+
+// pickInbox asks which waiting files to save. Returns nil for "all".
+func (a app) pickInbox(waiting []clicore.InboxShare) (map[string]bool, bool) {
+	for i, s := range waiting {
+		fmt.Fprintf(a.stderr, "  %d  %s  %s%s\n", i+1, s.FileName, humanSize(int64(s.SizeBytes)), fromSuffix(s.FromDeviceName))
+	}
+	fmt.Fprintf(a.stderr, "Select (1-%d, a=all, q=quit): ", len(waiting))
+	reader := bufio.NewReader(a.input())
+	line, _ := reader.ReadString('\n')
+	switch answer := strings.ToLower(strings.TrimSpace(line)); answer {
+	case "", "q", "quit", "n", "no":
+		return nil, false
+	case "a", "all":
+		return nil, true
+	default:
+		only := map[string]bool{}
+		// Accept "1", "1,3", "1 3" — people type all three.
+		for _, field := range strings.FieldsFunc(answer, func(r rune) bool { return r == ',' || r == ' ' }) {
+			n, err := strconv.Atoi(strings.TrimSpace(field))
+			if err != nil || n < 1 || n > len(waiting) {
+				fmt.Fprintf(a.stderr, "not a choice on the list: %q\n", field)
+				return nil, false
+			}
+			only[waiting[n-1].PublicID] = true
+		}
+		if len(only) == 0 {
+			return nil, false
+		}
+		return only, true
+	}
+}
+
+func (a app) saveInbox(ctx context.Context, client *clicore.Client, credential clicore.Credential, dest string, only map[string]bool) int {
+	if _, err := receiveInboxSelected(ctx, client, credential, dest, a.stdout, only); err != nil {
+		return a.fail("receive", err)
+	}
+	return 0
+}
+
+func (a app) reportPendingApprovals(ctx context.Context, client *clicore.Client) {
+	if pending, err := client.ListPendingInbox(ctx); err == nil && len(pending.Shares) > 0 {
+		fmt.Fprintf(a.stdout, "%d file(s) awaiting your approval — run '%s incoming'\n", len(pending.Shares), commandName)
+	}
+}
+
+// receiveDir resolves where files land: an explicit argument beats the
+// configured folder, which beats the Downloads default.
+func (a app) receiveDir(explicit string) string {
+	if strings.TrimSpace(explicit) != "" {
+		return explicit
+	}
+	cfg, err := clicore.LoadConfig()
+	if err != nil {
+		return clicore.DownloadsDir()
+	}
+	return cfg.ReceiveSettings().Dir
+}
+
+// humanSize renders a byte count the way a person reads one. Deliberately plain
+// (no padding): it sits in a list where the file name is what the eye follows.
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for size := n / unit; size >= unit; size /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+func fromSuffix(from string) string {
+	if strings.TrimSpace(from) == "" {
+		return ""
+	}
+	return "  from " + from
 }
 
 // reseal re-seals in-flight end-to-end shares whose recipient re-keyed since the send, using
@@ -4639,6 +4870,16 @@ func parseStreamArgs(args []string) (streamOptions, error) {
 type receiveOptions struct {
 	output string
 	watch  bool
+	// all takes every waiting file without asking. Required in a non-TTY, where
+	// the picker has nobody to ask.
+	all bool
+	// ids takes exactly these shares (repeatable --id).
+	ids []string
+	// explicitDest records that a destination was NAMED, which is what separates
+	// "show me what's waiting" from "save it here". Without it a bare `receive`
+	// and `receive ~/dir` would be indistinguishable once the configured folder
+	// filled in the destination.
+	explicitDest bool
 }
 
 func parseReceiveArgs(args []string) (receiveOptions, error) {
@@ -4654,13 +4895,33 @@ func parseReceiveArgs(args []string) (receiveOptions, error) {
 				return receiveOptions{}, errors.New("--out requires a value")
 			}
 			opts.output = args[i]
+			opts.explicitDest = true
 		case strings.HasPrefix(arg, "--out="):
 			opts.output = strings.TrimPrefix(arg, "--out=")
+			opts.explicitDest = true
+		case arg == "--all" || arg == "-a":
+			opts.all = true
+		case arg == "--id":
+			i++
+			if i >= len(args) {
+				return receiveOptions{}, errors.New("--id requires a value")
+			}
+			opts.ids = append(opts.ids, strings.TrimSpace(args[i]))
+		case strings.HasPrefix(arg, "--id="):
+			opts.ids = append(opts.ids, strings.TrimSpace(strings.TrimPrefix(arg, "--id=")))
 		case strings.HasPrefix(arg, "-"):
 			return receiveOptions{}, fmt.Errorf("unknown flag: %s", arg)
 		default:
-			return receiveOptions{}, fmt.Errorf("unexpected argument: %s", arg)
+			// A bare path is the destination: `s2u receive ~/inbox`.
+			if opts.output != "" {
+				return receiveOptions{}, fmt.Errorf("receive accepts one destination folder, got a second: %s", arg)
+			}
+			opts.output = arg
+			opts.explicitDest = true
 		}
+	}
+	if opts.all && len(opts.ids) > 0 {
+		return receiveOptions{}, errors.New("--all and --id cannot be combined")
 	}
 	return opts, nil
 }
@@ -4739,6 +5000,13 @@ func ensureDeviceKey(ctx context.Context, client *clicore.Client, credential cli
 }
 
 func receiveInboxOnce(ctx context.Context, client *clicore.Client, credential clicore.Credential, output string, stdout io.Writer) (int, error) {
+	return receiveInboxSelected(ctx, client, credential, output, stdout, nil)
+}
+
+// receiveInboxSelected downloads waiting inbox shares. A nil `only` takes
+// everything (the watch loop and --all); a non-nil one takes just those public
+// IDs, which is what the interactive picker and --id use.
+func receiveInboxSelected(ctx context.Context, client *clicore.Client, credential clicore.Credential, output string, stdout io.Writer, only map[string]bool) (int, error) {
 	inbox, err := client.Inbox(ctx)
 	if err != nil {
 		return 0, err
@@ -4753,6 +5021,9 @@ func receiveInboxOnce(ctx context.Context, client *clicore.Client, credential cl
 			continue
 		}
 		if _, ok := received[share.PublicID]; ok {
+			continue
+		}
+		if only != nil && !only[share.PublicID] {
 			continue
 		}
 		contentKey, err := clicore.OpenSealedContentKey(share.SealedKey, credential.DevicePublicKey, credential.DevicePrivateKey)

@@ -3162,3 +3162,144 @@ func TestUploadPrivateRefusesWhenServerSaysPublic(t *testing.T) {
 		t.Fatalf("unhelpful message: %s", stderr.String())
 	}
 }
+
+// ---- §AG: where received files land, and which ones ------------------------
+
+// The inbox endpoints the receive command talks to. sealed is a share this
+// device can actually open; the test key is the credential's own device key.
+func fakeInboxAPI(t *testing.T, shares []map[string]any) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		// receive registers a device key first when the credential has none.
+		case r.URL.Path == "/v1/auth/devices/key":
+			writeTestJSON(w, map[string]any{"status": "ok"})
+		case r.URL.Path == "/v1/inbox":
+			writeTestJSON(w, map[string]any{"shares": shares})
+		case r.URL.Path == "/v1/inbox/pending":
+			writeTestJSON(w, map[string]any{"shares": []any{}})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	})
+}
+
+// A bare `receive` on a terminal now LISTS what is waiting instead of writing
+// files into whatever directory the shell happened to be in.
+func TestReceiveBareListsOnATerminal(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 2100000, "sealed_key": "sealed", "from_device_name": "openclaw"},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	if code := a.run(context.Background(), []string{"receive"}); code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "pub-1") || !strings.Contains(out, "report.pdf") {
+		t.Fatalf("the waiting file was not listed:\n%s", out)
+	}
+	if !strings.Contains(out, "from openclaw") {
+		t.Fatalf("the sender was not named:\n%s", out)
+	}
+	// Listing must not write anything.
+	if strings.Contains(out, "Received ") {
+		t.Fatalf("a bare receive downloaded something:\n%s", out)
+	}
+}
+
+// A script has nobody to ask, so it must keep working exactly as before -- with
+// a warning that this is the last release where that is true. Erroring here
+// today would break a cron job with no notice, which the staged rollout exists
+// to prevent.
+func TestReceiveNonTTYTakesAllWithADeprecationWarning(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 10, "sealed_key": "sealed"},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return false }}
+
+	a.run(context.Background(), []string{"receive"})
+
+	if !strings.Contains(stderr.String(), "will stop taking every waiting file") {
+		t.Fatalf("no deprecation warning for the scripted path:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--all") {
+		t.Fatalf("the warning does not say what to do instead:\n%s", stderr.String())
+	}
+}
+
+// Naming a destination on a terminal offers the numbered picker, because
+// several files can be waiting and taking all of them is a decision.
+func TestReceiveWithDestinationOffersThePicker(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 10, "sealed_key": "sealed"},
+		{"public_id": "pub-2", "file_name": "photos.zip", "size_bytes": 20, "sealed_key": "sealed"},
+	}))
+	var stdout, stderr bytes.Buffer
+	// "q" cancels, which is what lets this assert the prompt without needing a
+	// decryptable payload.
+	a := app{stdin: strings.NewReader("q\n"), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	if code := a.run(context.Background(), []string{"receive", t.TempDir()}); code != 0 {
+		t.Fatalf("cancelling the picker is not an error; code = %d", code)
+	}
+	prompt := stderr.String()
+	if !strings.Contains(prompt, "1  report.pdf") || !strings.Contains(prompt, "2  photos.zip") {
+		t.Fatalf("the picker did not list both files:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Select (1-2, a=all, q=quit)") {
+		t.Fatalf("no selection prompt:\n%s", prompt)
+	}
+}
+
+// The picker must not run where nobody can answer it: a destination plus no
+// terminal takes everything (with the warning), rather than hanging forever on
+// a read that never returns.
+func TestReceiveWithDestinationDoesNotPromptWithoutATerminal(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 10, "sealed_key": "sealed"},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return false }}
+
+	a.run(context.Background(), []string{"receive", t.TempDir()})
+
+	if strings.Contains(stderr.String(), "Select (") {
+		t.Fatalf("prompted with no terminal to answer it:\n%s", stderr.String())
+	}
+}
+
+// --id names a share that is not waiting: say so rather than silently doing
+// nothing, which would read as success.
+func TestReceiveUnknownIDFails(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 10, "sealed_key": "sealed"},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	if code := a.run(context.Background(), []string{"receive", t.TempDir(), "--id", "pub-nope"}); code == 0 {
+		t.Fatal("an unknown --id must fail")
+	}
+	if !strings.Contains(stderr.String(), "not waiting to be received") {
+		t.Fatalf("unhelpful message:\n%s", stderr.String())
+	}
+}
+
+func TestReceiveRejectsAllWithID(t *testing.T) {
+	if _, err := parseReceiveArgs([]string{"--all", "--id", "x"}); err == nil {
+		t.Fatal("--all and --id must not be combinable")
+	}
+}
