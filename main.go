@@ -4670,7 +4670,45 @@ func (a app) printWaiting(waiting []clicore.InboxShare, dest string) {
 	for _, s := range waiting {
 		fmt.Fprintf(a.stdout, "  %s  %s  %s%s\n", s.PublicID, s.FileName, humanSize(int64(s.SizeBytes)), fromSuffix(s.FromDeviceName))
 	}
+	// A waiting file is not kept forever: it expires like any other share, and
+	// nobody is watching a queue they cannot see the deadline on (§AG D6).
+	if soonest, ok := soonestExpiry(waiting, time.Now()); ok {
+		fmt.Fprintf(a.stdout, "\nOldest expires in %s.\n", humanUntil(soonest))
+	}
 	fmt.Fprintf(a.stdout, "\nTo save them: %s receive %s   (or --id <public-id> for one)\n", commandName, dest)
+}
+
+// soonestExpiry finds the nearest expiry among the waiting shares. Shares with
+// an unparseable or absent expiry are ignored rather than guessed at: a wrong
+// deadline is worse than none.
+func soonestExpiry(waiting []clicore.InboxShare, now time.Time) (time.Duration, bool) {
+	best := time.Duration(0)
+	found := false
+	for _, s := range waiting {
+		at, err := time.Parse(time.RFC3339, strings.TrimSpace(s.ExpiresAt))
+		if err != nil {
+			continue
+		}
+		left := at.Sub(now)
+		if !found || left < best {
+			best, found = left, true
+		}
+	}
+	return best, found
+}
+
+// humanUntil renders a remaining duration the way a person would say it.
+func humanUntil(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return "less than a minute"
+	case d < time.Hour:
+		return fmt.Sprintf("%d minutes", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%d hours", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%d days", int(d.Hours()/24))
+	}
 }
 
 // pickInbox asks which waiting files to save. Returns nil for "all".

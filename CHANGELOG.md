@@ -16,6 +16,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      ship while this section is empty (HTML comments do not count). -->
 
 ### Added
+- **Files sent to this device now land somewhere predictable.** `s2u receive`
+  used to drop them into whatever directory you happened to be in. It now uses
+  your receive folder (`s2u config set-receive-dir`, defaulting to Downloads),
+  which the desktop app and the background service read too — previously all
+  three disagreed and none of them could be configured.
+- **`s2u receive` shows what is waiting, and lets you choose.** A bare `receive`
+  lists the waiting files and when the oldest expires. `receive <folder>` offers
+  a numbered picker, since several files can be waiting. `--all` and
+  `--id <public-id>` are the forms for scripts.
+- **`s2u daemon install` asks where files should go** and whether to save them
+  automatically, because the background service itself has nobody to ask.
 - **`--private` uploads a file without sharing it with anyone.** The share is
   yours alone: nobody else can open the link, even holding it. Passing that link
   back to `s2u` on any device you are signed in on gets the file, which is the
@@ -26,6 +37,10 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   was anonymous and the three ways to prove you are allowed all need a browser.
 
 ### Changed
+- **`s2u receive` with no arguments will stop downloading everything.** It lists
+  what is waiting instead. This release still downloads when run from a script
+  and prints a warning; add `--all` to keep that behaviour permanently. Nothing
+  changes for `--watch`.
 - **`discover --download` now checks who is offering the file.** A device's name
   on the network can be claimed by anything, so before pulling an offer the
   command shows the verify code and asks whether the other device is displaying

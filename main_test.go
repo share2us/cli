@@ -3303,3 +3303,45 @@ func TestReceiveRejectsAllWithID(t *testing.T) {
 		t.Fatal("--all and --id must not be combinable")
 	}
 }
+
+// A waiting file is not kept forever: it expires like any other share, and
+// nobody watches a queue whose deadline they cannot see (§AG D6).
+func TestReceiveListShowsWhenTheOldestExpires(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "a.txt", "size_bytes": 10, "sealed_key": "s",
+			"expires_at": time.Now().Add(50 * time.Hour).UTC().Format(time.RFC3339)},
+		{"public_id": "pub-2", "file_name": "b.txt", "size_bytes": 10, "sealed_key": "s",
+			"expires_at": time.Now().Add(3 * time.Hour).UTC().Format(time.RFC3339)},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	a.run(context.Background(), []string{"receive"})
+
+	if !strings.Contains(stdout.String(), "Oldest expires in 2 hours") {
+		t.Fatalf("no expiry warning, or it named the wrong share:\n%s", stdout.String())
+	}
+}
+
+// A wrong deadline is worse than none, so an unparseable expiry is skipped
+// rather than guessed at.
+func TestReceiveListOmitsExpiryWhenUnknown(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "a.txt", "size_bytes": 10, "sealed_key": "s", "expires_at": ""},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	a.run(context.Background(), []string{"receive"})
+
+	if strings.Contains(stdout.String(), "Oldest expires") {
+		t.Fatalf("invented an expiry it did not know:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "pub-1") {
+		t.Fatalf("the file was not listed at all:\n%s", stdout.String())
+	}
+}
