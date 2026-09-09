@@ -36,6 +36,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   signed in on the CLI was refused their own file, because every download path
   was anonymous and the three ways to prove you are allowed all need a browser.
 
+### Fixed
+- **Prompts no longer appear when nothing can answer them.** A command run with
+  its input redirected from `/dev/null` was treated as interactive, because
+  `/dev/null` is technically a character device. Anything that asks a question —
+  the new receive picker, the daemon installer, confirmation prompts — could
+  therefore stop and wait in a script or a CI job. Terminal detection is now a
+  real check.
+
 ### Changed
 - **`s2u receive` with no arguments will stop downloading everything.** It lists
   what is waiting instead. This release still downloads when run from a script

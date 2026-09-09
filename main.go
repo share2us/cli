@@ -5384,11 +5384,7 @@ func isTerminalWriter(w io.Writer) bool {
 	if !ok {
 		return false
 	}
-	info, err := file.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return isCharTerminal(file)
 }
 
 func isTerminalReader(r io.Reader) bool {
@@ -5396,11 +5392,7 @@ func isTerminalReader(r io.Reader) bool {
 	if !ok {
 		return false
 	}
-	info, err := file.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return isCharTerminal(file)
 }
 
 func (a app) fail(action string, err error) int {

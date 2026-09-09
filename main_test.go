@@ -3345,3 +3345,52 @@ func TestReceiveListOmitsExpiryWhenUnknown(t *testing.T) {
 		t.Fatalf("the file was not listed at all:\n%s", stdout.String())
 	}
 }
+
+// /dev/null is a CHARACTER DEVICE, so the old os.ModeCharDevice check called it a
+// terminal. Every prompt guarded by that check then fired at a caller with no way
+// to answer -- the opposite of what the guard is for, and it defeated the
+// non-interactive branch of `receive` (§AG D4/D5).
+func TestTerminalDetectionRejectsDevNull(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Skipf("no %s on this platform: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	if isTerminalReader(devNull) {
+		t.Fatalf("%s is a character device but not a terminal", os.DevNull)
+	}
+	if isTerminalWriter(devNull) {
+		t.Fatalf("%s is a character device but not a terminal", os.DevNull)
+	}
+}
+
+// A pipe (the shape of `cmd | s2u ...` and of every CI runner) is not a terminal.
+func TestTerminalDetectionRejectsAPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	if isTerminalReader(r) {
+		t.Fatal("a pipe is not a terminal")
+	}
+	if isTerminalWriter(w) {
+		t.Fatal("a pipe is not a terminal")
+	}
+}
+
+// A regular file must not be mistaken for one either.
+func TestTerminalDetectionRejectsARegularFile(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "tty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	if isTerminalReader(f) || isTerminalWriter(f) {
+		t.Fatal("a regular file is not a terminal")
+	}
+}
