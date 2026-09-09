@@ -2898,3 +2898,267 @@ func TestManagedInstallLeavesAPlainInstallAlone(t *testing.T) {
 		t.Fatal("a plain install must not be reported as package-managed")
 	}
 }
+
+// The whole point of the owner-unlock retry: a signed-in owner running
+// `s2u <url>` on their OWN private share must get the file, not the verification
+// gate. Every CLI download path is anonymous, so the first GET is refused; the
+// CLI mints an unlock and retries once with ?u= (ADR-022, 2026-09-09 amendment).
+func TestGetPrivateShareUnlocksAsOwner(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	const content = "private bytes"
+	var mintCalls, downloadAttempts int
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/shares/pub-1/unlock":
+			if r.Method != http.MethodPost {
+				t.Fatalf("mint method = %s", r.Method)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer s2s_test" {
+				t.Fatalf("mint auth = %q, want the signed-in credential", got)
+			}
+			mintCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": "unlock-tok", "expires_in": 300})
+		case "/d/pub-1":
+			downloadAttempts++
+			if r.URL.Query().Get("u") == "" {
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{
+					"code": "recipient_verification_required", "message": "Open this share from the link in your email",
+				}})
+				return
+			}
+			if got := r.URL.Query().Get("u"); got != "unlock-tok" {
+				t.Fatalf("unlock token = %q", got)
+			}
+			w.Header().Set("Content-Disposition", `attachment; filename="secret.txt"`)
+			_, _ = w.Write([]byte(content))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	out := filepath.Join(t.TempDir(), "secret.txt")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"get", "pub-1", "--output", out}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("output = %q, want %q", got, content)
+	}
+	if mintCalls != 1 {
+		t.Fatalf("mint calls = %d, want exactly 1", mintCalls)
+	}
+	if downloadAttempts != 2 {
+		t.Fatalf("download attempts = %d, want 2 (refused, then unlocked)", downloadAttempts)
+	}
+}
+
+// Only recipient_verification_required is retried. A different 403 means exactly
+// what it says, and retrying it would turn a clear refusal into a second request
+// and a confusing message.
+func TestGetDoesNotUnlockOnOtherRefusals(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	var mintCalls, downloadAttempts int
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/shares/pub-1/unlock" {
+			mintCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": "unlock-tok"})
+			return
+		}
+		downloadAttempts++
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{
+			"code": "recipient_not_allowed", "message": "This share isn't shared with you",
+		}})
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"get", "pub-1", "--output", filepath.Join(t.TempDir(), "x")}, &stdout, &stderr); code == 0 {
+		t.Fatal("a recipient_not_allowed refusal must fail")
+	}
+	if mintCalls != 0 {
+		t.Fatalf("mint calls = %d, want 0", mintCalls)
+	}
+	if downloadAttempts != 1 {
+		t.Fatalf("download attempts = %d, want 1 (no retry)", downloadAttempts)
+	}
+	if !strings.Contains(stderr.String(), "isn't shared with you") {
+		t.Fatalf("the original refusal was lost: %s", stderr.String())
+	}
+}
+
+// Not signed in: there is nothing to mint with, so say what to do instead of
+// failing with a bare 403.
+func TestGetPrivateShareWithoutLoginExplains(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("SHARE2US_API_BASE", "https://api.staging.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/unlock") {
+			t.Fatal("must not try to mint without a login")
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{
+			"code": "recipient_verification_required", "message": "Verification needed",
+		}})
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"get", "pub-1", "--output", filepath.Join(t.TempDir(), "x")}, &stdout, &stderr); code == 0 {
+		t.Fatal("an anonymous caller must not succeed on a private share")
+	}
+	if !strings.Contains(stderr.String(), "login") {
+		t.Fatalf("expected a sign-in hint, got: %s", stderr.String())
+	}
+}
+
+// A share owned by somebody else 404s at the mint endpoint (it is account-scoped
+// and deliberately does not distinguish "not yours" from "no such share"). For
+// somebody holding the link that really means "you are not a recipient", and the
+// message must say so rather than leak a bare 404.
+func TestGetPrivateShareNotOursExplains(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/unlock") {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "not_found", "message": "share not found"}})
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{
+			"code": "recipient_verification_required", "message": "Verification needed",
+		}})
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"get", "pub-1", "--output", filepath.Join(t.TempDir(), "x")}, &stdout, &stderr); code == 0 {
+		t.Fatal("a share we do not own must not succeed")
+	}
+	if !strings.Contains(stderr.String(), "isn't shared with this account") {
+		t.Fatalf("unhelpful message: %s", stderr.String())
+	}
+}
+
+// --private must send visibility:"private" and, since the server confirms what
+// the share actually IS, produce a normal successful upload.
+func TestUploadPrivateSendsVisibility(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	path := writeTempFile(t, "notes.txt", "private notes")
+	var sentVisibility string
+	var uploaded bool
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/uploads":
+			var req clicore.UploadCreateRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode create request: %v", err)
+			}
+			sentVisibility = req.Visibility
+			writeTestJSON(w, map[string]any{
+				"upload": map[string]any{"url": "https://upload.example.test/put", "method": "PUT", "headers": map[string]string{}},
+				"share": map[string]any{
+					"public_id":            "pub-priv",
+					"link":                 "https://s.example.test/pub-priv",
+					"recipient_restricted": true,
+				},
+				"upload_session_id": "up-1",
+				"expires_at":        "2026-07-03T00:00:00Z",
+			})
+		case "/put":
+			uploaded = true
+			w.WriteHeader(http.StatusOK)
+		case "/v1/uploads/up-1/complete":
+			writeTestJSON(w, map[string]any{"public_id": "pub-priv", "status": "ready", "expires_at": "2026-07-03T00:00:00Z"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{path, "--private"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	if sentVisibility != "private" {
+		t.Fatalf("visibility sent = %q, want private", sentVisibility)
+	}
+	if !uploaded {
+		t.Fatal("the file was never uploaded")
+	}
+}
+
+// An older server ignores the unknown "visibility" field and returns 201 with a
+// PUBLIC link. That is the one outcome a private upload must never end in, so the
+// CLI stops BEFORE putting any bytes: the share row exists but has no content and
+// is never downloadable.
+func TestUploadPrivateRefusesWhenServerIgnoresIt(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	path := writeTempFile(t, "notes.txt", "private notes")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/uploads":
+			// No recipient_restricted field at all: the old-server shape.
+			writeTestJSON(w, map[string]any{
+				"upload": map[string]any{"url": "https://upload.example.test/put", "method": "PUT", "headers": map[string]string{}},
+				"share": map[string]any{
+					"public_id": "pub-oops",
+					"link":      "https://s.example.test/pub-oops",
+				},
+				"upload_session_id": "up-1",
+				"expires_at":        "2026-07-03T00:00:00Z",
+			})
+		case "/put":
+			t.Fatal("bytes were uploaded despite --private not being honoured")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{path, "--private"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("a silently-public share must fail; stdout=%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "does not support --private") {
+		t.Fatalf("unhelpful message: %s", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "pub-oops") {
+		t.Fatalf("a public link was printed for a --private upload: %s", stdout.String())
+	}
+}
+
+// A server that understands the field but explicitly reports the share as public
+// is the same failure, reported differently.
+func TestUploadPrivateRefusesWhenServerSaysPublic(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	path := writeTempFile(t, "notes.txt", "private notes")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/uploads":
+			writeTestJSON(w, map[string]any{
+				"upload": map[string]any{"url": "https://upload.example.test/put", "method": "PUT", "headers": map[string]string{}},
+				"share": map[string]any{
+					"public_id":            "pub-oops",
+					"link":                 "https://s.example.test/pub-oops",
+					"recipient_restricted": false,
+				},
+				"upload_session_id": "up-1",
+				"expires_at":        "2026-07-03T00:00:00Z",
+			})
+		case "/put":
+			t.Fatal("bytes were uploaded despite the share being public")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{path, "--private"}, &stdout, &stderr); code == 0 {
+		t.Fatal("a public share must fail a --private upload")
+	}
+	if !strings.Contains(stderr.String(), "did not make this share private") {
+		t.Fatalf("unhelpful message: %s", stderr.String())
+	}
+}

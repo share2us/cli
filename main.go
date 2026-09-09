@@ -1751,6 +1751,7 @@ func (a app) upload(ctx context.Context, args []string) int {
 			return ""
 		}(),
 		Recipients:     opts.recipients,
+		Visibility:     visibilityForUpload(opts),
 		MaxViews:       opts.maxViews,
 		AllowedDomains: opts.allowedDomains,
 		DeniedDomains:  opts.deniedDomains,
@@ -1774,6 +1775,23 @@ func (a app) upload(ctx context.Context, args []string) int {
 		}
 		a.hintLocalShareOnUnreachable(err, opts.path)
 		return a.fail("create upload", err)
+	}
+
+	// STOP BEFORE UPLOADING BYTES if --private did not take. An older server
+	// ignores an unknown "visibility" and returns 201 with a PUBLIC link, which
+	// is the one outcome a private upload must never end in — and the user would
+	// see a success and a link. The share row exists but has no content, so it is
+	// never downloadable; nothing leaks.
+	if opts.private {
+		private, known := created.Share.IsPrivate()
+		if !known {
+			fmt.Fprintln(a.stderr, "this server does not support --private (it would have created a PUBLIC link). Nothing was uploaded. Update the server, or upload and then make it private in the portal.")
+			return 1
+		}
+		if !private {
+			fmt.Fprintln(a.stderr, "the server did not make this share private. Nothing was uploaded.")
+			return 1
+		}
 	}
 
 	completed := clicore.UploadCompleteResponse{
@@ -1932,6 +1950,7 @@ type uploadOptions struct {
 	qrLink         bool
 	restrict       bool
 	unrestrict     bool
+	private        bool
 	fromStdin      bool
 }
 
@@ -2078,6 +2097,8 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 			opts.qr = true
 		case arg == "--qrl" || arg == "--qr-link":
 			opts.qrLink = true
+		case arg == "--private":
+			opts.private = true
 		case arg == "--unrestrict":
 			opts.unrestrict = true
 		case arg == "--restrict":
@@ -2100,6 +2121,19 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 		return uploadOptions{}, errors.New("--restrict and --unrestrict cannot be combined")
 	}
 	return opts, nil
+}
+
+// visibilityForUpload maps --private to the API's visibility field. A private
+// share needs NO recipients: the gateway admits the recipient list or an active
+// user of the owning account, so an empty list is exactly "only me" (ADR-022).
+//
+// --to/--email already produce a recipient-restricted share on their own, so
+// there is nothing to add there; "" leaves the server default (public).
+func visibilityForUpload(opts uploadOptions) string {
+	if opts.private {
+		return "private"
+	}
+	return ""
 }
 
 // resolveAllowReshare computes the allow_reshare value to send for a new share:
@@ -3217,18 +3251,11 @@ func (a app) downloadPlainShare(ctx context.Context, downloadURL, output, mode s
 	if err != nil {
 		return a.fail("prepare download URL", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return a.fail("prepare download", err)
-	}
-	resp, err := clicore.DefaultHTTPClient.Do(req)
-	if err != nil {
-		return a.fail("download share", err)
+	resp, code := a.fetchShareForDownload(ctx, u, mode)
+	if resp == nil {
+		return code
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return a.failDownloadResponse(resp, mode)
-	}
 
 	outPath := output
 	if outPath == "" {
@@ -3269,10 +3296,119 @@ func (a app) downloadPlainShare(ctx context.Context, downloadURL, output, mode s
 	return 0
 }
 
-// failDownloadResponse maps the gateway's error envelope to a clean CLI message.
-// It never retries (the conversion endpoint is rate-limited at 20/min).
-func (a app) failDownloadResponse(resp *http.Response, mode string) int {
+// fetchShareForDownload performs the gateway GET, transparently handling the one
+// refusal a signed-in OWNER should never see on their own file.
+//
+// A recipient-restricted share refuses an anonymous request with
+// 403 recipient_verification_required, and every CLI download path IS anonymous:
+// the gateway is a separate origin and none of its three verification layers is
+// reachable without a browser. When the caller is signed in, we mint an unlock
+// token for their own share and retry ONCE (ADR-022, 2026-09-09 amendment).
+//
+// Returns (response, 0) on success, or (nil, exit code) after reporting the
+// failure. The response body is the caller's to close.
+func (a app) fetchShareForDownload(ctx context.Context, rawURL, mode string) (*http.Response, int) {
+	resp, err := getURL(ctx, rawURL)
+	if err != nil {
+		return nil, a.fail("download share", err)
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return resp, 0
+	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	resp.Body.Close()
+
+	// ONLY this code, and only once. The neighbouring 403s (recipient_not_allowed,
+	// reshare_disabled) mean exactly what they say: retrying them would turn a
+	// clear refusal into a confusing second request.
+	if errorCodeFromBody(body) != "recipient_verification_required" {
+		return nil, a.failDownloadBody(resp.StatusCode, body, mode)
+	}
+
+	token, err := a.mintOwnerUnlock(ctx, rawURL)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return nil, 1
+	}
+	unlockedURL, err := withUnlockToken(rawURL, token)
+	if err != nil {
+		return nil, a.fail("prepare download URL", err)
+	}
+	retry, err := getURL(ctx, unlockedURL)
+	if err != nil {
+		return nil, a.fail("download share", err)
+	}
+	if retry.StatusCode >= 200 && retry.StatusCode < 300 {
+		return retry, 0
+	}
+	retryBody, _ := io.ReadAll(io.LimitReader(retry.Body, 1<<16))
+	retry.Body.Close()
+	return nil, a.failDownloadBody(retry.StatusCode, retryBody, mode)
+}
+
+// mintOwnerUnlock asks the API for an unlock token for this share. It only works
+// for a share the caller's own ACCOUNT owns; anything else is a 404 server-side.
+func (a app) mintOwnerUnlock(ctx context.Context, rawURL string) (string, error) {
+	client, credential, ok := a.authClient()
+	if !ok {
+		return "", fmt.Errorf("this share is private. If it is yours, run `%s login` and try again; otherwise open the link from the email it was shared with.", commandName)
+	}
+	if clicore.IsAPIToken(credential.Token) {
+		return "", errors.New("this share is private, and a personal API token can't open one. Use an interactive login (`" + commandName + " login`).")
+	}
+	publicID, err := publicIDFromTarget(rawURL)
+	if err != nil {
+		return "", err
+	}
+	token, err := client.UnlockOwnShare(ctx, publicID)
+	if err != nil {
+		// A 404 here means "not your share" (the endpoint is account-scoped and
+		// deliberately does not distinguish that from "no such share"), which for
+		// somebody holding the link is really "you are not a recipient".
+		var apiErr *clicore.APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return "", errors.New("this share is private and isn't shared with this account. Open the link from the email it was shared with.")
+		}
+		return "", fmt.Errorf("unlock this share: %w", err)
+	}
+	return token, nil
+}
+
+func getURL(ctx context.Context, rawURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	return clicore.DefaultHTTPClient.Do(req)
+}
+
+// withUnlockToken adds the gateway's ?u= recipient unlock parameter, preserving
+// the download-mode parameter already on the URL.
+func withUnlockToken(rawURL, token string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", err
+	}
+	query := parsed.Query()
+	query.Set("u", token)
+	parsed.RawQuery = query.Encode()
+	return parsed.String(), nil
+}
+
+func errorCodeFromBody(body []byte) string {
+	var env struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &env)
+	return env.Error.Code
+}
+
+// failDownloadBody maps the gateway's error envelope to a clean CLI message. It
+// takes the already-read body so the caller can inspect the error code first
+// (see fetchShareForDownload) without consuming the response.
+func (a app) failDownloadBody(status int, body []byte, mode string) int {
 	var env struct {
 		Error struct {
 			Code    string `json:"code"`
@@ -3286,12 +3422,12 @@ func (a app) failDownloadResponse(resp *http.Response, mode string) int {
 		fmt.Fprintln(a.stderr, "this share can't be converted — only text shares support --convert-pdf/--convert-docx")
 	case code == "conversion_too_large":
 		fmt.Fprintln(a.stderr, "this text share is too large to convert")
-	case resp.StatusCode == http.StatusTooManyRequests || code == "rate_limited":
+	case status == http.StatusTooManyRequests || code == "rate_limited":
 		fmt.Fprintln(a.stderr, "too many conversion requests right now, try again shortly")
 	default:
 		msg := strings.TrimSpace(env.Error.Message)
 		if msg == "" {
-			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+			msg = fmt.Sprintf("HTTP %d", status)
 		}
 		if mode == "pdf" || mode == "docx" {
 			fmt.Fprintf(a.stderr, "convert download failed: %s\n", msg)
