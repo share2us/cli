@@ -840,9 +840,16 @@ func (a app) logout(ctx context.Context) int {
 }
 
 func (a app) devices(ctx context.Context) int {
-	client, _, ok := a.authClient()
+	client, credential, ok := a.authClient()
 	if !ok {
 		fmt.Fprintf(a.stderr, "not logged in; run `%s login`\n", commandName)
+		return 1
+	}
+	// The device list carries every machine's name, fingerprint and last IP, so
+	// the API serves it only to an interactive login (§AJ #17). Say that here
+	// rather than letting a bare 403 surface.
+	if clicore.IsAPIToken(credential.Token) {
+		fmt.Fprintf(a.stderr, "listing your devices needs an interactive login; a personal API token (%s) can't read the device list\n", clicore.APITokenEnv)
 		return 1
 	}
 	devices, err := client.ListDevices(ctx)
