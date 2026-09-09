@@ -359,6 +359,7 @@ func (a app) login(ctx context.Context, args []string) int {
 			APIBase:          apiBase,
 			Token:            token.Credential,
 			Email:            email,
+			AccountID:        me.AccountID,
 			DeviceSessionID:  token.DeviceSessionID,
 			DevicePublicKey:  keyPair.PublicKey,
 			DevicePrivateKey: keyPair.PrivateKey,

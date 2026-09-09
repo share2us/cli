@@ -2707,6 +2707,9 @@ func newFakeTrustAPI(t *testing.T) (*fakeTrustAPI, *httptest.Server) {
 	t.Helper()
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	f := &fakeTrustAPI{priv: priv, pubHex: hex.EncodeToString(pub)}
+	// The fake API signs with a key this build does not compile in; pin it the
+	// way a self-hosted server's operator would (§AJ #10).
+	t.Setenv(lanid.TrustKeysEnv, f.pubHex)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/lan/trust/challenges", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer s2s_test" {
@@ -3606,4 +3609,26 @@ func TestUpdateRefusesOversizedArchive(t *testing.T) {
 		t.Fatalf("code=%d stderr=%s", code, errOut)
 	}
 	mustBeUntouched(t, target)
+}
+
+// §AJ #10: a login saved before credentials carried an account id learns it
+// from the first list the server signs for it, so the cache is bound from then
+// on. (A list for a different account than the bound one is an error.)
+func TestTrustSyncLearnsAccountBinding(t *testing.T) {
+	_, srv := newFakeTrustAPI(t)
+	withCredential(t, srv.URL) // no AccountID
+	t.Setenv("SHARE2US_API_BASE", srv.URL)
+	t.Cleanup(func() { _ = lanid.ResetTrust() })
+	var errOut bytes.Buffer
+	a := app{stdout: io.Discard, stderr: &errOut, stdin: strings.NewReader("123456\n"), stdinIsTTY: func(io.Reader) bool { return true }}
+	if !a.trustDeviceWithMFA(context.Background(), bufio.NewReader(a.input()), "b676f58a180a7fc204ab3a1c0d24eb9eec33b66faa066569eef3fa0d8096d37c", "laptop", lanid.ModeAsk) {
+		t.Fatal(errOut.String())
+	}
+	c, err := clicore.LoadCredential()
+	if err != nil || c.AccountID == "" {
+		t.Fatalf("account id not learned from the verified list (err=%v)", err)
+	}
+	if _, ok := lanid.Lookup("b676f58a180a7fc204ab3a1c0d24eb9eec33b66faa066569eef3fa0d8096d37c"); !ok {
+		t.Fatal("bound cache not honoured")
+	}
 }
