@@ -835,6 +835,12 @@ func (a app) logout(ctx context.Context) int {
 	if err := clicore.DeleteCredential(); err != nil {
 		return a.fail("delete credential", err)
 	}
+	// Retained content keys are plaintext data keys for shares THIS login sent,
+	// and a leaked data key cannot be revoked. They must not outlive the session
+	// that created them (§AJ #23).
+	if err := clicore.ForgetAllRetainedKeys(); err != nil {
+		fmt.Fprintf(a.stderr, "warning: could not clear retained content keys: %v\n", err)
+	}
 	fmt.Fprintln(a.stdout, "Logged out")
 	return 0
 }
