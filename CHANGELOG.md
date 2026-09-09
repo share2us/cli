@@ -15,6 +15,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+## [20260909210845] - 2026-09-09
+
 ### Added
 - **`s2u devices` now tells you which machines can actually receive a file.** It
   led with a session ID nobody types and labelled everything "key" / "no-key".
