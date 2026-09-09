@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -204,6 +205,8 @@ func TestUpdateDownloadsVerifiesAndReplacesCurrentBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cksum archive: %v", err)
 	}
+	allowLocalUpdateSource(t)
+	digest := sha256.Sum256(archive)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -217,6 +220,7 @@ func TestUpdateDownloadsVerifiesAndReplacesCurrentBinary(t *testing.T) {
 					"archive_url": server.URL + "/downloads/share2us_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz",
 					"crc32":       fmt.Sprint(checksum),
 					"size_bytes":  size,
+					"sha256":      hex.EncodeToString(digest[:]),
 				},
 			})
 		case strings.HasSuffix(r.URL.Path, ".tar.gz"):
@@ -248,7 +252,7 @@ func TestUpdateDownloadsVerifiesAndReplacesCurrentBinary(t *testing.T) {
 	if string(updated) != "new binary" {
 		t.Fatalf("updated target = %q", updated)
 	}
-	for _, want := range []string{"Updating share2us", "Downloading " + server.URL, "CRC check passed", "Updated share2us to 20260708123045"} {
+	for _, want := range []string{"Updating share2us", "Downloading " + server.URL, "CRC check passed", "SHA-256 check passed", "Updated share2us to 20260708123045"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q in:\n%s", want, stdout.String())
 		}
@@ -2703,6 +2707,9 @@ func newFakeTrustAPI(t *testing.T) (*fakeTrustAPI, *httptest.Server) {
 	t.Helper()
 	pub, priv, _ := ed25519.GenerateKey(nil)
 	f := &fakeTrustAPI{priv: priv, pubHex: hex.EncodeToString(pub)}
+	// The fake API signs with a key this build does not compile in; pin it the
+	// way a self-hosted server's operator would (§AJ #10).
+	t.Setenv(lanid.TrustKeysEnv, f.pubHex)
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /v1/lan/trust/challenges", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer s2s_test" {
@@ -2896,5 +2903,891 @@ func TestManagedInstallLeavesAPlainInstallAlone(t *testing.T) {
 	managedInstallMarker = t.TempDir() + "/absent"
 	if _, ok := managedInstall(); ok {
 		t.Fatal("a plain install must not be reported as package-managed")
+	}
+}
+
+// The whole point of the owner-unlock retry: a signed-in owner running
+// `s2u <url>` on their OWN private share must get the file, not the verification
+// gate. Every CLI download path is anonymous, so the first GET is refused; the
+// CLI mints an unlock and retries once with ?u= (ADR-022, 2026-09-09 amendment).
+func TestGetPrivateShareUnlocksAsOwner(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	const content = "private bytes"
+	var mintCalls, downloadAttempts int
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/shares/pub-1/unlock":
+			if r.Method != http.MethodPost {
+				t.Fatalf("mint method = %s", r.Method)
+			}
+			if got := r.Header.Get("Authorization"); got != "Bearer s2s_test" {
+				t.Fatalf("mint auth = %q, want the signed-in credential", got)
+			}
+			mintCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": "unlock-tok", "expires_in": 300})
+		case "/d/pub-1":
+			downloadAttempts++
+			// §AJ #21: the token must arrive as a header, never in the URL --
+			// the query string is what Go's client replays as the Referer when
+			// the gateway redirects to the object host.
+			if got := r.URL.Query().Get("u"); got != "" {
+				t.Fatalf("the unlock token was put in the URL (%q); it must be an Authorization header", got)
+			}
+			auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if auth == "" {
+				w.WriteHeader(http.StatusForbidden)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{
+					"code": "recipient_verification_required", "message": "Open this share from the link in your email",
+				}})
+				return
+			}
+			if auth != "unlock-tok" {
+				t.Fatalf("unlock token = %q", auth)
+			}
+			w.Header().Set("Content-Disposition", `attachment; filename="secret.txt"`)
+			_, _ = w.Write([]byte(content))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	out := filepath.Join(t.TempDir(), "secret.txt")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"get", "pub-1", "--output", out}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	got, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("output = %q, want %q", got, content)
+	}
+	if mintCalls != 1 {
+		t.Fatalf("mint calls = %d, want exactly 1", mintCalls)
+	}
+	if downloadAttempts != 2 {
+		t.Fatalf("download attempts = %d, want 2 (refused, then unlocked)", downloadAttempts)
+	}
+}
+
+// Only recipient_verification_required is retried. A different 403 means exactly
+// what it says, and retrying it would turn a clear refusal into a second request
+// and a confusing message.
+func TestGetDoesNotUnlockOnOtherRefusals(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	var mintCalls, downloadAttempts int
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/shares/pub-1/unlock" {
+			mintCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{"token": "unlock-tok"})
+			return
+		}
+		downloadAttempts++
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{
+			"code": "recipient_not_allowed", "message": "This share isn't shared with you",
+		}})
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"get", "pub-1", "--output", filepath.Join(t.TempDir(), "x")}, &stdout, &stderr); code == 0 {
+		t.Fatal("a recipient_not_allowed refusal must fail")
+	}
+	if mintCalls != 0 {
+		t.Fatalf("mint calls = %d, want 0", mintCalls)
+	}
+	if downloadAttempts != 1 {
+		t.Fatalf("download attempts = %d, want 1 (no retry)", downloadAttempts)
+	}
+	if !strings.Contains(stderr.String(), "isn't shared with you") {
+		t.Fatalf("the original refusal was lost: %s", stderr.String())
+	}
+}
+
+// Not signed in: there is nothing to mint with, so say what to do instead of
+// failing with a bare 403.
+func TestGetPrivateShareWithoutLoginExplains(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("SHARE2US_API_BASE", "https://api.staging.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/unlock") {
+			t.Fatal("must not try to mint without a login")
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{
+			"code": "recipient_verification_required", "message": "Verification needed",
+		}})
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"get", "pub-1", "--output", filepath.Join(t.TempDir(), "x")}, &stdout, &stderr); code == 0 {
+		t.Fatal("an anonymous caller must not succeed on a private share")
+	}
+	if !strings.Contains(stderr.String(), "login") {
+		t.Fatalf("expected a sign-in hint, got: %s", stderr.String())
+	}
+}
+
+// A share owned by somebody else 404s at the mint endpoint (it is account-scoped
+// and deliberately does not distinguish "not yours" from "no such share"). For
+// somebody holding the link that really means "you are not a recipient", and the
+// message must say so rather than leak a bare 404.
+func TestGetPrivateShareNotOursExplains(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/unlock") {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "not_found", "message": "share not found"}})
+			return
+		}
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{
+			"code": "recipient_verification_required", "message": "Verification needed",
+		}})
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"get", "pub-1", "--output", filepath.Join(t.TempDir(), "x")}, &stdout, &stderr); code == 0 {
+		t.Fatal("a share we do not own must not succeed")
+	}
+	if !strings.Contains(stderr.String(), "isn't shared with this account") {
+		t.Fatalf("unhelpful message: %s", stderr.String())
+	}
+}
+
+// --private must send visibility:"private" and, since the server confirms what
+// the share actually IS, produce a normal successful upload.
+func TestUploadPrivateSendsVisibility(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	path := writeTempFile(t, "notes.txt", "private notes")
+	var sentVisibility string
+	var uploaded bool
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/uploads":
+			var req clicore.UploadCreateRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode create request: %v", err)
+			}
+			sentVisibility = req.Visibility
+			writeTestJSON(w, map[string]any{
+				"upload": map[string]any{"url": "https://upload.example.test/put", "method": "PUT", "headers": map[string]string{}},
+				"share": map[string]any{
+					"public_id":            "pub-priv",
+					"link":                 "https://s.example.test/pub-priv",
+					"recipient_restricted": true,
+				},
+				"upload_session_id": "up-1",
+				"expires_at":        "2026-07-03T00:00:00Z",
+			})
+		case "/put":
+			uploaded = true
+			w.WriteHeader(http.StatusOK)
+		case "/v1/uploads/up-1/complete":
+			writeTestJSON(w, map[string]any{"public_id": "pub-priv", "status": "ready", "expires_at": "2026-07-03T00:00:00Z"})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{path, "--private"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	if sentVisibility != "private" {
+		t.Fatalf("visibility sent = %q, want private", sentVisibility)
+	}
+	if !uploaded {
+		t.Fatal("the file was never uploaded")
+	}
+}
+
+// An older server ignores the unknown "visibility" field and returns 201 with a
+// PUBLIC link. That is the one outcome a private upload must never end in, so the
+// CLI stops BEFORE putting any bytes: the share row exists but has no content and
+// is never downloadable.
+func TestUploadPrivateRefusesWhenServerIgnoresIt(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	path := writeTempFile(t, "notes.txt", "private notes")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/uploads":
+			// No recipient_restricted field at all: the old-server shape.
+			writeTestJSON(w, map[string]any{
+				"upload": map[string]any{"url": "https://upload.example.test/put", "method": "PUT", "headers": map[string]string{}},
+				"share": map[string]any{
+					"public_id": "pub-oops",
+					"link":      "https://s.example.test/pub-oops",
+				},
+				"upload_session_id": "up-1",
+				"expires_at":        "2026-07-03T00:00:00Z",
+			})
+		case "/put":
+			t.Fatal("bytes were uploaded despite --private not being honoured")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	var stdout, stderr bytes.Buffer
+	code := run([]string{path, "--private"}, &stdout, &stderr)
+	if code == 0 {
+		t.Fatalf("a silently-public share must fail; stdout=%s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "does not support --private") {
+		t.Fatalf("unhelpful message: %s", stderr.String())
+	}
+	if strings.Contains(stdout.String(), "pub-oops") {
+		t.Fatalf("a public link was printed for a --private upload: %s", stdout.String())
+	}
+}
+
+// A server that understands the field but explicitly reports the share as public
+// is the same failure, reported differently.
+func TestUploadPrivateRefusesWhenServerSaysPublic(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	path := writeTempFile(t, "notes.txt", "private notes")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/uploads":
+			writeTestJSON(w, map[string]any{
+				"upload": map[string]any{"url": "https://upload.example.test/put", "method": "PUT", "headers": map[string]string{}},
+				"share": map[string]any{
+					"public_id":            "pub-oops",
+					"link":                 "https://s.example.test/pub-oops",
+					"recipient_restricted": false,
+				},
+				"upload_session_id": "up-1",
+				"expires_at":        "2026-07-03T00:00:00Z",
+			})
+		case "/put":
+			t.Fatal("bytes were uploaded despite the share being public")
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{path, "--private"}, &stdout, &stderr); code == 0 {
+		t.Fatal("a public share must fail a --private upload")
+	}
+	if !strings.Contains(stderr.String(), "did not make this share private") {
+		t.Fatalf("unhelpful message: %s", stderr.String())
+	}
+}
+
+// ---- §AG: where received files land, and which ones ------------------------
+
+// The inbox endpoints the receive command talks to. sealed is a share this
+// device can actually open; the test key is the credential's own device key.
+func fakeInboxAPI(t *testing.T, shares []map[string]any) http.Handler {
+	t.Helper()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		// receive registers a device key first when the credential has none.
+		case r.URL.Path == "/v1/auth/devices/key":
+			writeTestJSON(w, map[string]any{"status": "ok"})
+		case r.URL.Path == "/v1/inbox":
+			writeTestJSON(w, map[string]any{"shares": shares})
+		case r.URL.Path == "/v1/inbox/pending":
+			writeTestJSON(w, map[string]any{"shares": []any{}})
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	})
+}
+
+// A bare `receive` on a terminal now LISTS what is waiting instead of writing
+// files into whatever directory the shell happened to be in.
+func TestReceiveBareListsOnATerminal(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 2100000, "sealed_key": "sealed", "from_device_name": "openclaw"},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	if code := a.run(context.Background(), []string{"receive"}); code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "pub-1") || !strings.Contains(out, "report.pdf") {
+		t.Fatalf("the waiting file was not listed:\n%s", out)
+	}
+	if !strings.Contains(out, "from openclaw") {
+		t.Fatalf("the sender was not named:\n%s", out)
+	}
+	// Listing must not write anything.
+	if strings.Contains(out, "Received ") {
+		t.Fatalf("a bare receive downloaded something:\n%s", out)
+	}
+}
+
+// A script has nobody to ask, so it must keep working exactly as before -- with
+// a warning that this is the last release where that is true. Erroring here
+// today would break a cron job with no notice, which the staged rollout exists
+// to prevent.
+func TestReceiveNonTTYTakesAllWithADeprecationWarning(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 10, "sealed_key": "sealed"},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return false }}
+
+	a.run(context.Background(), []string{"receive"})
+
+	if !strings.Contains(stderr.String(), "will stop taking every waiting file") {
+		t.Fatalf("no deprecation warning for the scripted path:\n%s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--all") {
+		t.Fatalf("the warning does not say what to do instead:\n%s", stderr.String())
+	}
+}
+
+// Naming a destination on a terminal offers the numbered picker, because
+// several files can be waiting and taking all of them is a decision.
+func TestReceiveWithDestinationOffersThePicker(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 10, "sealed_key": "sealed"},
+		{"public_id": "pub-2", "file_name": "photos.zip", "size_bytes": 20, "sealed_key": "sealed"},
+	}))
+	var stdout, stderr bytes.Buffer
+	// "q" cancels, which is what lets this assert the prompt without needing a
+	// decryptable payload.
+	a := app{stdin: strings.NewReader("q\n"), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	if code := a.run(context.Background(), []string{"receive", t.TempDir()}); code != 0 {
+		t.Fatalf("cancelling the picker is not an error; code = %d", code)
+	}
+	prompt := stderr.String()
+	if !strings.Contains(prompt, "1  report.pdf") || !strings.Contains(prompt, "2  photos.zip") {
+		t.Fatalf("the picker did not list both files:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Select (1-2, a=all, q=quit)") {
+		t.Fatalf("no selection prompt:\n%s", prompt)
+	}
+}
+
+// The picker must not run where nobody can answer it: a destination plus no
+// terminal takes everything (with the warning), rather than hanging forever on
+// a read that never returns.
+func TestReceiveWithDestinationDoesNotPromptWithoutATerminal(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 10, "sealed_key": "sealed"},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return false }}
+
+	a.run(context.Background(), []string{"receive", t.TempDir()})
+
+	if strings.Contains(stderr.String(), "Select (") {
+		t.Fatalf("prompted with no terminal to answer it:\n%s", stderr.String())
+	}
+}
+
+// --id names a share that is not waiting: say so rather than silently doing
+// nothing, which would read as success.
+func TestReceiveUnknownIDFails(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 10, "sealed_key": "sealed"},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	if code := a.run(context.Background(), []string{"receive", t.TempDir(), "--id", "pub-nope"}); code == 0 {
+		t.Fatal("an unknown --id must fail")
+	}
+	if !strings.Contains(stderr.String(), "not waiting to be received") {
+		t.Fatalf("unhelpful message:\n%s", stderr.String())
+	}
+}
+
+func TestReceiveRejectsAllWithID(t *testing.T) {
+	if _, err := parseReceiveArgs([]string{"--all", "--id", "x"}); err == nil {
+		t.Fatal("--all and --id must not be combinable")
+	}
+}
+
+// A waiting file is not kept forever: it expires like any other share, and
+// nobody watches a queue whose deadline they cannot see (§AG D6).
+func TestReceiveListShowsWhenTheOldestExpires(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "a.txt", "size_bytes": 10, "sealed_key": "s",
+			"expires_at": time.Now().Add(50 * time.Hour).UTC().Format(time.RFC3339)},
+		{"public_id": "pub-2", "file_name": "b.txt", "size_bytes": 10, "sealed_key": "s",
+			"expires_at": time.Now().Add(3 * time.Hour).UTC().Format(time.RFC3339)},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	a.run(context.Background(), []string{"receive"})
+
+	if !strings.Contains(stdout.String(), "Oldest expires in 2 hours") {
+		t.Fatalf("no expiry warning, or it named the wrong share:\n%s", stdout.String())
+	}
+}
+
+// A wrong deadline is worse than none, so an unparseable expiry is skipped
+// rather than guessed at.
+func TestReceiveListOmitsExpiryWhenUnknown(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "a.txt", "size_bytes": 10, "sealed_key": "s", "expires_at": ""},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	a.run(context.Background(), []string{"receive"})
+
+	if strings.Contains(stdout.String(), "Oldest expires") {
+		t.Fatalf("invented an expiry it did not know:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "pub-1") {
+		t.Fatalf("the file was not listed at all:\n%s", stdout.String())
+	}
+}
+
+// /dev/null is a CHARACTER DEVICE, so the old os.ModeCharDevice check called it a
+// terminal. Every prompt guarded by that check then fired at a caller with no way
+// to answer -- the opposite of what the guard is for, and it defeated the
+// non-interactive branch of `receive` (§AG D4/D5).
+func TestTerminalDetectionRejectsDevNull(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Skipf("no %s on this platform: %v", os.DevNull, err)
+	}
+	defer devNull.Close()
+
+	if isTerminalReader(devNull) {
+		t.Fatalf("%s is a character device but not a terminal", os.DevNull)
+	}
+	if isTerminalWriter(devNull) {
+		t.Fatalf("%s is a character device but not a terminal", os.DevNull)
+	}
+}
+
+// A pipe (the shape of `cmd | s2u ...` and of every CI runner) is not a terminal.
+func TestTerminalDetectionRejectsAPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	if isTerminalReader(r) {
+		t.Fatal("a pipe is not a terminal")
+	}
+	if isTerminalWriter(w) {
+		t.Fatal("a pipe is not a terminal")
+	}
+}
+
+// A regular file must not be mistaken for one either.
+func TestTerminalDetectionRejectsARegularFile(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "tty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+
+	if isTerminalReader(f) || isTerminalWriter(f) {
+		t.Fatal("a regular file is not a terminal")
+	}
+}
+
+// `s2u devices` answers one question: which of my devices can I send a file to,
+// and what do I type. It used to lead with the session UUID -- never what you
+// pass to --device -- and label the rest "key" / "no-key", which says nothing
+// about whether a send would work.
+func TestDevicesListNamesWhatYouTypeAndWhatWorks(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(w, map[string]any{"sessions": []map[string]any{
+			{"id": "11111111-1111-1111-1111-111111111111", "device_name": "workstation",
+				"client_type": "cli", "public_key": "", "current": true,
+				"last_used_at": time.Now().UTC().Format(time.RFC3339)},
+			{"id": "22222222-2222-2222-2222-222222222222", "device_name": "macbook",
+				"client_type": "gui", "public_key": "pk", "current": false,
+				"last_used_at": time.Now().Add(-5 * time.Hour).UTC().Format(time.RFC3339)},
+			{"id": "33333333-3333-3333-3333-333333333333", "device_name": "phone",
+				"client_type": "cli", "public_key": "", "current": false,
+				"last_used_at": time.Now().Add(-9 * 24 * time.Hour).UTC().Format(time.RFC3339)},
+		}})
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"devices"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d stderr = %s", code, stderr.String())
+	}
+	out := stdout.String()
+
+	// The name is what --device takes, so it leads.
+	for _, name := range []string{"workstation", "macbook", "phone"} {
+		if !strings.Contains(out, name) {
+			t.Fatalf("%s missing:\n%s", name, out)
+		}
+	}
+	// A session UUID is not something anybody types; it must not be the headline.
+	if strings.Contains(out, "11111111-1111-1111-1111-111111111111") {
+		t.Fatalf("the session UUID is still being shown:\n%s", out)
+	}
+	if !strings.Contains(out, "this device") {
+		t.Fatalf("the current device is not marked:\n%s", out)
+	}
+	if !strings.Contains(out, "ready to receive") {
+		t.Fatalf("a key-bearing device is not shown as sendable:\n%s", out)
+	}
+	// Say what to do about it, rather than reporting "no-key" as a fact.
+	if !strings.Contains(out, "can't receive yet") {
+		t.Fatalf("a keyless device does not explain itself:\n%s", out)
+	}
+	// Last-seen is what tells two similarly-named machines apart.
+	if !strings.Contains(out, "5h ago") || !strings.Contains(out, "9d ago") {
+		t.Fatalf("last-seen missing:\n%s", out)
+	}
+	if !strings.Contains(out, "--device <name>") {
+		t.Fatalf("the listing does not say how to send:\n%s", out)
+	}
+}
+
+// With nothing to send to, the hint would be an instruction the user cannot follow.
+func TestDevicesListOmitsTheSendHintWhenNothingCanReceive(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(w, map[string]any{"sessions": []map[string]any{
+			{"id": "11111111-1111-1111-1111-111111111111", "device_name": "workstation",
+				"client_type": "cli", "public_key": "", "current": true},
+		}})
+	}))
+
+	var stdout, stderr bytes.Buffer
+	run([]string{"devices"}, &stdout, &stderr)
+	if strings.Contains(stdout.String(), "--device <name>") {
+		t.Fatalf("offered a send with no device able to receive:\n%s", stdout.String())
+	}
+}
+
+// allowLocalUpdateSource points the updater's source pin at the test server.
+// The real pin admits only https on share2.us / github.com; a loopback httptest
+// server is neither, so the positive path needs this seam and the negative
+// paths below deliberately do NOT use it.
+func allowLocalUpdateSource(t *testing.T) {
+	t.Helper()
+	prev := updateSourceAllowed
+	updateSourceAllowed = func(u *url.URL) bool { return u != nil && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost") }
+	t.Cleanup(func() { updateSourceAllowed = prev })
+}
+
+// updateFixture serves a manifest + archive and returns the server. mutate lets
+// a test corrupt the manifest.
+func updateFixture(t *testing.T, mutate func(downloads map[string]any)) (*httptest.Server, string) {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), "share2us")
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	archive := testUpdateArchive(t, []byte("new binary"))
+	checksum, size, _ := posixCKSUM(bytes.NewReader(archive))
+	digest := sha256.Sum256(archive)
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/cli/update":
+			downloads := map[string]any{
+				"archive_url": server.URL + "/downloads/share2us_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz",
+				"crc32":       fmt.Sprint(checksum),
+				"size_bytes":  size,
+				"sha256":      hex.EncodeToString(digest[:]),
+			}
+			if mutate != nil {
+				mutate(downloads)
+			}
+			writeTestJSON(w, map[string]any{
+				"current_version": clicore.FullVersion(), "latest_version": "20260708123045",
+				"update_available": true, "platform": runtime.GOOS + "/" + runtime.GOARCH,
+				"downloads": downloads,
+			})
+		case strings.HasPrefix(r.URL.Path, "/redirect-off-host"):
+			http.Redirect(w, r, "http://evil.example.test/x.tar.gz", http.StatusFound)
+		case strings.HasSuffix(r.URL.Path, ".tar.gz"):
+			w.Write(archive)
+		default:
+			t.Fatalf("unexpected update path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server, target
+}
+
+func runUpdate(t *testing.T, server *httptest.Server, target string) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	a := app{stdout: &stdout, stderr: &stderr, executablePath: func() (string, error) { return target, nil }}
+	code := a.run(context.Background(), []string{"update", "--host", server.URL})
+	return code, stdout.String(), stderr.String()
+}
+
+func mustBeUntouched(t *testing.T, target string) {
+	t.Helper()
+	got, _ := os.ReadFile(target)
+	if string(got) != "old binary" {
+		t.Fatalf("the binary was REPLACED: %q", got)
+	}
+}
+
+// §AJ #4: the archive used to be fetched from whatever URL the API returned,
+// over any scheme, from any host. Without the test seam, a loopback http server
+// is exactly such a host -- and must be refused before a byte is installed.
+func TestUpdateRefusesArchiveFromUnpinnedSource(t *testing.T) {
+	server, target := updateFixture(t, nil)
+	code, out, errOut := runUpdate(t, server, target)
+	if code == 0 {
+		t.Fatalf("installed from an unpinned source:\n%s", out)
+	}
+	if !strings.Contains(errOut, "unexpected URL") {
+		t.Fatalf("unhelpful refusal:\n%s", errOut)
+	}
+	mustBeUntouched(t, target)
+}
+
+func TestUpdateRefusesOffHostRedirect(t *testing.T) {
+	allowLocalUpdateSource(t)
+	server, target := updateFixture(t, func(d map[string]any) {
+		d["archive_url"] = server0(t, d) + "/redirect-off-host/x.tar.gz"
+	})
+	code, _, errOut := runUpdate(t, server, target)
+	if code == 0 || !strings.Contains(errOut, "redirected to an unexpected URL") {
+		t.Fatalf("code=%d stderr=%s", code, errOut)
+	}
+	mustBeUntouched(t, target)
+}
+
+// server0 recovers the fixture's own base URL from the manifest it is mutating.
+func server0(t *testing.T, d map[string]any) string {
+	t.Helper()
+	u, err := url.Parse(d["archive_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+func TestUpdateRefusesManifestWithoutSHA256(t *testing.T) {
+	allowLocalUpdateSource(t)
+	server, target := updateFixture(t, func(d map[string]any) { delete(d, "sha256") })
+	code, _, errOut := runUpdate(t, server, target)
+	if code == 0 || !strings.Contains(errOut, "no sha256") {
+		t.Fatalf("code=%d stderr=%s", code, errOut)
+	}
+	mustBeUntouched(t, target)
+}
+
+func TestUpdateRefusesSHA256Mismatch(t *testing.T) {
+	allowLocalUpdateSource(t)
+	server, target := updateFixture(t, func(d map[string]any) { d["sha256"] = strings.Repeat("ab", 32) })
+	code, _, errOut := runUpdate(t, server, target)
+	if code == 0 || !strings.Contains(errOut, "sha256 mismatch") {
+		t.Fatalf("code=%d stderr=%s", code, errOut)
+	}
+	mustBeUntouched(t, target)
+}
+
+// A server that keeps sending past the declared size must be cut off, not
+// trusted to fill the disk.
+func TestUpdateRefusesOversizedArchive(t *testing.T) {
+	allowLocalUpdateSource(t)
+	server, target := updateFixture(t, func(d map[string]any) { d["size_bytes"] = int64(10) })
+	code, _, errOut := runUpdate(t, server, target)
+	if code == 0 || !strings.Contains(errOut, "larger than") {
+		t.Fatalf("code=%d stderr=%s", code, errOut)
+	}
+	mustBeUntouched(t, target)
+}
+
+// §AJ #10: a login saved before credentials carried an account id learns it
+// from the first list the server signs for it, so the cache is bound from then
+// on. (A list for a different account than the bound one is an error.)
+func TestTrustSyncLearnsAccountBinding(t *testing.T) {
+	_, srv := newFakeTrustAPI(t)
+	withCredential(t, srv.URL) // no AccountID
+	t.Setenv("SHARE2US_API_BASE", srv.URL)
+	t.Cleanup(func() { _ = lanid.ResetTrust() })
+	var errOut bytes.Buffer
+	a := app{stdout: io.Discard, stderr: &errOut, stdin: strings.NewReader("123456\n"), stdinIsTTY: func(io.Reader) bool { return true }}
+	if !a.trustDeviceWithMFA(context.Background(), bufio.NewReader(a.input()), "b676f58a180a7fc204ab3a1c0d24eb9eec33b66faa066569eef3fa0d8096d37c", "laptop", lanid.ModeAsk) {
+		t.Fatal(errOut.String())
+	}
+	c, err := clicore.LoadCredential()
+	if err != nil || c.AccountID == "" {
+		t.Fatalf("account id not learned from the verified list (err=%v)", err)
+	}
+	if _, ok := lanid.Lookup("b676f58a180a7fc204ab3a1c0d24eb9eec33b66faa066569eef3fa0d8096d37c"); !ok {
+		t.Fatal("bound cache not honoured")
+	}
+}
+
+// §AJ #24: the download name comes from the SENDER (Content-Disposition), and
+// was written straight to disk -- replacing whatever already had that name.
+func TestPlainDownloadNeverOverwritesASenderNamedFile(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="notes.txt"`)
+		_, _ = w.Write([]byte("theirs"))
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	a := app{stdout: &stdout, stderr: &stderr}
+	if code := a.downloadPlainShare(context.Background(), srv.URL+"/d/pub-1", "", ""); code != 0 {
+		t.Fatalf("code = %d stderr = %s", code, stderr.String())
+	}
+	if body, _ := os.ReadFile(filepath.Join(dir, "notes.txt")); string(body) != "mine" {
+		t.Fatalf("the existing file was overwritten: %q", body)
+	}
+	if body, err := os.ReadFile(filepath.Join(dir, "notes (1).txt")); err != nil || string(body) != "theirs" {
+		t.Fatalf("the download did not land beside it: %v %q", err, body)
+	}
+	if !strings.Contains(stdout.String(), "notes (1).txt") {
+		t.Fatalf("the saved name was not reported: %s", stdout.String())
+	}
+}
+
+// A name the user typed is their own choice and is honoured as asked.
+func TestExplicitOutputIsWrittenAsAsked(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "chosen.txt")
+	if err := os.WriteFile(target, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Disposition", `attachment; filename="whatever.txt"`)
+		_, _ = w.Write([]byte("new"))
+	}))
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	a := app{stdout: &stdout, stderr: &stderr}
+	if code := a.downloadPlainShare(context.Background(), srv.URL+"/d/pub-1", target, ""); code != 0 {
+		t.Fatalf("code = %d stderr = %s", code, stderr.String())
+	}
+	if body, _ := os.ReadFile(target); string(body) != "new" {
+		t.Fatalf("an explicit --output was not honoured: %q", body)
+	}
+}
+
+// §AJ #25: DecryptStream detects a truncated or tampered payload, but the
+// plaintext was written straight into the destination, so unverified bytes were
+// left behind under the name the user asked for.
+func TestTruncatedEncryptedShareLeavesNoPlaintext(t *testing.T) {
+	dir := t.TempDir()
+	key := bytes.Repeat([]byte{7}, 32)
+	var sealed bytes.Buffer
+	if err := clicore.EncryptStream(&sealed, strings.NewReader("the secret contents, long enough to matter"), key); err != nil {
+		t.Fatal(err)
+	}
+	truncated := sealed.Bytes()[:sealed.Len()-8]
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(truncated)
+	}))
+	defer srv.Close()
+	t.Setenv("SHARE2US_API_BASE", srv.URL)
+
+	out := filepath.Join(dir, "secret.txt")
+	var stdout, stderr bytes.Buffer
+	a := app{stdout: &stdout, stderr: &stderr}
+	code := a.get(context.Background(), []string{srv.URL + "/d/pub-1", "--key", clicore.EncodeKey(key), "--output", out})
+	if code == 0 {
+		t.Fatal("a truncated payload was reported as a successful download")
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		body, _ := os.ReadFile(out)
+		t.Fatalf("unverified plaintext was left on disk: %q", body)
+	}
+	// Nor any leftover staging file.
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		t.Fatalf("left behind %q", e.Name())
+	}
+}
+
+// Found by the two-node §AG run on staging, 2026-09-10.
+//
+// The configured receive FOLDER was passed down as a plain string, and a folder
+// that does not exist yet fell through to "treat it as a file name". The first
+// arrival was therefore written AS the folder: the user saw
+// "Received report.txt -> ~/Downloads" and got a FILE called Downloads holding
+// the bytes. It hides on a desktop because ~/Downloads usually already exists,
+// and appears the moment someone points config set-receive-dir at a folder they
+// have not created.
+func TestReceiveFolderThatDoesNotExistYetIsTreatedAsAFolder(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "not-created-yet")
+	share := clicore.InboxShare{PublicID: "pub-1", FileName: "report.txt"}
+
+	got, err := inboxOutputPath(share, dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "report.txt")
+	if got != want {
+		t.Fatalf("landed at %q, want %q (the file was written AS the folder)", got, want)
+	}
+}
+
+// A folder that DOES exist behaves the same, whichever way it is described.
+func TestExistingReceiveFolderIsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	share := clicore.InboxShare{PublicID: "pub-1", FileName: "report.txt"}
+	for _, isFolder := range []bool{true, false} {
+		got, err := inboxOutputPath(share, dir, isFolder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != filepath.Join(dir, "report.txt") {
+			t.Fatalf("outputIsFolder=%v gave %q", isFolder, got)
+		}
+	}
+}
+
+// An explicit --output naming a file is still honoured exactly.
+func TestExplicitOutputFileIsStillAFile(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "chosen-name.txt")
+	share := clicore.InboxShare{PublicID: "pub-1", FileName: "report.txt"}
+	got, err := inboxOutputPath(share, target, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != target {
+		t.Fatalf("an explicit --output was rewritten to %q", got)
+	}
+}
+
+// receiveDir reports configuration as a folder and an explicit value as not.
+func TestReceiveDirReportsWhetherItIsAFolder(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	a := app{}
+	if _, isFolder := a.receiveDir(""); !isFolder {
+		t.Fatal("the configured receive directory was not reported as a folder")
+	}
+	if _, isFolder := a.receiveDir("/tmp/some-file.txt"); isFolder {
+		t.Fatal("an explicit --output was reported as a folder")
 	}
 }

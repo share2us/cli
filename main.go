@@ -359,6 +359,7 @@ func (a app) login(ctx context.Context, args []string) int {
 			APIBase:          apiBase,
 			Token:            token.Credential,
 			Email:            email,
+			AccountID:        me.AccountID,
 			DeviceSessionID:  token.DeviceSessionID,
 			DevicePublicKey:  keyPair.PublicKey,
 			DevicePrivateKey: keyPair.PrivateKey,
@@ -486,9 +487,24 @@ func (a app) handleLoginDeviceLimit(ctx context.Context, client *clicore.Client,
 	return a.handleLoginDeviceLimitDetails(ctx, client, code, opts, details)
 }
 
+// parseOnOff reads a boolean setting the way people type one. Deliberately
+// strict about what it REJECTS: an unrecognised word is an error rather than a
+// silent "off", because silently disabling a receive setting looks exactly like
+// the feature being broken.
+func parseOnOff(value string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "on", "true", "yes", "y", "1", "enable", "enabled":
+		return true, nil
+	case "off", "false", "no", "n", "0", "disable", "disabled":
+		return false, nil
+	default:
+		return false, fmt.Errorf("expected on or off, got %q", value)
+	}
+}
+
 func (a app) config(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintf(a.stderr, "usage: %s config set-base-url <domain>\n       %s config set-host <url>\n       %s config show\n       %s config set-default <key> <value>\n       %s config unset-default <key>\n       %s config defaults\n       %s config set device alias <name> <ip|pairing>\n       %s config set device trusted <alias|ip>\n       %s config delete device alias|trusted <name>\n", commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName)
+		fmt.Fprintf(a.stderr, "usage: %s config set-base-url <domain>\n       %s config set-host <url>\n       %s config set-receive-dir <path>\n       %s config set-receive-auto on|off\n       %s config show\n       %s config set-default <key> <value>\n       %s config unset-default <key>\n       %s config defaults\n       %s config set device alias <name> <ip|pairing>\n       %s config set device trusted <alias|ip>\n       %s config delete device alias|trusted <name>\n", commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName, commandName)
 		return 2
 	}
 	switch args[0] {
@@ -530,6 +546,37 @@ func (a app) config(args []string) int {
 		}
 		fmt.Fprintf(a.stdout, "API host set to %s\n", host)
 		return 0
+	case "set-receive-dir":
+		if len(args) != 2 {
+			fmt.Fprintf(a.stderr, "usage: %s config set-receive-dir <path>   (empty path restores the default)\n", commandName)
+			return 2
+		}
+		if err := clicore.SetReceiveDir(args[1]); err != nil {
+			return a.fail("save config", err)
+		}
+		cfg, _ := clicore.LoadConfig()
+		fmt.Fprintf(a.stdout, "Files sent to this device will be saved to %s\n", cfg.ReceiveSettings().Dir)
+		return 0
+	case "set-receive-auto":
+		if len(args) != 2 {
+			fmt.Fprintf(a.stderr, "usage: %s config set-receive-auto on|off\n", commandName)
+			return 2
+		}
+		auto, err := parseOnOff(args[1])
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 2
+		}
+		if err := clicore.SetReceiveAuto(auto); err != nil {
+			return a.fail("save config", err)
+		}
+		if auto {
+			cfg, _ := clicore.LoadConfig()
+			fmt.Fprintf(a.stdout, "Incoming files will be saved automatically to %s\n", cfg.ReceiveSettings().Dir)
+		} else {
+			fmt.Fprintf(a.stdout, "Incoming files will wait until you run `%s receive`\n", commandName)
+		}
+		return 0
 	case "show", "get-host":
 		host, source, err := resolveAPIBase()
 		if err != nil {
@@ -548,6 +595,18 @@ func (a app) config(args []string) int {
 			return a.fail("resolve share base", err)
 		}
 		fmt.Fprintf(a.stdout, "Base URL: %s\nBase URL source: %s\nAPI base: %s\nAPI base source: %s\nShare base: %s\nShare base source: %s\n", baseURL, baseSource, host, source, shareBase, shareSource)
+		// Where incoming files land is the setting people most often go looking
+		// for, and it used to be three different unwritten answers (§AG).
+		cfg, _ := clicore.LoadConfig()
+		recv := cfg.ReceiveSettings()
+		auto := "ask on first arrival"
+		if recv.AutoAnswered {
+			auto = "off (run `" + commandName + " receive`)"
+			if recv.Auto {
+				auto = "on"
+			}
+		}
+		fmt.Fprintf(a.stdout, "Receive folder: %s\nReceive automatically: %s\n", recv.Dir, auto)
 		return 0
 	case "set-default":
 		if len(args) != 3 {
@@ -776,14 +835,27 @@ func (a app) logout(ctx context.Context) int {
 	if err := clicore.DeleteCredential(); err != nil {
 		return a.fail("delete credential", err)
 	}
+	// Retained content keys are plaintext data keys for shares THIS login sent,
+	// and a leaked data key cannot be revoked. They must not outlive the session
+	// that created them (§AJ #23).
+	if err := clicore.ForgetAllRetainedKeys(); err != nil {
+		fmt.Fprintf(a.stderr, "warning: could not clear retained content keys: %v\n", err)
+	}
 	fmt.Fprintln(a.stdout, "Logged out")
 	return 0
 }
 
 func (a app) devices(ctx context.Context) int {
-	client, _, ok := a.authClient()
+	client, credential, ok := a.authClient()
 	if !ok {
 		fmt.Fprintf(a.stderr, "not logged in; run `%s login`\n", commandName)
+		return 1
+	}
+	// The device list carries every machine's name, fingerprint and last IP, so
+	// the API serves it only to an interactive login (§AJ #17). Say that here
+	// rather than letting a bare 403 surface.
+	if clicore.IsAPIToken(credential.Token) {
+		fmt.Fprintf(a.stderr, "listing your devices needs an interactive login; a personal API token (%s) can't read the device list\n", clicore.APITokenEnv)
 		return 1
 	}
 	devices, err := client.ListDevices(ctx)
@@ -794,18 +866,65 @@ func (a app) devices(ctx context.Context) int {
 		fmt.Fprintln(a.stdout, "No devices found")
 		return 0
 	}
+	// The question this command answers is "which of my devices can I send a file
+	// to, and what do I type". It used to lead with the session UUID -- which is
+	// never what you pass to --device -- and label the rest "key" / "no-key",
+	// which says nothing about whether a send will work.
+	sendable := 0
 	for _, device := range devices.Sessions {
-		keyStatus := "no-key"
-		if strings.TrimSpace(device.PublicKey) != "" {
-			keyStatus = "key"
+		name := strings.TrimSpace(device.DeviceName)
+		if name == "" {
+			name = device.ID
 		}
-		current := ""
-		if device.Current {
-			current = " current"
+		note := ""
+		switch {
+		case device.Current:
+			note = "this device"
+		case strings.TrimSpace(device.PublicKey) == "":
+			// Not a defect to hide: the device is signed in but has never completed
+			// key registration, so a sealed send has nothing to seal to.
+			note = "can't receive yet — sign in with Share2Us on it"
+		default:
+			sendable++
+			note = "ready to receive"
 		}
-		fmt.Fprintf(a.stdout, "%s\t%s\t%s%s\n", device.ID, device.DeviceName, keyStatus, current)
+		fmt.Fprintf(a.stdout, "  %-24s %-10s %-16s %s\n", name, deviceKind(device.ClientType), lastSeen(device.LastUsedAt), note)
+	}
+	if sendable > 0 {
+		fmt.Fprintf(a.stdout, "\nSend to one: %s <file> --device <name>\n", commandName)
 	}
 	return 0
+}
+
+// deviceKind renders the client type as something a person recognises, and never
+// blank -- an empty column reads as missing data rather than an unknown client.
+func deviceKind(clientType string) string {
+	kind := strings.ToLower(strings.TrimSpace(clientType))
+	if kind == "" {
+		return "device"
+	}
+	return kind
+}
+
+// lastSeen turns the API's timestamp into how long ago that was, which is what
+// tells two similarly-named machines apart. An unparseable or absent value
+// yields "" rather than a guess.
+func lastSeen(raw string) string {
+	at, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	d := time.Since(at)
+	switch {
+	case d < 2*time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 func (a app) signout(ctx context.Context, args []string) int {
@@ -1061,6 +1180,13 @@ func (a app) update(ctx context.Context, args []string) int {
 	if updateInfo.Downloads.ArchiveURL == "" || updateInfo.Downloads.CRC32 == "" || updateInfo.Downloads.SizeBytes <= 0 {
 		return a.fail("check update", errors.New("update manifest is missing archive URL, CRC, or size"))
 	}
+	// SHA-256 is REQUIRED, not optional (§AJ #4). The CRC is a corruption check
+	// and comes from the same response as the URL, so it proves nothing about
+	// who produced the archive. A manifest without a digest is refused outright;
+	// the release workflow publishes one for every archive.
+	if strings.TrimSpace(updateInfo.Downloads.SHA256) == "" {
+		return a.fail("check update", errors.New("update manifest has no sha256 for the archive; refusing to install an unverifiable build"))
+	}
 	fmt.Fprintf(a.stdout, "Updating %s %s -> %s\n", commandName, updateInfo.CurrentVersion, updateInfo.LatestVersion)
 	fmt.Fprintf(a.stdout, "Downloading %s\n", updateInfo.Downloads.ArchiveURL)
 
@@ -1071,13 +1197,17 @@ func (a app) update(ctx context.Context, args []string) int {
 	defer os.RemoveAll(tmpDir)
 
 	archivePath := filepath.Join(tmpDir, filepath.Base(updateInfo.Downloads.ArchiveURL))
-	if err := downloadFile(ctx, updateInfo.Downloads.ArchiveURL, archivePath); err != nil {
+	if err := downloadUpdateArchive(ctx, updateInfo.Downloads.ArchiveURL, archivePath, updateInfo.Downloads.SizeBytes); err != nil {
 		return a.fail("download update", err)
 	}
 	if err := verifyUpdateArchive(archivePath, updateInfo.Downloads.CRC32, updateInfo.Downloads.SizeBytes); err != nil {
 		return a.fail("verify CRC", err)
 	}
 	fmt.Fprintln(a.stdout, "CRC check passed")
+	if err := verifyUpdateSHA256(archivePath, updateInfo.Downloads.SHA256); err != nil {
+		return a.fail("verify SHA-256", err)
+	}
+	fmt.Fprintln(a.stdout, "SHA-256 check passed")
 
 	binPath, err := extractBinaryFromArchive(archivePath, tmpDir, binaryFileName())
 	if err != nil {
@@ -1206,6 +1336,99 @@ func normalizeUpdateAPIBase(value string) (string, error) {
 		return "", err
 	}
 	return clicore.APIBaseFromBaseURL(baseURL)
+}
+
+// updateSourceAllowed decides which URLs the updater may fetch an archive from:
+// HTTPS, and only the project's own download host or GitHub, where releases
+// live. Applied to the initial URL AND every redirect hop, so neither a
+// malicious API host nor an off-host redirect can hand the updater a binary.
+//
+// It used to be that whatever archive_url the API returned was fetched, over
+// any scheme, from any host, and "verified" with a CRC from the same response.
+// A compromised or impersonated API host was therefore code execution as the
+// user (§AJ #4). The GUI has had this pin since its updater shipped; the CLI
+// did not. A package var so tests can point it at a local server.
+var updateSourceAllowed = func(u *url.URL) bool {
+	if u == nil || u.Scheme != "https" {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "share2.us" || strings.HasSuffix(h, ".share2.us") ||
+		h == "github.com" || strings.HasSuffix(h, ".github.com") ||
+		h == "githubusercontent.com" || strings.HasSuffix(h, ".githubusercontent.com")
+}
+
+// downloadUpdateArchive fetches the archive into dest with the source pinned at
+// every hop and the body capped at the size the manifest declared: a server
+// that keeps sending is cut off rather than allowed to fill the disk.
+func downloadUpdateArchive(ctx context.Context, sourceURL, dest string, expectedSize int64) error {
+	u, err := url.Parse(sourceURL)
+	if err != nil || !updateSourceAllowed(u) {
+		return errors.New("refusing to download the update from an unexpected URL (must be https on share2.us or github.com)")
+	}
+	client := &http.Client{
+		Transport: clicore.DefaultHTTPClient.Transport,
+		Timeout:   10 * time.Minute,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("too many redirects")
+			}
+			if !updateSourceAllowed(r.URL) {
+				return errors.New("update download redirected to an unexpected URL: " + r.URL.Redacted())
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("GET %s returned HTTP %d", sourceURL, resp.StatusCode)
+	}
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	// One byte over the declared size is enough to know the archive is not the
+	// one the manifest described; the CRC/size check reports it.
+	n, err := io.Copy(out, io.LimitReader(resp.Body, expectedSize+1))
+	if err != nil {
+		return err
+	}
+	if n > expectedSize {
+		return fmt.Errorf("update archive is larger than the %d bytes the manifest declared", expectedSize)
+	}
+	return nil
+}
+
+// verifyUpdateSHA256 checks the archive against the manifest's digest. Together
+// with the source pin this is what stands between a malicious manifest and an
+// installed binary: the digest must match a file that GitHub served.
+func verifyUpdateSHA256(path, expectedHex string) error {
+	expectedHex = strings.ToLower(strings.TrimSpace(expectedHex))
+	if len(expectedHex) != 64 {
+		return errors.New("manifest sha256 is not a 64-character hex digest")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != expectedHex {
+		return fmt.Errorf("sha256 mismatch: archive %s, manifest %s", got[:12], expectedHex[:12])
+	}
+	return nil
 }
 
 func downloadFile(ctx context.Context, sourceURL, dest string) error {
@@ -1751,6 +1974,7 @@ func (a app) upload(ctx context.Context, args []string) int {
 			return ""
 		}(),
 		Recipients:     opts.recipients,
+		Visibility:     visibilityForUpload(opts),
 		MaxViews:       opts.maxViews,
 		AllowedDomains: opts.allowedDomains,
 		DeniedDomains:  opts.deniedDomains,
@@ -1774,6 +1998,23 @@ func (a app) upload(ctx context.Context, args []string) int {
 		}
 		a.hintLocalShareOnUnreachable(err, opts.path)
 		return a.fail("create upload", err)
+	}
+
+	// STOP BEFORE UPLOADING BYTES if --private did not take. An older server
+	// ignores an unknown "visibility" and returns 201 with a PUBLIC link, which
+	// is the one outcome a private upload must never end in — and the user would
+	// see a success and a link. The share row exists but has no content, so it is
+	// never downloadable; nothing leaks.
+	if opts.private {
+		private, known := created.Share.IsPrivate()
+		if !known {
+			fmt.Fprintln(a.stderr, "this server does not support --private (it would have created a PUBLIC link). Nothing was uploaded. Update the server, or upload and then make it private in the portal.")
+			return 1
+		}
+		if !private {
+			fmt.Fprintln(a.stderr, "the server did not make this share private. Nothing was uploaded.")
+			return 1
+		}
 	}
 
 	completed := clicore.UploadCompleteResponse{
@@ -1932,6 +2173,7 @@ type uploadOptions struct {
 	qrLink         bool
 	restrict       bool
 	unrestrict     bool
+	private        bool
 	fromStdin      bool
 }
 
@@ -2078,6 +2320,8 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 			opts.qr = true
 		case arg == "--qrl" || arg == "--qr-link":
 			opts.qrLink = true
+		case arg == "--private":
+			opts.private = true
 		case arg == "--unrestrict":
 			opts.unrestrict = true
 		case arg == "--restrict":
@@ -2100,6 +2344,19 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 		return uploadOptions{}, errors.New("--restrict and --unrestrict cannot be combined")
 	}
 	return opts, nil
+}
+
+// visibilityForUpload maps --private to the API's visibility field. A private
+// share needs NO recipients: the gateway admits the recipient list or an active
+// user of the owning account, so an empty list is exactly "only me" (ADR-022).
+//
+// --to/--email already produce a recipient-restricted share on their own, so
+// there is nothing to add there; "" leaves the server default (public).
+func visibilityForUpload(opts uploadOptions) string {
+	if opts.private {
+		return "private"
+	}
+	return ""
 }
 
 // resolveAllowReshare computes the allow_reshare value to send for a new share:
@@ -3188,18 +3445,41 @@ func (a app) get(ctx context.Context, args []string) int {
 	if err := client.DownloadURL(ctx, downloadURL, &ciphertext); err != nil {
 		return a.fail("download encrypted share", err)
 	}
-	var out io.Writer = a.stdout
-	var file *os.File
-	if opts.output != "" {
-		file, err = os.Create(opts.output)
-		if err != nil {
-			return a.fail("create output", err)
+	if opts.output == "" {
+		// Straight to stdout: nothing to stage, and a truncated stream is the
+		// caller's to notice.
+		if err := clicore.DecryptStream(a.stdout, strings.NewReader(ciphertext.String()), key); err != nil {
+			return a.fail("decrypt encrypted share", err)
 		}
-		defer file.Close()
-		out = file
+		return 0
 	}
-	if err := clicore.DecryptStream(out, strings.NewReader(ciphertext.String()), key); err != nil {
-		return a.fail("decrypt encrypted share", err)
+	// Stage the plaintext in a temp file and rename only after DecryptStream
+	// returns cleanly. It used to decrypt straight into the destination, so a
+	// truncated or tampered payload -- which DecryptStream DOES detect -- left
+	// unverified plaintext sitting there under the name the user asked for, and
+	// every other caller in this file already removes on failure (§AJ #25).
+	dir := filepath.Dir(opts.output)
+	if dir == "" {
+		dir = "."
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(opts.output)+".tmp-*")
+	if err != nil {
+		return a.fail("create output", err)
+	}
+	tmpName := tmp.Name()
+	decryptErr := clicore.DecryptStream(tmp, strings.NewReader(ciphertext.String()), key)
+	closeErr := tmp.Close()
+	if decryptErr != nil {
+		os.Remove(tmpName)
+		return a.fail("decrypt encrypted share", decryptErr)
+	}
+	if closeErr != nil {
+		os.Remove(tmpName)
+		return a.fail("write output", closeErr)
+	}
+	if err := os.Rename(tmpName, opts.output); err != nil {
+		os.Remove(tmpName)
+		return a.fail("save output", err)
 	}
 	return 0
 }
@@ -3217,20 +3497,18 @@ func (a app) downloadPlainShare(ctx context.Context, downloadURL, output, mode s
 	if err != nil {
 		return a.fail("prepare download URL", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return a.fail("prepare download", err)
-	}
-	resp, err := clicore.DefaultHTTPClient.Do(req)
-	if err != nil {
-		return a.fail("download share", err)
+	resp, code := a.fetchShareForDownload(ctx, u, mode)
+	if resp == nil {
+		return code
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return a.failDownloadResponse(resp, mode)
-	}
 
+	// A name the user typed with --output is their own choice and is written as
+	// asked. A name that came from the SENDER (Content-Disposition) is not: it
+	// used to overwrite whatever already had that name -- .bashrc, a Makefile,
+	// a document being edited -- silently and unrecoverably (§AJ #24).
 	outPath := output
+	senderChoseTheName := outPath == ""
 	if outPath == "" {
 		outPath = filenameFromDisposition(resp.Header.Get("Content-Disposition"))
 	}
@@ -3239,6 +3517,9 @@ func (a app) downloadPlainShare(ctx context.Context, downloadURL, output, mode s
 		if mode == "pdf" || mode == "docx" {
 			outPath += "." + mode
 		}
+	}
+	if senderChoseTheName {
+		outPath = clicore.UniquePath(outPath)
 	}
 
 	dir := filepath.Dir(outPath)
@@ -3269,10 +3550,119 @@ func (a app) downloadPlainShare(ctx context.Context, downloadURL, output, mode s
 	return 0
 }
 
-// failDownloadResponse maps the gateway's error envelope to a clean CLI message.
-// It never retries (the conversion endpoint is rate-limited at 20/min).
-func (a app) failDownloadResponse(resp *http.Response, mode string) int {
+// fetchShareForDownload performs the gateway GET, transparently handling the one
+// refusal a signed-in OWNER should never see on their own file.
+//
+// A recipient-restricted share refuses an anonymous request with
+// 403 recipient_verification_required, and every CLI download path IS anonymous:
+// the gateway is a separate origin and none of its three verification layers is
+// reachable without a browser. When the caller is signed in, we mint an unlock
+// token for their own share and retry ONCE (ADR-022, 2026-09-09 amendment).
+//
+// Returns (response, 0) on success, or (nil, exit code) after reporting the
+// failure. The response body is the caller's to close.
+func (a app) fetchShareForDownload(ctx context.Context, rawURL, mode string) (*http.Response, int) {
+	resp, err := getURL(ctx, rawURL)
+	if err != nil {
+		return nil, a.fail("download share", err)
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return resp, 0
+	}
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	resp.Body.Close()
+
+	// ONLY this code, and only once. The neighbouring 403s (recipient_not_allowed,
+	// reshare_disabled) mean exactly what they say: retrying them would turn a
+	// clear refusal into a confusing second request.
+	if errorCodeFromBody(body) != "recipient_verification_required" {
+		return nil, a.failDownloadBody(resp.StatusCode, body, mode)
+	}
+
+	token, err := a.mintOwnerUnlock(ctx, rawURL)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return nil, 1
+	}
+	retry, err := getURLWithUnlock(ctx, rawURL, token)
+	if err != nil {
+		return nil, a.fail("download share", err)
+	}
+	if retry.StatusCode >= 200 && retry.StatusCode < 300 {
+		return retry, 0
+	}
+	retryBody, _ := io.ReadAll(io.LimitReader(retry.Body, 1<<16))
+	retry.Body.Close()
+	return nil, a.failDownloadBody(retry.StatusCode, retryBody, mode)
+}
+
+// mintOwnerUnlock asks the API for an unlock token for this share. It only works
+// for a share the caller's own ACCOUNT owns; anything else is a 404 server-side.
+func (a app) mintOwnerUnlock(ctx context.Context, rawURL string) (string, error) {
+	client, credential, ok := a.authClient()
+	if !ok {
+		return "", fmt.Errorf("this share is private. If it is yours, run `%s login` and try again; otherwise open the link from the email it was shared with.", commandName)
+	}
+	if clicore.IsAPIToken(credential.Token) {
+		return "", errors.New("this share is private, and a personal API token can't open one. Use an interactive login (`" + commandName + " login`).")
+	}
+	publicID, err := publicIDFromTarget(rawURL)
+	if err != nil {
+		return "", err
+	}
+	token, err := client.UnlockOwnShare(ctx, publicID)
+	if err != nil {
+		// A 404 here means "not your share" (the endpoint is account-scoped and
+		// deliberately does not distinguish that from "no such share"), which for
+		// somebody holding the link is really "you are not a recipient".
+		var apiErr *clicore.APIError
+		if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+			return "", errors.New("this share is private and isn't shared with this account. Open the link from the email it was shared with.")
+		}
+		return "", fmt.Errorf("unlock this share: %w", err)
+	}
+	return token, nil
+}
+
+func getURL(ctx context.Context, rawURL string) (*http.Response, error) {
+	return getURLWithUnlock(ctx, rawURL, "")
+}
+
+// getURLWithUnlock performs the gateway GET, presenting an owner-minted unlock
+// token as an Authorization header when there is one.
+//
+// The token used to travel in the URL as `?u=`, which the gateway also accepts.
+// That leaked it: the gateway 302s a download to the object host, and Go's
+// http.Client sends the PREVIOUS url -- query string included -- as the Referer
+// on an https->https redirect (net/http refererForURL), so a live credential
+// landed in the storage provider's logs. A header is not carried across a
+// redirect by Go's client, and never appears in a log line or a shell history
+// (§AJ #21).
+func getURLWithUnlock(ctx context.Context, rawURL, unlockToken string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if unlockToken != "" {
+		req.Header.Set("Authorization", "Bearer "+unlockToken)
+	}
+	return clicore.DefaultHTTPClient.Do(req)
+}
+
+func errorCodeFromBody(body []byte) string {
+	var env struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	_ = json.Unmarshal(body, &env)
+	return env.Error.Code
+}
+
+// failDownloadBody maps the gateway's error envelope to a clean CLI message. It
+// takes the already-read body so the caller can inspect the error code first
+// (see fetchShareForDownload) without consuming the response.
+func (a app) failDownloadBody(status int, body []byte, mode string) int {
 	var env struct {
 		Error struct {
 			Code    string `json:"code"`
@@ -3286,12 +3676,12 @@ func (a app) failDownloadResponse(resp *http.Response, mode string) int {
 		fmt.Fprintln(a.stderr, "this share can't be converted — only text shares support --convert-pdf/--convert-docx")
 	case code == "conversion_too_large":
 		fmt.Fprintln(a.stderr, "this text share is too large to convert")
-	case resp.StatusCode == http.StatusTooManyRequests || code == "rate_limited":
+	case status == http.StatusTooManyRequests || code == "rate_limited":
 		fmt.Fprintln(a.stderr, "too many conversion requests right now, try again shortly")
 	default:
 		msg := strings.TrimSpace(env.Error.Message)
 		if msg == "" {
-			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+			msg = fmt.Sprintf("HTTP %d", status)
 		}
 		if mode == "pdf" || mode == "docx" {
 			fmt.Fprintf(a.stderr, "convert download failed: %s\n", msg)
@@ -4352,6 +4742,16 @@ func p2pOutputWriter(output, room string, stdout io.Writer) (io.Writer, string, 
 	return f, target, func() { _ = f.Close() }, nil
 }
 
+// receive downloads files sent to this device. Its shape follows §AG:
+//
+//   - a bare `receive` LISTS what is waiting (see the deprecation note below);
+//   - `receive [DIR]` on a terminal offers a numbered picker, because several
+//     files can be waiting and taking all of them is a decision, not a default;
+//   - `--all` and `--id` are the non-interactive forms, and a non-TTY MUST use
+//     one of them rather than hang waiting for input that will never come.
+//
+// The destination now comes from the shared receive setting instead of the
+// CURRENT WORKING DIRECTORY, which is where this command used to drop files.
 func (a app) receive(ctx context.Context, args []string) int {
 	opts, err := parseReceiveArgs(args)
 	if err != nil {
@@ -4367,22 +4767,226 @@ func (a app) receive(ctx context.Context, args []string) int {
 	if err != nil {
 		return a.fail("ensure device key", err)
 	}
-	for {
-		received, err := receiveInboxOnce(ctx, client, credential, opts.output, a.stdout)
-		if err != nil {
-			return a.fail("receive", err)
-		}
-		if !opts.watch {
-			if received == 0 {
-				fmt.Fprintln(a.stdout, "No new device shares")
-				if pending, err := client.ListPendingInbox(ctx); err == nil && len(pending.Shares) > 0 {
-					fmt.Fprintf(a.stdout, "%d file(s) awaiting your approval — run '%s incoming'\n", len(pending.Shares), commandName)
-				}
+	dest, destIsFolder := a.receiveDir(opts.output)
+
+	// --watch is a daemon-shaped loop: it takes everything, as it always has.
+	if opts.watch {
+		for {
+			if _, err := receiveInboxOnce(ctx, client, credential, dest, destIsFolder, a.stdout); err != nil {
+				return a.fail("receive", err)
 			}
-			return 0
+			a.sleep(5 * time.Second)
 		}
-		a.sleep(5 * time.Second)
 	}
+
+	waiting, err := a.waitingInbox(ctx, client, credential)
+	if err != nil {
+		return a.fail("receive", err)
+	}
+	if len(waiting) == 0 {
+		fmt.Fprintln(a.stdout, "No new device shares")
+		a.reportPendingApprovals(ctx, client)
+		return 0
+	}
+
+	// --id: take exactly the named shares.
+	if len(opts.ids) > 0 {
+		only := map[string]bool{}
+		known := map[string]bool{}
+		for _, s := range waiting {
+			known[s.PublicID] = true
+		}
+		for _, id := range opts.ids {
+			if !known[id] {
+				fmt.Fprintf(a.stderr, "%s is not waiting to be received (run `%s receive` to see what is)\n", id, commandName)
+				return 1
+			}
+			only[id] = true
+		}
+		return a.saveInbox(ctx, client, credential, dest, destIsFolder, only)
+	}
+	if opts.all {
+		return a.saveInbox(ctx, client, credential, dest, destIsFolder, nil)
+	}
+
+	// Neither --all nor --id was given, so WHICH files is still an open question.
+	// One rule decides it: ask if there is somebody to ask.
+	//
+	//   TTY, no destination  -> list what is waiting (nothing is written)
+	//   TTY, a destination   -> the numbered picker
+	//   not a TTY            -> take everything, as this command always has,
+	//                           and warn that the next release will require --all
+	//
+	// The non-TTY branch is what keeps every existing script working. Erroring
+	// there today would break `receive --out DIR` in a cron job with no warning,
+	// which is exactly what the staged rollout exists to avoid (§AG D5); it
+	// becomes an error one release later.
+	if !a.inputIsTTY() {
+		fmt.Fprintf(a.stderr, "warning: `%s receive` without --all or --id will stop taking every waiting file in the next release. Add --all to keep this behaviour.\n", commandName)
+		return a.saveInbox(ctx, client, credential, dest, destIsFolder, nil)
+	}
+	if !opts.explicitDest {
+		a.printWaiting(waiting, dest)
+		a.reportPendingApprovals(ctx, client)
+		return 0
+	}
+	only, ok := a.pickInbox(waiting)
+	if !ok {
+		return 0 // cancelled: not an error
+	}
+	return a.saveInbox(ctx, client, credential, dest, destIsFolder, only)
+}
+
+// waitingInbox lists the shares this device can actually decrypt and has not
+// already saved — what a person means by "waiting".
+func (a app) waitingInbox(ctx context.Context, client *clicore.Client, credential clicore.Credential) ([]clicore.InboxShare, error) {
+	inbox, err := client.Inbox(ctx)
+	if err != nil {
+		return nil, err
+	}
+	received, err := loadReceivedInbox()
+	if err != nil {
+		return nil, err
+	}
+	var out []clicore.InboxShare
+	for _, share := range inbox.Shares {
+		if strings.TrimSpace(share.PublicID) == "" || strings.TrimSpace(share.SealedKey) == "" {
+			continue
+		}
+		if _, done := received[share.PublicID]; done {
+			continue
+		}
+		out = append(out, share)
+	}
+	return out, nil
+}
+
+func (a app) printWaiting(waiting []clicore.InboxShare, dest string) {
+	fmt.Fprintf(a.stdout, "%d file(s) waiting:\n", len(waiting))
+	for _, s := range waiting {
+		fmt.Fprintf(a.stdout, "  %s  %s  %s%s\n", s.PublicID, s.FileName, humanSize(int64(s.SizeBytes)), fromSuffix(s.FromDeviceName))
+	}
+	// A waiting file is not kept forever: it expires like any other share, and
+	// nobody is watching a queue they cannot see the deadline on (§AG D6).
+	if soonest, ok := soonestExpiry(waiting, time.Now()); ok {
+		fmt.Fprintf(a.stdout, "\nOldest expires in %s.\n", humanUntil(soonest))
+	}
+	fmt.Fprintf(a.stdout, "\nTo save them: %s receive %s   (or --id <public-id> for one)\n", commandName, dest)
+}
+
+// soonestExpiry finds the nearest expiry among the waiting shares. Shares with
+// an unparseable or absent expiry are ignored rather than guessed at: a wrong
+// deadline is worse than none.
+func soonestExpiry(waiting []clicore.InboxShare, now time.Time) (time.Duration, bool) {
+	best := time.Duration(0)
+	found := false
+	for _, s := range waiting {
+		at, err := time.Parse(time.RFC3339, strings.TrimSpace(s.ExpiresAt))
+		if err != nil {
+			continue
+		}
+		left := at.Sub(now)
+		if !found || left < best {
+			best, found = left, true
+		}
+	}
+	return best, found
+}
+
+// humanUntil renders a remaining duration the way a person would say it.
+func humanUntil(d time.Duration) string {
+	switch {
+	case d <= 0:
+		return "less than a minute"
+	case d < time.Hour:
+		return fmt.Sprintf("%d minutes", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%d hours", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%d days", int(d.Hours()/24))
+	}
+}
+
+// pickInbox asks which waiting files to save. Returns nil for "all".
+func (a app) pickInbox(waiting []clicore.InboxShare) (map[string]bool, bool) {
+	for i, s := range waiting {
+		fmt.Fprintf(a.stderr, "  %d  %s  %s%s\n", i+1, s.FileName, humanSize(int64(s.SizeBytes)), fromSuffix(s.FromDeviceName))
+	}
+	fmt.Fprintf(a.stderr, "Select (1-%d, a=all, q=quit): ", len(waiting))
+	reader := bufio.NewReader(a.input())
+	line, _ := reader.ReadString('\n')
+	switch answer := strings.ToLower(strings.TrimSpace(line)); answer {
+	case "", "q", "quit", "n", "no":
+		return nil, false
+	case "a", "all":
+		return nil, true
+	default:
+		only := map[string]bool{}
+		// Accept "1", "1,3", "1 3" — people type all three.
+		for _, field := range strings.FieldsFunc(answer, func(r rune) bool { return r == ',' || r == ' ' }) {
+			n, err := strconv.Atoi(strings.TrimSpace(field))
+			if err != nil || n < 1 || n > len(waiting) {
+				fmt.Fprintf(a.stderr, "not a choice on the list: %q\n", field)
+				return nil, false
+			}
+			only[waiting[n-1].PublicID] = true
+		}
+		if len(only) == 0 {
+			return nil, false
+		}
+		return only, true
+	}
+}
+
+func (a app) saveInbox(ctx context.Context, client *clicore.Client, credential clicore.Credential, dest string, destIsFolder bool, only map[string]bool) int {
+	if _, err := receiveInboxSelected(ctx, client, credential, dest, destIsFolder, a.stdout, only); err != nil {
+		return a.fail("receive", err)
+	}
+	return 0
+}
+
+func (a app) reportPendingApprovals(ctx context.Context, client *clicore.Client) {
+	if pending, err := client.ListPendingInbox(ctx); err == nil && len(pending.Shares) > 0 {
+		fmt.Fprintf(a.stdout, "%d file(s) awaiting your approval — run '%s incoming'\n", len(pending.Shares), commandName)
+	}
+}
+
+// receiveDir resolves where files land: an explicit argument beats the
+// configured folder, which beats the Downloads default.
+// receiveDir resolves where arrivals land, and reports whether the answer is a
+// FOLDER by construction. It is a folder whenever it came from configuration;
+// only a value the user typed with --output may name a single file.
+func (a app) receiveDir(explicit string) (string, bool) {
+	if strings.TrimSpace(explicit) != "" {
+		return explicit, false
+	}
+	cfg, err := clicore.LoadConfig()
+	if err != nil {
+		return clicore.DownloadsDir(), true
+	}
+	return cfg.ReceiveSettings().Dir, true
+}
+
+// humanSize renders a byte count the way a person reads one. Deliberately plain
+// (no padding): it sits in a list where the file name is what the eye follows.
+func humanSize(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for size := n / unit; size >= unit; size /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+func fromSuffix(from string) string {
+	if strings.TrimSpace(from) == "" {
+		return ""
+	}
+	return "  from " + from
 }
 
 // reseal re-seals in-flight end-to-end shares whose recipient re-keyed since the send, using
@@ -4503,6 +5107,16 @@ func parseStreamArgs(args []string) (streamOptions, error) {
 type receiveOptions struct {
 	output string
 	watch  bool
+	// all takes every waiting file without asking. Required in a non-TTY, where
+	// the picker has nobody to ask.
+	all bool
+	// ids takes exactly these shares (repeatable --id).
+	ids []string
+	// explicitDest records that a destination was NAMED, which is what separates
+	// "show me what's waiting" from "save it here". Without it a bare `receive`
+	// and `receive ~/dir` would be indistinguishable once the configured folder
+	// filled in the destination.
+	explicitDest bool
 }
 
 func parseReceiveArgs(args []string) (receiveOptions, error) {
@@ -4518,13 +5132,33 @@ func parseReceiveArgs(args []string) (receiveOptions, error) {
 				return receiveOptions{}, errors.New("--out requires a value")
 			}
 			opts.output = args[i]
+			opts.explicitDest = true
 		case strings.HasPrefix(arg, "--out="):
 			opts.output = strings.TrimPrefix(arg, "--out=")
+			opts.explicitDest = true
+		case arg == "--all" || arg == "-a":
+			opts.all = true
+		case arg == "--id":
+			i++
+			if i >= len(args) {
+				return receiveOptions{}, errors.New("--id requires a value")
+			}
+			opts.ids = append(opts.ids, strings.TrimSpace(args[i]))
+		case strings.HasPrefix(arg, "--id="):
+			opts.ids = append(opts.ids, strings.TrimSpace(strings.TrimPrefix(arg, "--id=")))
 		case strings.HasPrefix(arg, "-"):
 			return receiveOptions{}, fmt.Errorf("unknown flag: %s", arg)
 		default:
-			return receiveOptions{}, fmt.Errorf("unexpected argument: %s", arg)
+			// A bare path is the destination: `s2u receive ~/inbox`.
+			if opts.output != "" {
+				return receiveOptions{}, fmt.Errorf("receive accepts one destination folder, got a second: %s", arg)
+			}
+			opts.output = arg
+			opts.explicitDest = true
 		}
+	}
+	if opts.all && len(opts.ids) > 0 {
+		return receiveOptions{}, errors.New("--all and --id cannot be combined")
 	}
 	return opts, nil
 }
@@ -4602,7 +5236,14 @@ func ensureDeviceKey(ctx context.Context, client *clicore.Client, credential cli
 	return credential, nil
 }
 
-func receiveInboxOnce(ctx context.Context, client *clicore.Client, credential clicore.Credential, output string, stdout io.Writer) (int, error) {
+func receiveInboxOnce(ctx context.Context, client *clicore.Client, credential clicore.Credential, output string, outputIsFolder bool, stdout io.Writer) (int, error) {
+	return receiveInboxSelected(ctx, client, credential, output, outputIsFolder, stdout, nil)
+}
+
+// receiveInboxSelected downloads waiting inbox shares. A nil `only` takes
+// everything (the watch loop and --all); a non-nil one takes just those public
+// IDs, which is what the interactive picker and --id use.
+func receiveInboxSelected(ctx context.Context, client *clicore.Client, credential clicore.Credential, output string, outputIsFolder bool, stdout io.Writer, only map[string]bool) (int, error) {
 	inbox, err := client.Inbox(ctx)
 	if err != nil {
 		return 0, err
@@ -4619,6 +5260,9 @@ func receiveInboxOnce(ctx context.Context, client *clicore.Client, credential cl
 		if _, ok := received[share.PublicID]; ok {
 			continue
 		}
+		if only != nil && !only[share.PublicID] {
+			continue
+		}
 		contentKey, err := clicore.OpenSealedContentKey(share.SealedKey, credential.DevicePublicKey, credential.DevicePrivateKey)
 		if err != nil {
 			// sealed to a different device key (e.g. this device re-keyed after the
@@ -4630,9 +5274,15 @@ func receiveInboxOnce(ctx context.Context, client *clicore.Client, credential cl
 		if err := client.DownloadInboxContent(ctx, share.PublicID, &encrypted); err != nil {
 			return count, err
 		}
-		outPath, err := inboxOutputPath(share, output)
+		outPath, err := inboxOutputPath(share, output, outputIsFolder)
 		if err != nil {
 			return count, err
+		}
+		// The file name comes from the sender, so it must never replace
+		// something already on disk (§AJ #24). An explicit --output FILE is the
+		// receiver's own choice and inboxOutputPath returns it verbatim.
+		if output == "" || outputIsFolder || isDirTarget(output) {
+			outPath = clicore.UniquePath(outPath)
 		}
 		if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
 			return count, err
@@ -4684,13 +5334,27 @@ type receivedInboxEntry struct {
 
 type receivedInboxRegistry map[string]receivedInboxEntry
 
-func inboxOutputPath(share clicore.InboxShare, output string) (string, error) {
+// inboxOutputPath decides where one arriving file lands.
+//
+// outputIsFolder says the value is a FOLDER by construction -- it came from the
+// configured receive directory, not from a --output the user typed. That
+// distinction matters: a folder that does not exist yet used to fall through to
+// the last line and be treated as a FILE NAME, so the first arrival was written
+// AS the folder. The user saw "Received report.txt -> ~/Downloads" and got a
+// file called Downloads holding the bytes, and the next arrival overwrote it.
+// Found by running a real two-node device send on staging; it hides on a desktop
+// because ~/Downloads usually already exists, and appears the moment someone
+// points `config set-receive-dir` at a folder they have not created.
+func inboxOutputPath(share clicore.InboxShare, output string, outputIsFolder bool) (string, error) {
 	name := filepath.Base(strings.TrimSpace(share.FileName))
 	if name == "." || name == string(filepath.Separator) || name == "" {
 		name = share.PublicID
 	}
 	if output == "" {
 		return filepath.Abs(name)
+	}
+	if outputIsFolder {
+		return filepath.Abs(filepath.Join(output, name))
 	}
 	info, err := os.Stat(output)
 	if err == nil && info.IsDir() {
@@ -4939,11 +5603,7 @@ func isTerminalWriter(w io.Writer) bool {
 	if !ok {
 		return false
 	}
-	info, err := file.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return isCharTerminal(file)
 }
 
 func isTerminalReader(r io.Reader) bool {
@@ -4951,11 +5611,7 @@ func isTerminalReader(r io.Reader) bool {
 	if !ok {
 		return false
 	}
-	info, err := file.Stat()
-	if err != nil {
-		return false
-	}
-	return info.Mode()&os.ModeCharDevice != 0
+	return isCharTerminal(file)
 }
 
 func (a app) fail(action string, err error) int {
@@ -5176,4 +5832,18 @@ func managedInstall() (managedInstallInfo, bool) {
 	default:
 		return managedInstallInfo{}, false
 	}
+}
+
+// isDirTarget reports whether an --output value names a directory (existing, or
+// written with a trailing separator), in which case the file name inside it
+// still comes from the sender.
+func isDirTarget(output string) bool {
+	if output == "" {
+		return true
+	}
+	if strings.HasSuffix(output, string(filepath.Separator)) {
+		return true
+	}
+	info, err := os.Stat(output)
+	return err == nil && info.IsDir()
 }

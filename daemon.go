@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -63,6 +64,8 @@ func (a app) daemonUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s daemon <run|status|start|stop|install|uninstall|logs>\n", commandName)
 	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify] [--agent-bridge [--agent-strict]]  run the receiver\n")
 	fmt.Fprintf(a.stderr, "  install [--dest DIR]                         install + start the per-user service\n")
+	fmt.Fprintf(a.stderr, "                                               (asks where files land and whether to save\n")
+	fmt.Fprintf(a.stderr, "                                                them automatically, since the service can't)\n")
 	fmt.Fprintf(a.stderr, "  status | stop | start | logs [-f] | uninstall\n")
 	return 2
 }
@@ -118,7 +121,9 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 	logw := daemon.LogWriter(a.stderr)
 	deps := daemon.Deps{
 		ReceiveOnce: func(c context.Context, dir string) (int, error) {
-			return receiveInboxOnce(c, client, credential, dir, a.stdout)
+			// The daemon's destination is always the configured FOLDER, never a
+			// single file the user named (§AG two-node run, 2026-09-10).
+			return receiveInboxOnce(c, client, credential, dir, true, a.stdout)
 		},
 		RefreshTrust: a.refreshTrustList,
 		CheckUpdate:  a.daemonUpdateCheck,
@@ -131,7 +136,16 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 	// Agent-session bridge (ADR-036): register this machine's coding-agent sessions
 	// and receive relayed inject requests. Needs the authenticated device client.
 	if opts.agentBridge {
-		if client != nil {
+		hasDeviceKey := credential.DevicePublicKey != "" && credential.DevicePrivateKey != ""
+		switch {
+		case client == nil:
+			fmt.Fprintln(a.stderr, "note: --agent-bridge needs an interactive login; the agent bridge is off")
+		case !hasDeviceKey:
+			// A session from before device keys existed. Prompts are sealed to
+			// the device key; with none, nothing can be verified, so the bridge
+			// stays off rather than running plaintext from the server (§AJ #8).
+			fmt.Fprintf(a.stderr, "note: this device has no encryption key, so the agent bridge is off; run `%s login` again to create one\n", commandName)
+		default:
 			runOpts.AgentBridge = true
 			deps.AgentClient = client
 			deps.AgentRunners = []daemon.AgentRunner{
@@ -140,7 +154,7 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 				daemon.GeminiRunner{Strict: opts.agentStrict},
 			}
 			// E2E: unseal injected prompts with this device's key (ADR-036 P4).
-			if credential.DevicePublicKey != "" && credential.DevicePrivateKey != "" {
+			{
 				pub, priv := credential.DevicePublicKey, credential.DevicePrivateKey
 				deps.Unseal = func(sealed string) (string, error) {
 					b, err := clicore.OpenSealedForDevice(sealed, pub, priv)
@@ -161,8 +175,6 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 					return buf.Bytes(), nil
 				}
 			}
-		} else {
-			fmt.Fprintln(a.stderr, "note: --agent-bridge needs an interactive login; the agent bridge is off")
 		}
 	}
 
@@ -229,10 +241,76 @@ func (a app) daemonInstall(args []string) int {
 			dest = abs
 		}
 	}
+	// The daemon is HEADLESS, so it can never put the first-arrival question to
+	// anybody (§AG D2). Install is the one moment in its life when a human is
+	// definitely present, so it is asked here and the answer is stored -- the
+	// service then starts with a decided setting instead of silently holding
+	// files, or silently writing them, forever.
+	a.askReceiveSettingsForDaemon(dest)
 	if err := daemon.ServiceInstall(exe, dest, a.stdout); err != nil {
 		return a.fail("daemon install", err)
 	}
 	return 0
+}
+
+// askReceiveSettingsForDaemon puts the receive questions to the person running
+// `daemon install`, and records the answers so the resident service never has to
+// ask. Silent when there is no terminal (an unattended install) or when the
+// questions are already answered: an install script must not hang on a prompt,
+// and re-asking somebody who has already chosen is noise.
+//
+// A --dest on the command line answers the folder question by itself.
+func (a app) askReceiveSettingsForDaemon(dest string) {
+	if !a.inputIsTTY() {
+		return
+	}
+	config, err := clicore.LoadConfig()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return // config trouble is reported by the install itself; don't double up
+	}
+	settings := config.ReceiveSettings()
+	reader := bufio.NewReader(a.input())
+
+	if !settings.AutoAnswered {
+		fmt.Fprintf(a.stderr, "Download files sent to this device automatically? [y/N] ")
+		line, _ := reader.ReadString('\n')
+		auto := isAffirmative(line)
+		if err := clicore.SetReceiveAuto(auto); err != nil {
+			fmt.Fprintf(a.stderr, "warning: could not save that answer: %v\n", err)
+		} else if !auto {
+			fmt.Fprintf(a.stderr, "Files will wait until you run `%s receive`.\n", commandName)
+		}
+	}
+
+	// Only worth asking once we know files will actually be written somewhere.
+	if dest != "" {
+		return
+	}
+	if config, err = clicore.LoadConfig(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	settings = config.ReceiveSettings()
+	if !settings.Auto {
+		return
+	}
+	fmt.Fprintf(a.stderr, "Receive folder [%s]: ", settings.Dir)
+	line, _ := reader.ReadString('\n')
+	if chosen := strings.TrimSpace(line); chosen != "" {
+		if err := clicore.SetReceiveDir(chosen); err != nil {
+			fmt.Fprintf(a.stderr, "warning: could not save that folder: %v\n", err)
+		}
+	}
+}
+
+// isAffirmative reads a [y/N] answer. Anything that is not clearly a yes is a
+// no: this gates whether files land on disk without anyone watching.
+func isAffirmative(line string) bool {
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 // daemonUpdateCheck reports whether a newer build exists, with the right upgrade

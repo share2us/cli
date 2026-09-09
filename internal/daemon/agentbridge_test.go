@@ -53,10 +53,35 @@ func (f *fakeRunner) Run(_ context.Context, sessionID, _, prompt string) (string
 func rt() *Runtime { return &Runtime{notifier: NoopNotifier{}} }
 func noDeps() Deps { return Deps{Logf: func(string, ...any) {}} }
 
+// keyedDeps is a device that CAN unseal: the identity function stands in for
+// the sealed box so the tests below exercise what happens after decryption.
+func keyedDeps() Deps {
+	d := noDeps()
+	d.Unseal = func(s string) (string, error) { return s, nil }
+	return d
+}
+
+// §AJ #8: with no device key there is nothing to unseal with, and the old code
+// ran the server's bytes as the prompt. That is the server (or anyone holding
+// its credentials) executing commands in the user's project with edits
+// pre-approved. No key: refuse, report, never run.
+func TestHandleInjectRefusesToRunWithoutDeviceKey(t *testing.T) {
+	c := &fakeAgentClient{}
+	r := &fakeRunner{out: "should never happen"}
+	rt().handleInject(context.Background(), c, r, noDeps(),
+		clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "rm -rf the project"})
+	if r.ranSID != "" || r.ranPrompt != "" {
+		t.Fatalf("a plaintext prompt was RUN without a device key: session=%q prompt=%q", r.ranSID, r.ranPrompt)
+	}
+	if len(c.reports) != 1 || c.reports[0][0] != "failed" {
+		t.Fatalf("reports = %v, want a single failed", c.reports)
+	}
+}
+
 func TestHandleInjectHappy(t *testing.T) {
 	c := &fakeAgentClient{}
 	r := &fakeRunner{out: "did the thing"}
-	rt().handleInject(context.Background(), c, r, noDeps(),
+	rt().handleInject(context.Background(), c, r, keyedDeps(),
 		clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "do it"})
 	if r.ranSID != "s1" {
 		t.Fatalf("runner ran session %q, want s1", r.ranSID)
@@ -69,7 +94,7 @@ func TestHandleInjectHappy(t *testing.T) {
 func TestHandleInjectRunError(t *testing.T) {
 	c := &fakeAgentClient{}
 	r := &fakeRunner{out: "boom output", err: errors.New("nonzero exit")}
-	rt().handleInject(context.Background(), c, r, noDeps(),
+	rt().handleInject(context.Background(), c, r, keyedDeps(),
 		clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "x"})
 	if len(c.reports) != 2 || c.reports[1][0] != "failed" {
 		t.Fatalf("reports = %v, want running then failed", c.reports)
