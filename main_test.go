@@ -3728,3 +3728,66 @@ func TestTruncatedEncryptedShareLeavesNoPlaintext(t *testing.T) {
 		t.Fatalf("left behind %q", e.Name())
 	}
 }
+
+// Found by the two-node §AG run on staging, 2026-09-10.
+//
+// The configured receive FOLDER was passed down as a plain string, and a folder
+// that does not exist yet fell through to "treat it as a file name". The first
+// arrival was therefore written AS the folder: the user saw
+// "Received report.txt -> ~/Downloads" and got a FILE called Downloads holding
+// the bytes. It hides on a desktop because ~/Downloads usually already exists,
+// and appears the moment someone points config set-receive-dir at a folder they
+// have not created.
+func TestReceiveFolderThatDoesNotExistYetIsTreatedAsAFolder(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "not-created-yet")
+	share := clicore.InboxShare{PublicID: "pub-1", FileName: "report.txt"}
+
+	got, err := inboxOutputPath(share, dir, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "report.txt")
+	if got != want {
+		t.Fatalf("landed at %q, want %q (the file was written AS the folder)", got, want)
+	}
+}
+
+// A folder that DOES exist behaves the same, whichever way it is described.
+func TestExistingReceiveFolderIsUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	share := clicore.InboxShare{PublicID: "pub-1", FileName: "report.txt"}
+	for _, isFolder := range []bool{true, false} {
+		got, err := inboxOutputPath(share, dir, isFolder)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != filepath.Join(dir, "report.txt") {
+			t.Fatalf("outputIsFolder=%v gave %q", isFolder, got)
+		}
+	}
+}
+
+// An explicit --output naming a file is still honoured exactly.
+func TestExplicitOutputFileIsStillAFile(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "chosen-name.txt")
+	share := clicore.InboxShare{PublicID: "pub-1", FileName: "report.txt"}
+	got, err := inboxOutputPath(share, target, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != target {
+		t.Fatalf("an explicit --output was rewritten to %q", got)
+	}
+}
+
+// receiveDir reports configuration as a folder and an explicit value as not.
+func TestReceiveDirReportsWhetherItIsAFolder(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	a := app{}
+	if _, isFolder := a.receiveDir(""); !isFolder {
+		t.Fatal("the configured receive directory was not reported as a folder")
+	}
+	if _, isFolder := a.receiveDir("/tmp/some-file.txt"); isFolder {
+		t.Fatal("an explicit --output was reported as a folder")
+	}
+}

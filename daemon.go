@@ -121,7 +121,9 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 	logw := daemon.LogWriter(a.stderr)
 	deps := daemon.Deps{
 		ReceiveOnce: func(c context.Context, dir string) (int, error) {
-			return receiveInboxOnce(c, client, credential, dir, a.stdout)
+			// The daemon's destination is always the configured FOLDER, never a
+			// single file the user named (§AG two-node run, 2026-09-10).
+			return receiveInboxOnce(c, client, credential, dir, true, a.stdout)
 		},
 		RefreshTrust: a.refreshTrustList,
 		CheckUpdate:  a.daemonUpdateCheck,

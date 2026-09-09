@@ -4767,12 +4767,12 @@ func (a app) receive(ctx context.Context, args []string) int {
 	if err != nil {
 		return a.fail("ensure device key", err)
 	}
-	dest := a.receiveDir(opts.output)
+	dest, destIsFolder := a.receiveDir(opts.output)
 
 	// --watch is a daemon-shaped loop: it takes everything, as it always has.
 	if opts.watch {
 		for {
-			if _, err := receiveInboxOnce(ctx, client, credential, dest, a.stdout); err != nil {
+			if _, err := receiveInboxOnce(ctx, client, credential, dest, destIsFolder, a.stdout); err != nil {
 				return a.fail("receive", err)
 			}
 			a.sleep(5 * time.Second)
@@ -4803,10 +4803,10 @@ func (a app) receive(ctx context.Context, args []string) int {
 			}
 			only[id] = true
 		}
-		return a.saveInbox(ctx, client, credential, dest, only)
+		return a.saveInbox(ctx, client, credential, dest, destIsFolder, only)
 	}
 	if opts.all {
-		return a.saveInbox(ctx, client, credential, dest, nil)
+		return a.saveInbox(ctx, client, credential, dest, destIsFolder, nil)
 	}
 
 	// Neither --all nor --id was given, so WHICH files is still an open question.
@@ -4823,7 +4823,7 @@ func (a app) receive(ctx context.Context, args []string) int {
 	// becomes an error one release later.
 	if !a.inputIsTTY() {
 		fmt.Fprintf(a.stderr, "warning: `%s receive` without --all or --id will stop taking every waiting file in the next release. Add --all to keep this behaviour.\n", commandName)
-		return a.saveInbox(ctx, client, credential, dest, nil)
+		return a.saveInbox(ctx, client, credential, dest, destIsFolder, nil)
 	}
 	if !opts.explicitDest {
 		a.printWaiting(waiting, dest)
@@ -4834,7 +4834,7 @@ func (a app) receive(ctx context.Context, args []string) int {
 	if !ok {
 		return 0 // cancelled: not an error
 	}
-	return a.saveInbox(ctx, client, credential, dest, only)
+	return a.saveInbox(ctx, client, credential, dest, destIsFolder, only)
 }
 
 // waitingInbox lists the shares this device can actually decrypt and has not
@@ -4938,8 +4938,8 @@ func (a app) pickInbox(waiting []clicore.InboxShare) (map[string]bool, bool) {
 	}
 }
 
-func (a app) saveInbox(ctx context.Context, client *clicore.Client, credential clicore.Credential, dest string, only map[string]bool) int {
-	if _, err := receiveInboxSelected(ctx, client, credential, dest, a.stdout, only); err != nil {
+func (a app) saveInbox(ctx context.Context, client *clicore.Client, credential clicore.Credential, dest string, destIsFolder bool, only map[string]bool) int {
+	if _, err := receiveInboxSelected(ctx, client, credential, dest, destIsFolder, a.stdout, only); err != nil {
 		return a.fail("receive", err)
 	}
 	return 0
@@ -4953,15 +4953,18 @@ func (a app) reportPendingApprovals(ctx context.Context, client *clicore.Client)
 
 // receiveDir resolves where files land: an explicit argument beats the
 // configured folder, which beats the Downloads default.
-func (a app) receiveDir(explicit string) string {
+// receiveDir resolves where arrivals land, and reports whether the answer is a
+// FOLDER by construction. It is a folder whenever it came from configuration;
+// only a value the user typed with --output may name a single file.
+func (a app) receiveDir(explicit string) (string, bool) {
 	if strings.TrimSpace(explicit) != "" {
-		return explicit
+		return explicit, false
 	}
 	cfg, err := clicore.LoadConfig()
 	if err != nil {
-		return clicore.DownloadsDir()
+		return clicore.DownloadsDir(), true
 	}
-	return cfg.ReceiveSettings().Dir
+	return cfg.ReceiveSettings().Dir, true
 }
 
 // humanSize renders a byte count the way a person reads one. Deliberately plain
@@ -5233,14 +5236,14 @@ func ensureDeviceKey(ctx context.Context, client *clicore.Client, credential cli
 	return credential, nil
 }
 
-func receiveInboxOnce(ctx context.Context, client *clicore.Client, credential clicore.Credential, output string, stdout io.Writer) (int, error) {
-	return receiveInboxSelected(ctx, client, credential, output, stdout, nil)
+func receiveInboxOnce(ctx context.Context, client *clicore.Client, credential clicore.Credential, output string, outputIsFolder bool, stdout io.Writer) (int, error) {
+	return receiveInboxSelected(ctx, client, credential, output, outputIsFolder, stdout, nil)
 }
 
 // receiveInboxSelected downloads waiting inbox shares. A nil `only` takes
 // everything (the watch loop and --all); a non-nil one takes just those public
 // IDs, which is what the interactive picker and --id use.
-func receiveInboxSelected(ctx context.Context, client *clicore.Client, credential clicore.Credential, output string, stdout io.Writer, only map[string]bool) (int, error) {
+func receiveInboxSelected(ctx context.Context, client *clicore.Client, credential clicore.Credential, output string, outputIsFolder bool, stdout io.Writer, only map[string]bool) (int, error) {
 	inbox, err := client.Inbox(ctx)
 	if err != nil {
 		return 0, err
@@ -5271,14 +5274,14 @@ func receiveInboxSelected(ctx context.Context, client *clicore.Client, credentia
 		if err := client.DownloadInboxContent(ctx, share.PublicID, &encrypted); err != nil {
 			return count, err
 		}
-		outPath, err := inboxOutputPath(share, output)
+		outPath, err := inboxOutputPath(share, output, outputIsFolder)
 		if err != nil {
 			return count, err
 		}
 		// The file name comes from the sender, so it must never replace
 		// something already on disk (§AJ #24). An explicit --output FILE is the
 		// receiver's own choice and inboxOutputPath returns it verbatim.
-		if output == "" || isDirTarget(output) {
+		if output == "" || outputIsFolder || isDirTarget(output) {
 			outPath = clicore.UniquePath(outPath)
 		}
 		if err := os.MkdirAll(filepath.Dir(outPath), 0o700); err != nil {
@@ -5331,13 +5334,27 @@ type receivedInboxEntry struct {
 
 type receivedInboxRegistry map[string]receivedInboxEntry
 
-func inboxOutputPath(share clicore.InboxShare, output string) (string, error) {
+// inboxOutputPath decides where one arriving file lands.
+//
+// outputIsFolder says the value is a FOLDER by construction -- it came from the
+// configured receive directory, not from a --output the user typed. That
+// distinction matters: a folder that does not exist yet used to fall through to
+// the last line and be treated as a FILE NAME, so the first arrival was written
+// AS the folder. The user saw "Received report.txt -> ~/Downloads" and got a
+// file called Downloads holding the bytes, and the next arrival overwrote it.
+// Found by running a real two-node device send on staging; it hides on a desktop
+// because ~/Downloads usually already exists, and appears the moment someone
+// points `config set-receive-dir` at a folder they have not created.
+func inboxOutputPath(share clicore.InboxShare, output string, outputIsFolder bool) (string, error) {
 	name := filepath.Base(strings.TrimSpace(share.FileName))
 	if name == "." || name == string(filepath.Separator) || name == "" {
 		name = share.PublicID
 	}
 	if output == "" {
 		return filepath.Abs(name)
+	}
+	if outputIsFolder {
+		return filepath.Abs(filepath.Join(output, name))
 	}
 	info, err := os.Stat(output)
 	if err == nil && info.IsDir() {
