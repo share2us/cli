@@ -5,7 +5,9 @@ package daemon
 
 import (
 	"crypto/ed25519"
+	clicore "github.com/share2us/cli-core"
 	"testing"
+	"time"
 
 	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli-core/lanshare"
@@ -74,5 +76,47 @@ func TestApprovalPolicyValid(t *testing.T) {
 	}
 	if approvalPolicyValid("bogus") {
 		t.Fatal("bogus policy accepted")
+	}
+}
+
+// countingNotifier records what reached the desktop.
+type countingNotifier struct{ messages []string }
+
+func (n *countingNotifier) Info(_, message string) { n.messages = append(n.messages, message) }
+func (n *countingNotifier) SupportsActions() bool  { return false }
+
+// §AJ #31: a REFUSED attempt is attacker-controlled -- anything on the network
+// can connect and be declined as fast as it likes -- and each one fired a
+// desktop notification. That is a notification flood, and it buries the one
+// message that matters.
+func TestRepeatedRefusalsFromOnePeerNotifyOnce(t *testing.T) {
+	notifier := &countingNotifier{}
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	rt := &Runtime{notifier: notifier}
+	rt.refusals.now = func() time.Time { return now }
+	decide := rt.approve(clicore.ApprovalPolicyStrict, Deps{Logf: func(string, ...any) {}})
+
+	req := lanshare.RequestInfo{Name: "payload.bin", PeerIP: "192.168.1.50"}
+	for i := 0; i < 200; i++ {
+		if decide(req) {
+			t.Fatal("an untrusted sender was accepted")
+		}
+	}
+	if len(notifier.messages) != 1 {
+		t.Fatalf("%d notifications for 200 refusals from one peer", len(notifier.messages))
+	}
+
+	// A different peer is still worth telling the user about.
+	other := lanshare.RequestInfo{Name: "payload.bin", PeerIP: "192.168.1.99"}
+	decide(other)
+	if len(notifier.messages) != 2 {
+		t.Fatalf("a second peer produced %d notifications total, want 2", len(notifier.messages))
+	}
+
+	// After the cooldown the first peer can raise its hand again.
+	now = now.Add(refusalNotifyCooldown + time.Second)
+	decide(req)
+	if len(notifier.messages) != 3 {
+		t.Fatalf("after the cooldown: %d notifications, want 3", len(notifier.messages))
 	}
 }

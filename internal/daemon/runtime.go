@@ -76,7 +76,9 @@ type Deps struct {
 // Runtime holds run state (start time, what it owns, the stop hook) so the
 // control server can answer status/owns-receiver and honour a stop request.
 type Runtime struct {
-	notifier  Notifier
+	notifier Notifier
+	// refusals collapses repeated "declined" notifications per peer (§AJ #31).
+	refusals  refusalNotices
 	startedAt time.Time
 	ownsLAN   bool
 	ownsInbox bool
