@@ -16,6 +16,10 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      ship while this section is empty (HTML comments do not count). -->
 
 ### Added
+- **`s2u devices` now tells you which machines can actually receive a file.** It
+  led with a session ID nobody types and labelled everything "key" / "no-key".
+  It now lists the name you pass to `--device`, when each machine was last seen,
+  and whether it is ready to receive or still needs you to sign in on it.
 - **Files sent to this device now land somewhere predictable.** `s2u receive`
   used to drop them into whatever directory you happened to be in. It now uses
   your receive folder (`s2u config set-receive-dir`, defaulting to Downloads),

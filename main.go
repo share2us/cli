@@ -852,18 +852,65 @@ func (a app) devices(ctx context.Context) int {
 		fmt.Fprintln(a.stdout, "No devices found")
 		return 0
 	}
+	// The question this command answers is "which of my devices can I send a file
+	// to, and what do I type". It used to lead with the session UUID -- which is
+	// never what you pass to --device -- and label the rest "key" / "no-key",
+	// which says nothing about whether a send will work.
+	sendable := 0
 	for _, device := range devices.Sessions {
-		keyStatus := "no-key"
-		if strings.TrimSpace(device.PublicKey) != "" {
-			keyStatus = "key"
+		name := strings.TrimSpace(device.DeviceName)
+		if name == "" {
+			name = device.ID
 		}
-		current := ""
-		if device.Current {
-			current = " current"
+		note := ""
+		switch {
+		case device.Current:
+			note = "this device"
+		case strings.TrimSpace(device.PublicKey) == "":
+			// Not a defect to hide: the device is signed in but has never completed
+			// key registration, so a sealed send has nothing to seal to.
+			note = "can't receive yet — sign in with Share2Us on it"
+		default:
+			sendable++
+			note = "ready to receive"
 		}
-		fmt.Fprintf(a.stdout, "%s\t%s\t%s%s\n", device.ID, device.DeviceName, keyStatus, current)
+		fmt.Fprintf(a.stdout, "  %-24s %-10s %-16s %s\n", name, deviceKind(device.ClientType), lastSeen(device.LastUsedAt), note)
+	}
+	if sendable > 0 {
+		fmt.Fprintf(a.stdout, "\nSend to one: %s <file> --device <name>\n", commandName)
 	}
 	return 0
+}
+
+// deviceKind renders the client type as something a person recognises, and never
+// blank -- an empty column reads as missing data rather than an unknown client.
+func deviceKind(clientType string) string {
+	kind := strings.ToLower(strings.TrimSpace(clientType))
+	if kind == "" {
+		return "device"
+	}
+	return kind
+}
+
+// lastSeen turns the API's timestamp into how long ago that was, which is what
+// tells two similarly-named machines apart. An unparseable or absent value
+// yields "" rather than a guess.
+func lastSeen(raw string) string {
+	at, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	d := time.Since(at)
+	switch {
+	case d < 2*time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 48*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 func (a app) signout(ctx context.Context, args []string) int {

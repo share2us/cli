@@ -3394,3 +3394,75 @@ func TestTerminalDetectionRejectsARegularFile(t *testing.T) {
 		t.Fatal("a regular file is not a terminal")
 	}
 }
+
+// `s2u devices` answers one question: which of my devices can I send a file to,
+// and what do I type. It used to lead with the session UUID -- never what you
+// pass to --device -- and label the rest "key" / "no-key", which says nothing
+// about whether a send would work.
+func TestDevicesListNamesWhatYouTypeAndWhatWorks(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(w, map[string]any{"sessions": []map[string]any{
+			{"id": "11111111-1111-1111-1111-111111111111", "device_name": "workstation",
+				"client_type": "cli", "public_key": "", "current": true,
+				"last_used_at": time.Now().UTC().Format(time.RFC3339)},
+			{"id": "22222222-2222-2222-2222-222222222222", "device_name": "macbook",
+				"client_type": "gui", "public_key": "pk", "current": false,
+				"last_used_at": time.Now().Add(-5 * time.Hour).UTC().Format(time.RFC3339)},
+			{"id": "33333333-3333-3333-3333-333333333333", "device_name": "phone",
+				"client_type": "cli", "public_key": "", "current": false,
+				"last_used_at": time.Now().Add(-9 * 24 * time.Hour).UTC().Format(time.RFC3339)},
+		}})
+	}))
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"devices"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d stderr = %s", code, stderr.String())
+	}
+	out := stdout.String()
+
+	// The name is what --device takes, so it leads.
+	for _, name := range []string{"workstation", "macbook", "phone"} {
+		if !strings.Contains(out, name) {
+			t.Fatalf("%s missing:\n%s", name, out)
+		}
+	}
+	// A session UUID is not something anybody types; it must not be the headline.
+	if strings.Contains(out, "11111111-1111-1111-1111-111111111111") {
+		t.Fatalf("the session UUID is still being shown:\n%s", out)
+	}
+	if !strings.Contains(out, "this device") {
+		t.Fatalf("the current device is not marked:\n%s", out)
+	}
+	if !strings.Contains(out, "ready to receive") {
+		t.Fatalf("a key-bearing device is not shown as sendable:\n%s", out)
+	}
+	// Say what to do about it, rather than reporting "no-key" as a fact.
+	if !strings.Contains(out, "can't receive yet") {
+		t.Fatalf("a keyless device does not explain itself:\n%s", out)
+	}
+	// Last-seen is what tells two similarly-named machines apart.
+	if !strings.Contains(out, "5h ago") || !strings.Contains(out, "9d ago") {
+		t.Fatalf("last-seen missing:\n%s", out)
+	}
+	if !strings.Contains(out, "--device <name>") {
+		t.Fatalf("the listing does not say how to send:\n%s", out)
+	}
+}
+
+// With nothing to send to, the hint would be an instruction the user cannot follow.
+func TestDevicesListOmitsTheSendHintWhenNothingCanReceive(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeTestJSON(w, map[string]any{"sessions": []map[string]any{
+			{"id": "11111111-1111-1111-1111-111111111111", "device_name": "workstation",
+				"client_type": "cli", "public_key": "", "current": true},
+		}})
+	}))
+
+	var stdout, stderr bytes.Buffer
+	run([]string{"devices"}, &stdout, &stderr)
+	if strings.Contains(stdout.String(), "--device <name>") {
+		t.Fatalf("offered a send with no device able to receive:\n%s", stdout.String())
+	}
+}
