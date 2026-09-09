@@ -2927,15 +2927,22 @@ func TestGetPrivateShareUnlocksAsOwner(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"token": "unlock-tok", "expires_in": 300})
 		case "/d/pub-1":
 			downloadAttempts++
-			if r.URL.Query().Get("u") == "" {
+			// §AJ #21: the token must arrive as a header, never in the URL --
+			// the query string is what Go's client replays as the Referer when
+			// the gateway redirects to the object host.
+			if got := r.URL.Query().Get("u"); got != "" {
+				t.Fatalf("the unlock token was put in the URL (%q); it must be an Authorization header", got)
+			}
+			auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if auth == "" {
 				w.WriteHeader(http.StatusForbidden)
 				_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{
 					"code": "recipient_verification_required", "message": "Open this share from the link in your email",
 				}})
 				return
 			}
-			if got := r.URL.Query().Get("u"); got != "unlock-tok" {
-				t.Fatalf("unlock token = %q", got)
+			if auth != "unlock-tok" {
+				t.Fatalf("unlock token = %q", auth)
 			}
 			w.Header().Set("Content-Disposition", `attachment; filename="secret.txt"`)
 			_, _ = w.Write([]byte(content))

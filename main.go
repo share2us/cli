@@ -3547,11 +3547,7 @@ func (a app) fetchShareForDownload(ctx context.Context, rawURL, mode string) (*h
 		fmt.Fprintln(a.stderr, err)
 		return nil, 1
 	}
-	unlockedURL, err := withUnlockToken(rawURL, token)
-	if err != nil {
-		return nil, a.fail("prepare download URL", err)
-	}
-	retry, err := getURL(ctx, unlockedURL)
+	retry, err := getURLWithUnlock(ctx, rawURL, token)
 	if err != nil {
 		return nil, a.fail("download share", err)
 	}
@@ -3592,24 +3588,28 @@ func (a app) mintOwnerUnlock(ctx context.Context, rawURL string) (string, error)
 }
 
 func getURL(ctx context.Context, rawURL string) (*http.Response, error) {
+	return getURLWithUnlock(ctx, rawURL, "")
+}
+
+// getURLWithUnlock performs the gateway GET, presenting an owner-minted unlock
+// token as an Authorization header when there is one.
+//
+// The token used to travel in the URL as `?u=`, which the gateway also accepts.
+// That leaked it: the gateway 302s a download to the object host, and Go's
+// http.Client sends the PREVIOUS url -- query string included -- as the Referer
+// on an https->https redirect (net/http refererForURL), so a live credential
+// landed in the storage provider's logs. A header is not carried across a
+// redirect by Go's client, and never appears in a log line or a shell history
+// (§AJ #21).
+func getURLWithUnlock(ctx context.Context, rawURL, unlockToken string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	return clicore.DefaultHTTPClient.Do(req)
-}
-
-// withUnlockToken adds the gateway's ?u= recipient unlock parameter, preserving
-// the download-mode parameter already on the URL.
-func withUnlockToken(rawURL, token string) (string, error) {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return "", err
+	if unlockToken != "" {
+		req.Header.Set("Authorization", "Bearer "+unlockToken)
 	}
-	query := parsed.Query()
-	query.Set("u", token)
-	parsed.RawQuery = query.Encode()
-	return parsed.String(), nil
+	return clicore.DefaultHTTPClient.Do(req)
 }
 
 func errorCodeFromBody(body []byte) string {
