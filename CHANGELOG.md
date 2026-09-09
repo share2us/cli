@@ -15,6 +15,16 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Added
+- **`--private` uploads a file without sharing it with anyone.** The share is
+  yours alone: nobody else can open the link, even holding it. Passing that link
+  back to `s2u` on any device you are signed in on gets the file, which is the
+  point — it is a way to move something between your own machines without
+  handing it to anybody. Composes with `--expires`, `--password` and `--keep`.
+- **`s2u <url>` now works on your own private shares.** Previously an owner
+  signed in on the CLI was refused their own file, because every download path
+  was anonymous and the three ways to prove you are allowed all need a browser.
+
 ### Changed
 - **`discover --download` now checks who is offering the file.** A device's name
   on the network can be claimed by anything, so before pulling an offer the
