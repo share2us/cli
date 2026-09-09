@@ -40,7 +40,48 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   signed in on the CLI was refused their own file, because every download path
   was anonymous and the three ways to prove you are allowed all need a browser.
 
+### Security
+- **Updates now come only from where they are supposed to.** `s2u update`
+  installed whatever archive the server pointed it at, over any protocol, from
+  any host, and checked it against a checksum that arrived in the same reply.
+  A compromised or impersonated server was therefore able to run code as you.
+  The download is now restricted to HTTPS on Share2Us or GitHub at every
+  redirect, a SHA-256 is required and verified, and an over-long download is cut
+  off rather than allowed to fill the disk.
+- **A file arriving from someone else can no longer overwrite yours.** The name
+  came from the sender, so a file called `.bashrc` or `Makefile` replaced what
+  was already there, silently. Arrivals now land beside an existing file as
+  `name (1).ext`. A name you typed yourself with `--output` is still used
+  exactly as you asked.
+- **A download that fails halfway leaves nothing behind.** `s2u get` with a key
+  wrote the decrypted file straight to its destination, so a truncated or
+  tampered transfer — which is detected — left unverified content under the name
+  you asked for. It is now written only after the whole file checks out.
+- **A device on your network can no longer write into your approval prompt.**
+  The sender chooses its own display name, and that text went to your terminal
+  untouched, so it could rewrite the line you were about to approve. Names from
+  the network are now stripped of anything that can move a cursor or reverse
+  text.
+- **Listing your devices needs a real sign-in.** A personal API token, meant for
+  CI, could read every machine on the account with its name and last known
+  address. `s2u devices` now says so plainly instead of failing obscurely.
+- **The background service refuses to run a prompt it cannot verify.** With no
+  device key it executed whatever the server sent, in your project directory,
+  with edits pre-approved. It now declines and says why.
+- **Retained encryption keys no longer outlive the session.** Keys kept to
+  recover an in-flight transfer are removed when you log out, dropped from disk
+  when they expire rather than merely ignored, and stored beside the rest of
+  your credentials instead of a different directory on Windows.
+- **A refused transfer no longer floods your desktop.** Anything on the network
+  could be declined as fast as it liked and each refusal raised a notification,
+  which buried the one message that mattered. Repeated refusals from the same
+  device are now collapsed.
+
 ### Fixed
+- **Files sent to your device land in your receive folder, not as a file named
+  after it.** If the folder did not exist yet, the first arrival was written *as*
+  the folder: you were told "Received report.txt -> ~/Downloads" and got a file
+  called Downloads. Found by running a real transfer between two machines.
 - **Prompts no longer appear when nothing can answer them.** A command run with
   its input redirected from `/dev/null` was treated as interactive, because
   `/dev/null` is technically a character device. Anything that asks a question —
