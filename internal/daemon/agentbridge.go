@@ -127,16 +127,20 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	}
 	// E2E (ADR-036 P4): the prompt is sealed to this device's key; unseal it before
 	// running. A decryption failure is fatal for the request (never run a garbled
-	// or unexpectedly-plaintext prompt).
-	raw := req.SealedPrompt
-	if deps.Unseal != nil {
-		p, uerr := deps.Unseal(req.SealedPrompt)
-		if uerr != nil {
-			deps.logf("agent-bridge: cannot decrypt inject %s: %v", req.ID, uerr)
-			_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device could not decrypt the prompt")
-			return
-		}
-		raw = p
+	// or unexpectedly-plaintext prompt). No key at all is fatal too: a prompt this
+	// device cannot unseal is a prompt whose author it cannot vouch for, and the
+	// runner executes it with edits pre-approved in the user's project. The old
+	// code ran req.SealedPrompt AS-IS when Unseal was nil (§AJ #8).
+	if deps.Unseal == nil {
+		deps.logf("agent-bridge: refusing inject %s: this device has no encryption key", req.ID)
+		_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device has no encryption key and will not run an unsealed prompt")
+		return
+	}
+	raw, uerr := deps.Unseal(req.SealedPrompt)
+	if uerr != nil {
+		deps.logf("agent-bridge: cannot decrypt inject %s: %v", req.ID, uerr)
+		_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device could not decrypt the prompt")
+		return
 	}
 	env := ParseEnvelope(raw)
 	prompt := env.Prompt

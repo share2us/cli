@@ -134,7 +134,16 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 	// Agent-session bridge (ADR-036): register this machine's coding-agent sessions
 	// and receive relayed inject requests. Needs the authenticated device client.
 	if opts.agentBridge {
-		if client != nil {
+		hasDeviceKey := credential.DevicePublicKey != "" && credential.DevicePrivateKey != ""
+		switch {
+		case client == nil:
+			fmt.Fprintln(a.stderr, "note: --agent-bridge needs an interactive login; the agent bridge is off")
+		case !hasDeviceKey:
+			// A session from before device keys existed. Prompts are sealed to
+			// the device key; with none, nothing can be verified, so the bridge
+			// stays off rather than running plaintext from the server (§AJ #8).
+			fmt.Fprintf(a.stderr, "note: this device has no encryption key, so the agent bridge is off; run `%s login` again to create one\n", commandName)
+		default:
 			runOpts.AgentBridge = true
 			deps.AgentClient = client
 			deps.AgentRunners = []daemon.AgentRunner{
@@ -143,7 +152,7 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 				daemon.GeminiRunner{Strict: opts.agentStrict},
 			}
 			// E2E: unseal injected prompts with this device's key (ADR-036 P4).
-			if credential.DevicePublicKey != "" && credential.DevicePrivateKey != "" {
+			{
 				pub, priv := credential.DevicePublicKey, credential.DevicePrivateKey
 				deps.Unseal = func(sealed string) (string, error) {
 					b, err := clicore.OpenSealedForDevice(sealed, pub, priv)
@@ -164,8 +173,6 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 					return buf.Bytes(), nil
 				}
 			}
-		} else {
-			fmt.Fprintln(a.stderr, "note: --agent-bridge needs an interactive login; the agent bridge is off")
 		}
 	}
 
