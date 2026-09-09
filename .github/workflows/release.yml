@@ -178,10 +178,13 @@ jobs:
           for platform in $platforms; do
             os="${platform%/*}"; arch="${platform#*/}"
             if [ "$os" = windows ]; then archive="share2us_${os}_${arch}.zip"; else archive="share2us_${os}_${arch}.tar.gz"; fi
-            # cksum sidecar is "<crc32> <size_bytes> <name>".
+            # cksum sidecar is "<crc32> <size_bytes> <name>"; the .sha256 sidecar is the
+            # bare digest. The digest is REQUIRED by `s2u update` from the build that
+            # pins its download source (§AJ #4): a manifest without it is refused.
             read -r crc size _ < "dist/$archive.crc32"
-            assets=$(jq --arg p "$platform" --arg a "$archive" --arg c "$crc" --argjson s "$size" \
-              '.[$p] = {archive: $a, crc32: $c, size_bytes: $s}' <<<"$assets")
+            sha=$(cat "dist/$archive.sha256")
+            assets=$(jq --arg p "$platform" --arg a "$archive" --arg c "$crc" --argjson s "$size" --arg h "$sha" \
+              '.[$p] = {archive: $a, crc32: $c, size_bytes: $s, sha256: $h}' <<<"$assets")
           done
           jq -n --arg v "$VERSION" --argjson assets "$assets" \
             '{latest_version: $v, assets: $assets}' > dist/manifest.json

@@ -1166,6 +1166,13 @@ func (a app) update(ctx context.Context, args []string) int {
 	if updateInfo.Downloads.ArchiveURL == "" || updateInfo.Downloads.CRC32 == "" || updateInfo.Downloads.SizeBytes <= 0 {
 		return a.fail("check update", errors.New("update manifest is missing archive URL, CRC, or size"))
 	}
+	// SHA-256 is REQUIRED, not optional (§AJ #4). The CRC is a corruption check
+	// and comes from the same response as the URL, so it proves nothing about
+	// who produced the archive. A manifest without a digest is refused outright;
+	// the release workflow publishes one for every archive.
+	if strings.TrimSpace(updateInfo.Downloads.SHA256) == "" {
+		return a.fail("check update", errors.New("update manifest has no sha256 for the archive; refusing to install an unverifiable build"))
+	}
 	fmt.Fprintf(a.stdout, "Updating %s %s -> %s\n", commandName, updateInfo.CurrentVersion, updateInfo.LatestVersion)
 	fmt.Fprintf(a.stdout, "Downloading %s\n", updateInfo.Downloads.ArchiveURL)
 
@@ -1176,13 +1183,17 @@ func (a app) update(ctx context.Context, args []string) int {
 	defer os.RemoveAll(tmpDir)
 
 	archivePath := filepath.Join(tmpDir, filepath.Base(updateInfo.Downloads.ArchiveURL))
-	if err := downloadFile(ctx, updateInfo.Downloads.ArchiveURL, archivePath); err != nil {
+	if err := downloadUpdateArchive(ctx, updateInfo.Downloads.ArchiveURL, archivePath, updateInfo.Downloads.SizeBytes); err != nil {
 		return a.fail("download update", err)
 	}
 	if err := verifyUpdateArchive(archivePath, updateInfo.Downloads.CRC32, updateInfo.Downloads.SizeBytes); err != nil {
 		return a.fail("verify CRC", err)
 	}
 	fmt.Fprintln(a.stdout, "CRC check passed")
+	if err := verifyUpdateSHA256(archivePath, updateInfo.Downloads.SHA256); err != nil {
+		return a.fail("verify SHA-256", err)
+	}
+	fmt.Fprintln(a.stdout, "SHA-256 check passed")
 
 	binPath, err := extractBinaryFromArchive(archivePath, tmpDir, binaryFileName())
 	if err != nil {
@@ -1311,6 +1322,99 @@ func normalizeUpdateAPIBase(value string) (string, error) {
 		return "", err
 	}
 	return clicore.APIBaseFromBaseURL(baseURL)
+}
+
+// updateSourceAllowed decides which URLs the updater may fetch an archive from:
+// HTTPS, and only the project's own download host or GitHub, where releases
+// live. Applied to the initial URL AND every redirect hop, so neither a
+// malicious API host nor an off-host redirect can hand the updater a binary.
+//
+// It used to be that whatever archive_url the API returned was fetched, over
+// any scheme, from any host, and "verified" with a CRC from the same response.
+// A compromised or impersonated API host was therefore code execution as the
+// user (§AJ #4). The GUI has had this pin since its updater shipped; the CLI
+// did not. A package var so tests can point it at a local server.
+var updateSourceAllowed = func(u *url.URL) bool {
+	if u == nil || u.Scheme != "https" {
+		return false
+	}
+	h := strings.ToLower(u.Hostname())
+	return h == "share2.us" || strings.HasSuffix(h, ".share2.us") ||
+		h == "github.com" || strings.HasSuffix(h, ".github.com") ||
+		h == "githubusercontent.com" || strings.HasSuffix(h, ".githubusercontent.com")
+}
+
+// downloadUpdateArchive fetches the archive into dest with the source pinned at
+// every hop and the body capped at the size the manifest declared: a server
+// that keeps sending is cut off rather than allowed to fill the disk.
+func downloadUpdateArchive(ctx context.Context, sourceURL, dest string, expectedSize int64) error {
+	u, err := url.Parse(sourceURL)
+	if err != nil || !updateSourceAllowed(u) {
+		return errors.New("refusing to download the update from an unexpected URL (must be https on share2.us or github.com)")
+	}
+	client := &http.Client{
+		Transport: clicore.DefaultHTTPClient.Transport,
+		Timeout:   10 * time.Minute,
+		CheckRedirect: func(r *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("too many redirects")
+			}
+			if !updateSourceAllowed(r.URL) {
+				return errors.New("update download redirected to an unexpected URL: " + r.URL.Redacted())
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, sourceURL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("GET %s returned HTTP %d", sourceURL, resp.StatusCode)
+	}
+	out, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	// One byte over the declared size is enough to know the archive is not the
+	// one the manifest described; the CRC/size check reports it.
+	n, err := io.Copy(out, io.LimitReader(resp.Body, expectedSize+1))
+	if err != nil {
+		return err
+	}
+	if n > expectedSize {
+		return fmt.Errorf("update archive is larger than the %d bytes the manifest declared", expectedSize)
+	}
+	return nil
+}
+
+// verifyUpdateSHA256 checks the archive against the manifest's digest. Together
+// with the source pin this is what stands between a malicious manifest and an
+// installed binary: the digest must match a file that GitHub served.
+func verifyUpdateSHA256(path, expectedHex string) error {
+	expectedHex = strings.ToLower(strings.TrimSpace(expectedHex))
+	if len(expectedHex) != 64 {
+		return errors.New("manifest sha256 is not a 64-character hex digest")
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	if got := hex.EncodeToString(h.Sum(nil)); got != expectedHex {
+		return fmt.Errorf("sha256 mismatch: archive %s, manifest %s", got[:12], expectedHex[:12])
+	}
+	return nil
 }
 
 func downloadFile(ctx context.Context, sourceURL, dest string) error {

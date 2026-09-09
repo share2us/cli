@@ -15,6 +15,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -204,6 +205,8 @@ func TestUpdateDownloadsVerifiesAndReplacesCurrentBinary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cksum archive: %v", err)
 	}
+	allowLocalUpdateSource(t)
+	digest := sha256.Sum256(archive)
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -217,6 +220,7 @@ func TestUpdateDownloadsVerifiesAndReplacesCurrentBinary(t *testing.T) {
 					"archive_url": server.URL + "/downloads/share2us_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz",
 					"crc32":       fmt.Sprint(checksum),
 					"size_bytes":  size,
+					"sha256":      hex.EncodeToString(digest[:]),
 				},
 			})
 		case strings.HasSuffix(r.URL.Path, ".tar.gz"):
@@ -248,7 +252,7 @@ func TestUpdateDownloadsVerifiesAndReplacesCurrentBinary(t *testing.T) {
 	if string(updated) != "new binary" {
 		t.Fatalf("updated target = %q", updated)
 	}
-	for _, want := range []string{"Updating share2us", "Downloading " + server.URL, "CRC check passed", "Updated share2us to 20260708123045"} {
+	for _, want := range []string{"Updating share2us", "Downloading " + server.URL, "CRC check passed", "SHA-256 check passed", "Updated share2us to 20260708123045"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("stdout missing %q in:\n%s", want, stdout.String())
 		}
@@ -3465,4 +3469,141 @@ func TestDevicesListOmitsTheSendHintWhenNothingCanReceive(t *testing.T) {
 	if strings.Contains(stdout.String(), "--device <name>") {
 		t.Fatalf("offered a send with no device able to receive:\n%s", stdout.String())
 	}
+}
+
+// allowLocalUpdateSource points the updater's source pin at the test server.
+// The real pin admits only https on share2.us / github.com; a loopback httptest
+// server is neither, so the positive path needs this seam and the negative
+// paths below deliberately do NOT use it.
+func allowLocalUpdateSource(t *testing.T) {
+	t.Helper()
+	prev := updateSourceAllowed
+	updateSourceAllowed = func(u *url.URL) bool { return u != nil && (u.Hostname() == "127.0.0.1" || u.Hostname() == "localhost") }
+	t.Cleanup(func() { updateSourceAllowed = prev })
+}
+
+// updateFixture serves a manifest + archive and returns the server. mutate lets
+// a test corrupt the manifest.
+func updateFixture(t *testing.T, mutate func(downloads map[string]any)) (*httptest.Server, string) {
+	t.Helper()
+	target := filepath.Join(t.TempDir(), "share2us")
+	if err := os.WriteFile(target, []byte("old binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	archive := testUpdateArchive(t, []byte("new binary"))
+	checksum, size, _ := posixCKSUM(bytes.NewReader(archive))
+	digest := sha256.Sum256(archive)
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/cli/update":
+			downloads := map[string]any{
+				"archive_url": server.URL + "/downloads/share2us_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz",
+				"crc32":       fmt.Sprint(checksum),
+				"size_bytes":  size,
+				"sha256":      hex.EncodeToString(digest[:]),
+			}
+			if mutate != nil {
+				mutate(downloads)
+			}
+			writeTestJSON(w, map[string]any{
+				"current_version": clicore.FullVersion(), "latest_version": "20260708123045",
+				"update_available": true, "platform": runtime.GOOS + "/" + runtime.GOARCH,
+				"downloads": downloads,
+			})
+		case strings.HasPrefix(r.URL.Path, "/redirect-off-host"):
+			http.Redirect(w, r, "http://evil.example.test/x.tar.gz", http.StatusFound)
+		case strings.HasSuffix(r.URL.Path, ".tar.gz"):
+			w.Write(archive)
+		default:
+			t.Fatalf("unexpected update path %s", r.URL.Path)
+		}
+	}))
+	t.Cleanup(server.Close)
+	return server, target
+}
+
+func runUpdate(t *testing.T, server *httptest.Server, target string) (int, string, string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	a := app{stdout: &stdout, stderr: &stderr, executablePath: func() (string, error) { return target, nil }}
+	code := a.run(context.Background(), []string{"update", "--host", server.URL})
+	return code, stdout.String(), stderr.String()
+}
+
+func mustBeUntouched(t *testing.T, target string) {
+	t.Helper()
+	got, _ := os.ReadFile(target)
+	if string(got) != "old binary" {
+		t.Fatalf("the binary was REPLACED: %q", got)
+	}
+}
+
+// §AJ #4: the archive used to be fetched from whatever URL the API returned,
+// over any scheme, from any host. Without the test seam, a loopback http server
+// is exactly such a host -- and must be refused before a byte is installed.
+func TestUpdateRefusesArchiveFromUnpinnedSource(t *testing.T) {
+	server, target := updateFixture(t, nil)
+	code, out, errOut := runUpdate(t, server, target)
+	if code == 0 {
+		t.Fatalf("installed from an unpinned source:\n%s", out)
+	}
+	if !strings.Contains(errOut, "unexpected URL") {
+		t.Fatalf("unhelpful refusal:\n%s", errOut)
+	}
+	mustBeUntouched(t, target)
+}
+
+func TestUpdateRefusesOffHostRedirect(t *testing.T) {
+	allowLocalUpdateSource(t)
+	server, target := updateFixture(t, func(d map[string]any) {
+		d["archive_url"] = server0(t, d) + "/redirect-off-host/x.tar.gz"
+	})
+	code, _, errOut := runUpdate(t, server, target)
+	if code == 0 || !strings.Contains(errOut, "redirected to an unexpected URL") {
+		t.Fatalf("code=%d stderr=%s", code, errOut)
+	}
+	mustBeUntouched(t, target)
+}
+
+// server0 recovers the fixture's own base URL from the manifest it is mutating.
+func server0(t *testing.T, d map[string]any) string {
+	t.Helper()
+	u, err := url.Parse(d["archive_url"].(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.Scheme + "://" + u.Host
+}
+
+func TestUpdateRefusesManifestWithoutSHA256(t *testing.T) {
+	allowLocalUpdateSource(t)
+	server, target := updateFixture(t, func(d map[string]any) { delete(d, "sha256") })
+	code, _, errOut := runUpdate(t, server, target)
+	if code == 0 || !strings.Contains(errOut, "no sha256") {
+		t.Fatalf("code=%d stderr=%s", code, errOut)
+	}
+	mustBeUntouched(t, target)
+}
+
+func TestUpdateRefusesSHA256Mismatch(t *testing.T) {
+	allowLocalUpdateSource(t)
+	server, target := updateFixture(t, func(d map[string]any) { d["sha256"] = strings.Repeat("ab", 32) })
+	code, _, errOut := runUpdate(t, server, target)
+	if code == 0 || !strings.Contains(errOut, "sha256 mismatch") {
+		t.Fatalf("code=%d stderr=%s", code, errOut)
+	}
+	mustBeUntouched(t, target)
+}
+
+// A server that keeps sending past the declared size must be cut off, not
+// trusted to fill the disk.
+func TestUpdateRefusesOversizedArchive(t *testing.T) {
+	allowLocalUpdateSource(t)
+	server, target := updateFixture(t, func(d map[string]any) { d["size_bytes"] = int64(10) })
+	code, _, errOut := runUpdate(t, server, target)
+	if code == 0 || !strings.Contains(errOut, "larger than") {
+		t.Fatalf("code=%d stderr=%s", code, errOut)
+	}
+	mustBeUntouched(t, target)
 }
