@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -63,6 +64,8 @@ func (a app) daemonUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s daemon <run|status|start|stop|install|uninstall|logs>\n", commandName)
 	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify] [--agent-bridge [--agent-strict]]  run the receiver\n")
 	fmt.Fprintf(a.stderr, "  install [--dest DIR]                         install + start the per-user service\n")
+	fmt.Fprintf(a.stderr, "                                               (asks where files land and whether to save\n")
+	fmt.Fprintf(a.stderr, "                                                them automatically, since the service can't)\n")
 	fmt.Fprintf(a.stderr, "  status | stop | start | logs [-f] | uninstall\n")
 	return 2
 }
@@ -229,10 +232,76 @@ func (a app) daemonInstall(args []string) int {
 			dest = abs
 		}
 	}
+	// The daemon is HEADLESS, so it can never put the first-arrival question to
+	// anybody (§AG D2). Install is the one moment in its life when a human is
+	// definitely present, so it is asked here and the answer is stored -- the
+	// service then starts with a decided setting instead of silently holding
+	// files, or silently writing them, forever.
+	a.askReceiveSettingsForDaemon(dest)
 	if err := daemon.ServiceInstall(exe, dest, a.stdout); err != nil {
 		return a.fail("daemon install", err)
 	}
 	return 0
+}
+
+// askReceiveSettingsForDaemon puts the receive questions to the person running
+// `daemon install`, and records the answers so the resident service never has to
+// ask. Silent when there is no terminal (an unattended install) or when the
+// questions are already answered: an install script must not hang on a prompt,
+// and re-asking somebody who has already chosen is noise.
+//
+// A --dest on the command line answers the folder question by itself.
+func (a app) askReceiveSettingsForDaemon(dest string) {
+	if !a.inputIsTTY() {
+		return
+	}
+	config, err := clicore.LoadConfig()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return // config trouble is reported by the install itself; don't double up
+	}
+	settings := config.ReceiveSettings()
+	reader := bufio.NewReader(a.input())
+
+	if !settings.AutoAnswered {
+		fmt.Fprintf(a.stderr, "Download files sent to this device automatically? [y/N] ")
+		line, _ := reader.ReadString('\n')
+		auto := isAffirmative(line)
+		if err := clicore.SetReceiveAuto(auto); err != nil {
+			fmt.Fprintf(a.stderr, "warning: could not save that answer: %v\n", err)
+		} else if !auto {
+			fmt.Fprintf(a.stderr, "Files will wait until you run `%s receive`.\n", commandName)
+		}
+	}
+
+	// Only worth asking once we know files will actually be written somewhere.
+	if dest != "" {
+		return
+	}
+	if config, err = clicore.LoadConfig(); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	settings = config.ReceiveSettings()
+	if !settings.Auto {
+		return
+	}
+	fmt.Fprintf(a.stderr, "Receive folder [%s]: ", settings.Dir)
+	line, _ := reader.ReadString('\n')
+	if chosen := strings.TrimSpace(line); chosen != "" {
+		if err := clicore.SetReceiveDir(chosen); err != nil {
+			fmt.Fprintf(a.stderr, "warning: could not save that folder: %v\n", err)
+		}
+	}
+}
+
+// isAffirmative reads a [y/N] answer. Anything that is not clearly a yes is a
+// no: this gates whether files land on disk without anyone watching.
+func isAffirmative(line string) bool {
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 // daemonUpdateCheck reports whether a newer build exists, with the right upgrade
