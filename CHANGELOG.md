@@ -16,6 +16,20 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
      ship while this section is empty (HTML comments do not count). -->
 
 ### Security
+- **An encrypted file now gets its own key.** Every encrypted share used its key
+  directly and told the pieces of the file apart with four random bytes. That
+  was safe only for as long as one key was never used to encrypt twice, which
+  nothing enforced and nothing at the call site showed. Two files encrypted
+  under one key that drew the same four bytes would have given away both of
+  them. Each file now derives a key of its own, so a key can encrypt as many
+  files as it likes.
+- Files encrypted by earlier versions still open. **Files encrypted by this
+  version do not open in an earlier one**, which reports the format as
+  unsupported. Update both ends.
+
+## [20260910063046] - 2026-09-10
+
+### Security
 - **A file arriving at a destination someone else prepared can no longer be
   redirected.** Writing a download or a peer-to-peer transfer followed a symlink
   already sitting at that path and truncated whatever was on the other end.
