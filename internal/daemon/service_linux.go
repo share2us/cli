@@ -33,10 +33,29 @@ func unitPath() (string, error) {
 // address families the LAN receiver and control socket need. destDir, when set
 // and outside the default state dirs, is added to ReadWritePaths so received
 // files can be written.
+// validUnitPath rejects a path that cannot be written into a systemd unit
+// safely. A newline would end the ReadWritePaths line and start a new
+// DIRECTIVE, so a folder name could add ExecStartPre to a service that runs on
+// every login. This is self-inflicted -- the value comes from the operator's own
+// --dest flag -- but a unit file is not the place to find that out (§AJ low
+// batch). The macOS plist already XML-escapes, so only systemd needed this.
+func validUnitPath(p string) error {
+	for _, r := range p {
+		if r == '\n' || r == '\r' || r < 0x20 || r == 0x7f {
+			return fmt.Errorf("daemon: the receive folder path contains a control character (%U) and cannot be written into a systemd unit", r)
+		}
+	}
+	if strings.Contains(p, `"`) {
+		return errors.New(`daemon: the receive folder path contains a quote and cannot be written into a systemd unit`)
+	}
+	return nil
+}
+
 func renderUnit(exePath, destDir string) string {
 	rwPaths := "%h/.config/share2us %h/.cache/share2us %t/share2us"
 	if d := strings.TrimSpace(destDir); d != "" {
-		rwPaths += " " + d
+		// Quoted, so a path with spaces is one entry rather than several.
+		rwPaths += ` "` + d + `"`
 	}
 	return fmt.Sprintf(`[Unit]
 Description=Share2Us background receiver (s2u daemon)
@@ -68,6 +87,12 @@ func ServiceSupported() bool { return true }
 // ServiceInstall writes the user unit and enables+starts it. exePath is the
 // share2us binary to run; destDir (may be "") is added to ReadWritePaths.
 func ServiceInstall(exePath, destDir string, out io.Writer) error {
+	if err := validUnitPath(exePath); err != nil {
+		return err
+	}
+	if err := validUnitPath(strings.TrimSpace(destDir)); err != nil {
+		return err
+	}
 	path, err := unitPath()
 	if err != nil {
 		return err
