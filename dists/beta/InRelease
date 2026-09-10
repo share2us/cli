@@ -1,0 +1,51 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Architectures: amd64 arm64
+Codename: beta
+Components: main
+Date: Thu, 10 Sep 2026 06:12:09 +0000
+Description: Share2Us command line (beta)
+Label: Share2Us
+Origin: Share2Us
+Suite: beta
+MD5Sum:
+ ef3a0d4dcefe15d4061db60597e71157              184 Release
+ e6c22a620f634913591622ffd52eb8eb              575 main/binary-amd64/Packages
+ 3e1ffa59aaa3111158a282502b25b182              431 main/binary-amd64/Packages.gz
+ 61a29dba4a5fb06dd33df0307cd05ea7              575 main/binary-arm64/Packages
+ 92468304b168ebd80c42b4960fee5b00              432 main/binary-arm64/Packages.gz
+SHA1:
+ d712e98b4af29a9aeb431b7653a6e4df74696adb              184 Release
+ 9eb66ec0245d1e70d346bfd4a7c8758f40f7eb9b              575 main/binary-amd64/Packages
+ 8d30e0601d953d6c92a2db431e5553b8b4f336f6              431 main/binary-amd64/Packages.gz
+ 132ff62f153798622a7f19141d6765eea7f82736              575 main/binary-arm64/Packages
+ e2cb3cf8c1ff24a515d65fc0f3bf8c5724f7d821              432 main/binary-arm64/Packages.gz
+SHA256:
+ 395477016f75dff5a933b344575d300716c1f3f875c6082a311fd14d02d91db7              184 Release
+ fd7f7831c41a02fe16fa8ad5b207f8e97531b688fceda797aaaf0d8d3631bc6a              575 main/binary-amd64/Packages
+ f7fe53d9f550f66b47052e46f1562d6153e23ca80da8caae8255033c8d4d0cf5              431 main/binary-amd64/Packages.gz
+ bc3e3d139ac88a1ae1ace5a498fbf2f839bf9f88f942defe98b56e2a36e42731              575 main/binary-arm64/Packages
+ b50c37bbecfb4a8dd37be07275ef883d53507ad93f9669a5b898e6e744c259ae              432 main/binary-arm64/Packages.gz
+SHA512:
+ e8b896d91bdd1b3b318e0bc35b0491c4cd9b744046b320cd2b39191f0434f00f9d611b46d4cb1d6bfca0134843393f6d6829b350d623db18800671b7509f4ee3              184 Release
+ fc638fbde4df31a775bc1946673e42bbe3a679263425ff29ca4558720b9df5f1e7577fbfbd6c14a2b1d68451a52053dff2fcf9fd47fd31f61dbee4ab69f43c28              575 main/binary-amd64/Packages
+ 9977fa5a6e2ac250bddbde2e58b2d197b9e69148bba23504184d298143c1903cee491b960aeea1185d200b5638e8526bf78c45c2f4e961bd60d5bd9c4362a172              431 main/binary-amd64/Packages.gz
+ 61a547c2e65da93717d73a4c202ee46fba3212e3111dc2fc2365c371adf706fb0073af56b4f72cd1de3f5ea36c25f5ba26a61be39dd382aa1ba3454c7d7bf8ba              575 main/binary-arm64/Packages
+ 573939ac225c67200d456d4818ae5da69136d9ace2c2f5b4dc96b4c74bc0e6de49db823b6d539d6ce176d531ca3f5f530a0ade459a60697c5f34e931966f9cf8              432 main/binary-arm64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQIzBAEBCgAdFiEEFRyiTgd4E96KCFcLXUoSPRO4Y8oFAmqiSjkACgkQXUoSPRO4
+Y8qeYg/+I/c6b/kJjxLCn40YDitgVeFVdXIlcGSmgiB+3piQ+Hyr8BrQsKeyyDZZ
+WeF5gzUgeyfTwe/iPgEsDA1rqcINThE6Mmg9BUFTGSz7WyX+d0WOU6J8kPuKY8Ot
+YBWcFd5VFhfdE/ncmFIwl65bX++bj8t3cBR/YWcaE4PWI6HnTWxHiZeQrd+O10XC
+u4RxaDUB5PD/5lKwRRxd2gm3TrUs4+wAWDye3fqkwKQHi07v3sM+7XP09lYBpjiM
+30AkFwvO2ICBkCnTWZ3jdov37vFIVAWgQSrwkKSgkal4mLwkiPZxVcUXyqn8mMUT
+cqbgIWJaoaKzy52wfpdQ84TtfG6cXjcRBCoOQ60ZUyPcaoAfDnzGVffvtOz2j7xd
+N1CGAMMTdB0K+BKhXtiDCoP/QeNR7osx9wFSulEzZb7GLhrJM+l5zCx8VCIzO/6y
+AmbyH9lqXWiwCSZ16VvEPqUfjRhcDv/HN4Brkt433pR+jhQuDfZJXXjC/gRviwWr
+cWN11PV1Kog/o7Ku2kvRzoehEWEezkhvMWiq9LlCWtmmUmxnFKew10vuSL0f8IkA
+nejvj+mv+s163or63OSQMce9TPN3bqwurBVsmt6XMMnTEWZlXy5c8qM1T+1bWgCi
+nRtkIopdRBmK2wxyt45dKRgp1hFOh2L+WMtE2KrU0uy4AYfPPVM=
+=+VW2
+-----END PGP SIGNATURE-----
