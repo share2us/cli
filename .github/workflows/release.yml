@@ -250,7 +250,20 @@ jobs:
           # discover, the Windows daemon and the GPLv3 relicense - all of which
           # had shipped in earlier releases. The gui automated this first; same
           # script, same reasoning.
-          if [ "${{ inputs.channel || 'stable' }}" = stable ] && [ "${{ github.event_name }}" = push ]; then
+          #
+          # It runs for a stable release from EITHER trigger. It used to run only
+          # on a push, on the reasoning that a hand-run release should not rewrite
+          # the file under the operator - which reads well and was wrong. What
+          # decides whether the notes have shipped is the CHANNEL, not the button:
+          # a dispatched stable publishes [Unreleased] to every user just as a
+          # merge does. 20260910063046 was dispatched, so its notes were still
+          # sitting in [Unreleased] afterwards, queued to ship a second time, and
+          # had to be filed by hand. A beta is exempt because its notes are
+          # generated and it reaches nobody who did not opt in.
+          #
+          # Guarded on the default branch instead, so a dispatch aimed at some
+          # other ref warns rather than committing to it.
+          if [ "${{ inputs.channel || 'stable' }}" = stable ] && [ "${GITHUB_REF_NAME}" = "${{ github.event.repository.default_branch }}" ]; then
             python3 - "$VERSION" <<'ROLL'
           import datetime, re, sys
           version = sys.argv[1]
@@ -278,6 +291,8 @@ jobs:
               git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
               git push origin "HEAD:${GITHUB_REF_NAME}" || echo "::warning::could not push the changelog roll; do it by hand"
             fi
+          elif [ "${{ inputs.channel || 'stable' }}" = stable ]; then
+            echo "::warning::stable release cut from ${GITHUB_REF_NAME}, not ${{ github.event.repository.default_branch }} - [Unreleased] was NOT rolled. Roll it by hand or the next release republishes these notes."
           fi
 
       # Publish the apt repository: a signed static tree on the gh-pages branch of
