@@ -15,6 +15,16 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
+### Security
+- **A file arriving at a destination someone else prepared can no longer be
+  redirected.** Writing a download or a peer-to-peer transfer followed a symlink
+  already sitting at that path and truncated whatever was on the other end.
+  Both now refuse it.
+- **A receive folder with an odd name can no longer alter the background
+  service.** The folder path went into the Linux service definition unquoted, so
+  a newline in it could add a startup command. Control characters are refused
+  and the path is quoted.
+
 ## [20260909210845] - 2026-09-09
 
 ### Added
@@ -61,14 +71,6 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   real check.
 
 ### Security
-- **A file arriving at a destination someone else prepared can no longer be
-  redirected.** Writing a download or a peer-to-peer transfer followed a symlink
-  already sitting at that path and truncated whatever was on the other end.
-  Both now refuse it.
-- **A receive folder with an odd name can no longer alter the background
-  service.** The folder path went into the Linux service definition unquoted, so
-  a newline in it could add a startup command. Control characters are refused
-  and the path is quoted.
 - **Updates now come only from where they are supposed to.** `s2u update`
   installed whatever archive the server pointed it at, over any protocol, from
   any host, and checked it against a checksum that arrived in the same reply.
