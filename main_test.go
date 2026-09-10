@@ -3791,3 +3791,69 @@ func TestReceiveDirReportsWhetherItIsAFolder(t *testing.T) {
 		t.Fatal("an explicit --output was reported as a folder")
 	}
 }
+
+// §AJ low batch: copyFile used os.Create, which FOLLOWS a symlink already at the
+// destination and truncates whatever is on the other end. Anything able to plant
+// a link in the output directory could redirect the write.
+func TestCopyFileDoesNotWriteThroughASymlink(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "payload.txt")
+	if err := os.WriteFile(src, []byte("the copied bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(dir, "victim.txt")
+	if err := os.WriteFile(victim, []byte("must survive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	planted := filepath.Join(dir, "output.txt")
+	if err := os.Symlink(victim, planted); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if err := copyFile(src, planted); err != nil {
+		t.Fatalf("copyFile: %v", err)
+	}
+	if body, _ := os.ReadFile(victim); string(body) != "must survive" {
+		t.Fatalf("the write went through the symlink: victim now holds %q", body)
+	}
+	// The destination itself holds the copy, and is no longer a link.
+	info, err := os.Lstat(planted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("the destination is still a symlink")
+	}
+	if body, _ := os.ReadFile(planted); string(body) != "the copied bytes" {
+		t.Fatalf("destination holds %q", body)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("copy written %o, want 0600", perm)
+	}
+}
+
+// The peer-to-peer receiver writes wherever it is pointed, and its default name
+// is predictable from the room code, so a planted link must be refused.
+func TestP2POutputRefusesASymlink(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim.txt")
+	if err := os.WriteFile(victim, []byte("must survive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	planted := filepath.Join(dir, "out.bin")
+	if err := os.Symlink(victim, planted); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	_, _, closeFn, err := p2pOutputWriter(planted, "room-code", io.Discard)
+	if err == nil {
+		closeFn()
+		if body, _ := os.ReadFile(victim); string(body) != "must survive" {
+			t.Fatalf("the victim was truncated through the link: %q", body)
+		}
+		t.Fatal("a symlinked destination was accepted")
+	}
+	if body, _ := os.ReadFile(victim); string(body) != "must survive" {
+		t.Fatalf("the victim was modified: %q", body)
+	}
+}

@@ -4446,24 +4446,43 @@ func publicIDFromTarget(target string) (string, error) {
 	return trimmed, nil
 }
 
+// copyFile writes src to dst through a fresh temp file and renames it.
+//
+// It used to os.Create(dst) directly, which FOLLOWS a symlink already sitting
+// at that path and truncates whatever is on the other end. Anything that could
+// plant a link in the destination directory could therefore redirect the write
+// -- and the write only ever gets mode 0600 AFTER the content is in place, so
+// the window was wider than it looks. A temp file created O_EXCL cannot be a
+// pre-planted link, and the rename replaces the destination atomically
+// (§AJ low batch).
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
+	dir := filepath.Dir(dst)
+	if dir == "" {
+		dir = "."
+	}
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(dst)+".tmp-*")
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
 		return err
 	}
-	if err := out.Close(); err != nil {
+	if _, err := io.Copy(tmp, in); err != nil {
+		tmp.Close()
 		return err
 	}
-	return os.Chmod(dst, 0o600)
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, dst)
 }
 
 func safeOutputName(share clicore.Share) string {
@@ -4735,9 +4754,13 @@ func p2pOutputWriter(output, room string, stdout io.Writer) (io.Writer, string, 
 	} else if info, err := os.Stat(target); err == nil && info.IsDir() {
 		target = filepath.Join(target, defaultName)
 	}
-	f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	// O_NOFOLLOW so a symlink already at this path is refused rather than
+	// followed and its target truncated. The peer-to-peer receiver writes
+	// wherever it is pointed, and the default name is predictable from the room
+	// code (§AJ low batch).
+	f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|oNoFollow, 0o600)
 	if err != nil {
-		return nil, "", func() {}, err
+		return nil, "", func() {}, fmt.Errorf("open %s: %w", target, err)
 	}
 	return f, target, func() { _ = f.Close() }, nil
 }

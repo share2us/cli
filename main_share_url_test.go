@@ -14,12 +14,12 @@ func TestLooksLikeShareURL(t *testing.T) {
 		{"http://s.share2.us/abc", true},
 		{"https://s.staging.share2.us/abc", true},
 		{"https://s.share2.us/abc#key", true},
-		{"https://s.share2.us/", false},        // no code
-		{"https://s.share2.us", false},         // no path
-		{"https://share2.us/abc", false},       // not the s. host
-		{"https://app.share2.us/abc", false},   // different subdomain
-		{"https://evil.com/s.share2.us", false},// share host only in path
-		{"s.share2.us/abc", false},             // no scheme
+		{"https://s.share2.us/", false},         // no code
+		{"https://s.share2.us", false},          // no path
+		{"https://share2.us/abc", false},        // not the s. host
+		{"https://app.share2.us/abc", false},    // different subdomain
+		{"https://evil.com/s.share2.us", false}, // share host only in path
+		{"s.share2.us/abc", false},              // no scheme
 		{"./localfile.txt", false},
 		{"report.log", false},
 		{"", false},
