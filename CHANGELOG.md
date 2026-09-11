@@ -12,6 +12,20 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+- **A file you ask for now lands where you are.** `receive --id` and
+  `receive --all` saved into the configured receive folder, usually Downloads,
+  even when you were standing somewhere else and had just named the file you
+  wanted. That folder is for the background service, which takes arrivals from
+  trusted devices with nobody watching and needs a fixed home. Typed at a
+  terminal, both now save into the current folder. Scripts and the background
+  service are unchanged.
+- **`receive 1` no longer means "make a folder called 1".** The bare argument is
+  a destination folder, but the prompt this command shows numbers the files, so a
+  number was the obvious thing to type and quietly did something else. It is
+  refused now, with the two real ways to pick a file. A folder genuinely called
+  `1` still works, written as `./1`.
+
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
