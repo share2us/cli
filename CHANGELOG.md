@@ -12,6 +12,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+<!-- Add user-facing changes here as they merge. A stable release refuses to
+     ship while this section is empty (HTML comments do not count). -->
+
+## [20260911112347] - 2026-09-11
+
 ### Changed
 - **A signed-in browser is no longer listed as a device.** Chrome and the like
   appeared among your devices saying "can't receive yet, sign in with Share2Us on
@@ -20,9 +25,6 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   that says what they are and how to sign one out. Sending to one is refused with
   the two things that do work: share a link, or keep the file to yourself with
   `--private` and open it from any browser you are signed in on.
-
-<!-- Add user-facing changes here as they merge. A stable release refuses to
-     ship while this section is empty (HTML comments do not count). -->
 
 ## [20260911100515] - 2026-09-11
 
