@@ -4870,6 +4870,21 @@ func (a app) receive(ctx context.Context, args []string) int {
 		a.reportPendingApprovals(ctx, client)
 		return 0
 	}
+
+	// One waiting file and a destination named: take it. A picker that offers a
+	// single choice is a question with one possible answer -- "Select (1-1,
+	// a=all, q=quit)" -- and `s2u receive .` should be the quick way to get the
+	// thing somebody just sent you, not a two-step conversation about which of
+	// the one files you meant.
+	//
+	// Only with a destination named. A bare `receive` still lists and writes
+	// nothing, because "show me" and "save it here" are different sentences and
+	// the bare form is the one people run to look.
+	if len(waiting) == 1 {
+		fmt.Fprintf(a.stdout, "One file waiting: %s%s\n", waiting[0].FileName, fromSuffix(waiting[0].FromDeviceName))
+		return a.saveInbox(ctx, client, credential, dest, destIsFolder, map[string]bool{waiting[0].PublicID: true})
+	}
+
 	only, ok := a.pickInbox(waiting)
 	if !ok {
 		return 0 // cancelled: not an error

@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // `receive 1` used to mean "save into a folder named 1", silently, while the
@@ -92,5 +95,71 @@ func TestReceiveDestinationDependsOnWhetherSomebodyIsThere(t *testing.T) {
 				t.Fatalf("dest = %q, wantHere = %v", dest, tc.wantHere)
 			}
 		})
+	}
+}
+
+// `s2u receive .` with ONE file waiting takes it. A picker offering a single
+// choice -- "Select (1-1, a=all, q=quit)" -- is a question with one possible
+// answer, and this is meant to be the quick way to collect what somebody just
+// sent you.
+func TestReceiveWithDestinationTakesTheOnlyWaitingFile(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 10, "sealed_key": "sealed"},
+	}))
+	var stdout, stderr bytes.Buffer
+	// Empty stdin: if this still prompted, the read would return nothing and the
+	// picker would cancel, so the assertions below would fail. That is the point.
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	a.run(context.Background(), []string{"receive", t.TempDir()})
+
+	if strings.Contains(stderr.String(), "Select (1-1") {
+		t.Fatalf("asked which of the one files was meant:\n%s", stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "One file waiting: report.pdf") {
+		t.Fatalf("did not say what it was taking:\n%s", stdout.String())
+	}
+}
+
+// Two or more still ask, offering all or a number, which is the whole reason the
+// picker exists.
+func TestReceiveWithDestinationStillAsksWhenThereIsAChoice(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 10, "sealed_key": "sealed"},
+		{"public_id": "pub-2", "file_name": "photos.zip", "size_bytes": 20, "sealed_key": "sealed"},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader("q\n"), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	a.run(context.Background(), []string{"receive", t.TempDir()})
+
+	if !strings.Contains(stderr.String(), "Select (1-2, a=all, q=quit)") {
+		t.Fatalf("no choice offered when there was one to make:\n%s", stderr.String())
+	}
+}
+
+// A bare `receive` still only LISTS, even with one file waiting. "Show me" and
+// "save it here" are different sentences, and the bare form is the one people
+// run to look.
+func TestReceiveBareStillOnlyListsWithOneWaiting(t *testing.T) {
+	withCredential(t, "https://api.staging.example.test")
+	withMockAPI(t, fakeInboxAPI(t, []map[string]any{
+		{"public_id": "pub-1", "file_name": "report.pdf", "size_bytes": 10, "sealed_key": "sealed"},
+	}))
+	var stdout, stderr bytes.Buffer
+	a := app{stdin: strings.NewReader(""), stdout: &stdout, stderr: &stderr, sleep: func(time.Duration) {},
+		stdinIsTTY: func(io.Reader) bool { return true }}
+
+	a.run(context.Background(), []string{"receive"})
+
+	if strings.Contains(stdout.String(), "One file waiting:") {
+		t.Fatalf("a bare receive saved something:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "1 file(s) waiting") {
+		t.Fatalf("a bare receive did not list:\n%s", stdout.String())
 	}
 }

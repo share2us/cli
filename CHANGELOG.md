@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+- **`s2u receive .` is now the quick way.** One file waiting goes straight into
+  the folder you are in, and it tells you what it took. It only asks which when
+  there is more than one, where you can still take them all or pick by number. It
+  used to ask even when there was a single possible answer.
+
 <!-- Add user-facing changes here as they merge. A stable release refuses to
      ship while this section is empty (HTML comments do not count). -->
 
