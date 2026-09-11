@@ -4812,6 +4812,23 @@ func (a app) receive(ctx context.Context, args []string) int {
 		return 0
 	}
 
+	// A person standing in a directory, naming what they want, means HERE.
+	//
+	// The configured receive folder exists for the UNATTENDED case: the daemon
+	// saving an arrival from a trusted device with nobody watching, and --watch,
+	// which is the same loop by hand. It needs a fixed home because there is no
+	// "where you are" to speak of. Inheriting that for a foreground `receive --id`
+	// is how a file the user asked for, while sitting in ~/work, landed in
+	// ~/Downloads instead.
+	//
+	// Only when a terminal is attached and no destination was named. A script or
+	// a cron job keeps the configured folder exactly as before, so nothing
+	// unattended changes -- and the daemon never reaches this code at all, it has
+	// its own ReceiveOnce with its own directory.
+	if !opts.explicitDest && a.inputIsTTY() && (len(opts.ids) > 0 || opts.all) {
+		dest, destIsFolder = ".", true
+	}
+
 	// --id: take exactly the named shares.
 	if len(opts.ids) > 0 {
 		only := map[string]bool{}
@@ -4894,7 +4911,9 @@ func (a app) printWaiting(waiting []clicore.InboxShare, dest string) {
 	if soonest, ok := soonestExpiry(waiting, time.Now()); ok {
 		fmt.Fprintf(a.stdout, "\nOldest expires in %s.\n", humanUntil(soonest))
 	}
-	fmt.Fprintf(a.stdout, "\nTo save them: %s receive %s   (or --id <public-id> for one)\n", commandName, dest)
+	fmt.Fprintf(a.stdout, "\nTo save them all:   %s receive %s\n", commandName, dest)
+	fmt.Fprintf(a.stdout, "To save one:        %s receive --id <id>        (the id is the first column above)\n", commandName)
+	fmt.Fprintf(a.stdout, "Into this folder:   %s receive . --id <id>\n", commandName)
 }
 
 // soonestExpiry finds the nearest expiry among the waiting shares. Shares with
@@ -4935,7 +4954,7 @@ func (a app) pickInbox(waiting []clicore.InboxShare) (map[string]bool, bool) {
 	for i, s := range waiting {
 		fmt.Fprintf(a.stderr, "  %d  %s  %s%s\n", i+1, s.FileName, humanSize(int64(s.SizeBytes)), fromSuffix(s.FromDeviceName))
 	}
-	fmt.Fprintf(a.stderr, "Select (1-%d, a=all, q=quit): ", len(waiting))
+	fmt.Fprintf(a.stderr, "Select (1-%d, a=all, q=quit)  -- these numbers are for this prompt only: ", len(waiting))
 	reader := bufio.NewReader(a.input())
 	line, _ := reader.ReadString('\n')
 	switch answer := strings.ToLower(strings.TrimSpace(line)); answer {
@@ -5142,6 +5161,35 @@ type receiveOptions struct {
 	explicitDest bool
 }
 
+// isAllDigits reports a token that is nothing but digits. "1" and "02" qualify;
+// "1a", "./1" and "" do not -- writing ./1 is exactly how someone says they
+// really did mean the folder.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// ordinal renders 1 as "first", 2 as "second", 3 as "third", and falls back to
+// "Nth" past that. Only used so the refusal reads like a sentence.
+func ordinal(digits string) string {
+	switch digits {
+	case "1":
+		return "first"
+	case "2":
+		return "second"
+	case "3":
+		return "third"
+	}
+	return digits + "th"
+}
+
 func parseReceiveArgs(args []string) (receiveOptions, error) {
 	var opts receiveOptions
 	for i := 0; i < len(args); i++ {
@@ -5172,6 +5220,23 @@ func parseReceiveArgs(args []string) (receiveOptions, error) {
 		case strings.HasPrefix(arg, "-"):
 			return receiveOptions{}, fmt.Errorf("unknown flag: %s", arg)
 		default:
+			// A bare NUMBER is refused rather than guessed at. This command prints
+			// a numbered picker -- "Select (1-3, a=all, q=quit)" -- so a number is
+			// the first thing a person reaches for, and taking it as a directory
+			// path silently did something else entirely: `receive 1` created ./1.
+			//
+			// Refused even when ./1 exists, so the command means the same thing on
+			// every machine. The message names both real meanings, because the
+			// person typing it already has one of them in mind.
+			if isAllDigits(arg) {
+				return receiveOptions{}, fmt.Errorf(
+					"`%s receive %s`: a number here means a folder named %q, not the %s file on the list.\n"+
+						"  pick from the list:      %s receive            (then choose at the prompt)\n"+
+						"  take one by id:          %s receive --id <id>  (ids are shown by `%s receive`)\n"+
+						"  really use a folder called %s: %s receive ./%s",
+					commandName, arg, arg, ordinal(arg),
+					commandName, commandName, commandName, arg, commandName, arg)
+			}
 			// A bare path is the destination: `s2u receive ~/inbox`.
 			if opts.output != "" {
 				return receiveOptions{}, fmt.Errorf("receive accepts one destination folder, got a second: %s", arg)
