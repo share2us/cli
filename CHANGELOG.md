@@ -12,6 +12,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+<!-- Add user-facing changes here as they merge. A stable release refuses to
+     ship while this section is empty (HTML comments do not count). -->
+
+## [20260911094952] - 2026-09-11
+
 ### Fixed
 - **A file you ask for now lands where you are.** `receive --id` and
   `receive --all` saved into the configured receive folder, usually Downloads,
@@ -25,9 +30,6 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   number was the obvious thing to type and quietly did something else. It is
   refused now, with the two real ways to pick a file. A folder genuinely called
   `1` still works, written as `./1`.
-
-<!-- Add user-facing changes here as they merge. A stable release refuses to
-     ship while this section is empty (HTML comments do not count). -->
 
 ## [20260910074525] - 2026-09-10
 
