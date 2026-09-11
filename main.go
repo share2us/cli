@@ -870,8 +870,24 @@ func (a app) devices(ctx context.Context) int {
 	// to, and what do I type". It used to lead with the session UUID -- which is
 	// never what you pass to --device -- and label the rest "key" / "no-key",
 	// which says nothing about whether a send will work.
-	sendable := 0
+	//
+	// A signed-in BROWSER is not a device and is listed separately. It used to sit
+	// in the same list reading "can't receive yet -- sign in with Share2Us on it",
+	// which is advice nobody can follow: there is no app to install "on" Chrome,
+	// and there never will be. A browser cannot hold a device key, so it can never
+	// be a --device target. It is still shown, because signing one out is a real
+	// thing to want and the id comes from here.
+	var machines, browsers []clicore.DeviceSession
 	for _, device := range devices.Sessions {
+		if isBrowserSession(device) {
+			browsers = append(browsers, device)
+			continue
+		}
+		machines = append(machines, device)
+	}
+
+	sendable := 0
+	for _, device := range machines {
 		name := strings.TrimSpace(device.DeviceName)
 		if name == "" {
 			name = device.ID
@@ -881,8 +897,9 @@ func (a app) devices(ctx context.Context) int {
 		case device.Current:
 			note = "this device"
 		case strings.TrimSpace(device.PublicKey) == "":
-			// Not a defect to hide: the device is signed in but has never completed
-			// key registration, so a sealed send has nothing to seal to.
+			// Not a defect to hide: the machine is signed in but has never completed
+			// key registration, so a sealed send has nothing to seal to. Unlike a
+			// browser, this one CAN be fixed by signing in with the app there.
 			note = "can't receive yet — sign in with Share2Us on it"
 		default:
 			sendable++
@@ -893,7 +910,38 @@ func (a app) devices(ctx context.Context) int {
 	if sendable > 0 {
 		fmt.Fprintf(a.stdout, "\nSend to one: %s <file> --device <name>\n", commandName)
 	}
+	if len(browsers) > 0 {
+		// Browser names are not identifying -- two windows on two machines are both
+		// "Chrome" -- and signout resolves by name, so a duplicate name would make
+		// the advice below impossible to follow. Show the session id for exactly
+		// those, which is what signout takes when a name is ambiguous.
+		seen := map[string]int{}
+		for _, b := range browsers {
+			seen[strings.ToLower(strings.TrimSpace(b.DeviceName))]++
+		}
+		fmt.Fprintf(a.stdout, "\nSigned-in browsers (these cannot receive a file — share a link instead):\n")
+		for _, b := range browsers {
+			name := strings.TrimSpace(b.DeviceName)
+			if name == "" {
+				name = b.ID
+			}
+			note := "signed in"
+			if seen[strings.ToLower(strings.TrimSpace(b.DeviceName))] > 1 {
+				note = "signed in — id " + b.ID
+			}
+			fmt.Fprintf(a.stdout, "  %-24s %-10s %-16s %s\n", name, deviceKind(b.ClientType), lastSeen(b.LastUsedAt), note)
+		}
+		fmt.Fprintf(a.stdout, "\nSign one out: %s signout <name or id>\n", commandName)
+	}
 	return 0
+}
+
+// isBrowserSession reports a session that is a web browser rather than a machine
+// running the app. A browser has no device keypair and cannot be given one, so it
+// is never a send target -- the portal's link and private-upload flows are what
+// serve that case.
+func isBrowserSession(d clicore.DeviceSession) bool {
+	return strings.EqualFold(strings.TrimSpace(d.ClientType), "web")
 }
 
 // deviceKind renders the client type as something a person recognises, and never
@@ -1816,6 +1864,15 @@ func (a app) upload(ctx context.Context, args []string) int {
 		targetDevice, err = resolveDeviceAlias(ctx, client, opts.device)
 		if err != nil {
 			return a.fail("resolve target device", err)
+		}
+		// A browser is refused on its own terms. It has no key and never will, so
+		// "log in again on that device" is advice nobody can act on -- there is
+		// nothing to install on Chrome. Say what actually works instead.
+		if isBrowserSession(targetDevice) {
+			fmt.Fprintf(a.stderr, "%q is a signed-in browser, not a device: a browser cannot receive a file.\n", opts.device)
+			fmt.Fprintf(a.stderr, "  share a link:         %s <file>\n", commandName)
+			fmt.Fprintf(a.stderr, "  keep it to yourself:  %s <file> --private   (open it from any browser you are signed in on)\n", commandName)
+			return 1
 		}
 		if strings.TrimSpace(targetDevice.PublicKey) == "" {
 			fmt.Fprintf(a.stderr, "device %q does not have an encryption key; log in again on that device\n", opts.device)
