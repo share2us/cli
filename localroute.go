@@ -68,7 +68,15 @@ func (a *app) tryLocalDelivery(ctx context.Context, path string, target clicore.
 		// actionable line, only in the case where the free path was genuinely
 		// available (P1-5, ADR-040).
 		fmt.Fprintf(a.stderr, "%s isn't listening on this network, so the file will be uploaded (this uses your quota).\n", deviceLabelFor(target))
-		fmt.Fprintf(a.stderr, "  to send directly next time, turn on \"discoverable on local network\" there, or run `%s receive` on it\n", commandName)
+		// NOT "run `s2u receive`". A plain receive auto-generates a passphrase,
+		// and lanshare refuses a passwordless sender against a password-holding
+		// receiver unless that sender is already trusted -- so the obvious advice
+		// would send the user to a refusal. Verified against a real listener
+		// 2026-09-16: NoPassword receivers (the desktop app's listener and the
+		// daemon) accept the pinned send; an auto-passphrase receiver refuses it
+		// with "this receiver requires a password" unless this device is trusted
+		// there.
+		fmt.Fprintf(a.stderr, "  to send directly next time, turn on \"discoverable on local network\" in the app there, or run `%s daemon` on it\n", commandName)
 		return false
 	}
 	peer := matches[0].Peer
