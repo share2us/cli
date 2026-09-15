@@ -1878,6 +1878,15 @@ func (a app) upload(ctx context.Context, args []string) int {
 			fmt.Fprintf(a.stderr, "device %q does not have an encryption key; log in again on that device\n", opts.device)
 			return 1
 		}
+		// LOCAL-FIRST (ADR-040). If that device is answering on this network, hand
+		// the file straight across and never create an upload session: the bytes
+		// do not touch Share2Us, nothing is stored, and no quota is spent. Every
+		// "cannot" falls through to the upload below, because a device answers a
+		// probe only while it is actually listening and "not reachable" is the
+		// ordinary case rather than a fault.
+		if a.tryLocalDelivery(ctx, opts.path, targetDevice) {
+			return 0
+		}
 	}
 	var teammateDevices []clicore.TeammateDevice
 	teammateMode := ""

@@ -12,8 +12,18 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
-<!-- Add user-facing changes here as they merge. A stable release refuses to
-     ship while this section is empty (HTML comments do not count). -->
+### Added
+- **Sending to your own machine now goes straight across when it is on the same
+  network.** `--device` used to upload the file and have the other machine
+  download it, spending your quota twice, even when that machine was in the same
+  room. It now checks first, and when the device is there the file goes directly:
+  nothing is uploaded, nothing is stored, and no quota is used. It falls back to
+  uploading whenever it cannot, which is most of the time to begin with, because
+  a device only answers a probe while it is actually listening.
+- **When a direct send was possible but the other machine was not listening, it
+  says so** — that the upload will use your quota, and how to turn the direct
+  path on. That advice appears only for devices that could actually use it, never
+  for one that can never be reached that way.
 
 ## [20260911112347] - 2026-09-11
 
