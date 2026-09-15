@@ -100,6 +100,17 @@ func TestNothingAnsweringExplainsTheCostAndTheRemedy(t *testing.T) {
 	if !strings.Contains(got, "discoverable") {
 		t.Errorf("stderr = %q, want it to say how to get the direct path", got)
 	}
+	// The advice must name a receiver that will actually ACCEPT this send. A
+	// plain `s2u receive` auto-generates a passphrase, and lanshare refuses a
+	// passwordless sender against a password-holding receiver unless it is
+	// already trusted — so pointing there would send the user to a refusal.
+	// Verified against a real listener 2026-09-16.
+	if strings.Contains(got, "receive`") {
+		t.Errorf("stderr = %q, points at `receive`, which refuses a passwordless direct send", got)
+	}
+	if !strings.Contains(got, "daemon") {
+		t.Errorf("stderr = %q, want it to name a receiver that accepts the send", got)
+	}
 }
 
 // A device with no fingerprint gets NO such note. It cannot be reached directly
