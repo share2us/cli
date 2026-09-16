@@ -12,6 +12,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+- **Uploads were failing on the free plan.** Without `--expires`, the CLI asked to
+  keep the file for 7 days — longer than the free plan now allows — so ordinary
+  uploads were refused outright. It now asks for nothing and lets your plan's own
+  default apply. An explicit `--expires` is still sent as you typed it.
+- **A machine receiving over the network now says who it is.** `--receive` and the
+  daemon listened without publishing this device's identity, so anything scanning
+  the network saw an address and nothing else. That is why sending to a device
+  sitting right there still uploaded: there was no identity to recognise it by.
+  Both now present the same signed device card the rest of the app uses.
+
 ## [20260915203826] - 2026-09-15
 
 ### Added
