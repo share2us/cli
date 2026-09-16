@@ -1803,7 +1803,16 @@ func (a app) upload(ctx context.Context, args []string) int {
 		}
 		expiresInput = "none"
 	}
-	apiExpiry, noExpiry, err := clicore.ExpiryForAPI(expiresInput)
+	// An empty expiry means "the user did not ask", and the correct answer is to
+	// send NOTHING and let the server apply the plan's default_expiry_hours. The
+	// client used to guess "7d" here; when the Free plan's maximum dropped to 48h
+	// that guess started failing every default upload with expiry_denied, which
+	// is what a client inventing a server policy eventually does.
+	var apiExpiry string
+	var noExpiry bool
+	if strings.TrimSpace(expiresInput) != "" {
+		apiExpiry, noExpiry, err = clicore.ExpiryForAPI(expiresInput)
+	}
 	if err != nil {
 		return a.fail("parse expiry", err)
 	}

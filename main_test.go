@@ -578,6 +578,73 @@ func TestUploadSuccessJSON(t *testing.T) {
 	}
 }
 
+// An upload with no --expires must send NO expiry at all, so the server applies
+// the plan's own default_expiry_hours.
+//
+// The client used to send a hardcoded "7d". That is a client inventing a policy
+// the server owns, and on 2026-09-16 the guess became wrong: the Free plan's
+// maximum dropped to 48h and EVERY default upload started failing with
+// expiry_denied. Found by a two-node container test running an ordinary
+// `s2u <file> --device <name>`; no unit test could see it, because they all
+// mocked a server that accepted anything.
+func TestADefaultUploadSendsNoExpiry(t *testing.T) {
+	var got string
+	var seen bool
+	inner := uploadHandler(t)
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/uploads" {
+			var req clicore.UploadCreateRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			got, seen = req.ExpiresIn, true
+			r.Body = io.NopCloser(bytes.NewReader(mustMarshal(t, req)))
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	withCredential(t, "https://api.example.test")
+	file := writeTempFile(t, "hello.txt", "hello")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{file, "--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	if !seen {
+		t.Fatal("no upload was created")
+	}
+	if got != "" {
+		t.Fatalf("ExpiresIn = %q, want empty so the server applies the plan default", got)
+	}
+}
+
+// An explicit --expires is still sent verbatim: the server, not the client,
+// decides whether the plan allows it.
+func TestAnExplicitExpiryIsStillSent(t *testing.T) {
+	var got string
+	inner := uploadHandler(t)
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/uploads" {
+			var req clicore.UploadCreateRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			got = req.ExpiresIn
+			r.Body = io.NopCloser(bytes.NewReader(mustMarshal(t, req)))
+		}
+		inner.ServeHTTP(w, r)
+	}))
+	withCredential(t, "https://api.example.test")
+	file := writeTempFile(t, "hello.txt", "hello")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{file, "--json", "--expires", "24h"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	if got != "24h0m0s" {
+		t.Fatalf("ExpiresIn = %q, want the requested 24h", got)
+	}
+}
+
 func TestZipDirectoryProducesValidArchive(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "a.txt"), []byte("alpha"), 0o600); err != nil {
@@ -2311,7 +2378,13 @@ func uploadHandlerForSize(t *testing.T, wantSize int64) http.Handler {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				t.Fatalf("decode create request: %v", err)
 			}
-			if req.SizeBytes != uint64(wantSize) || req.SHA256 == "" || req.ExpiresIn == "" {
+			// ExpiresIn is NOT asserted here. This helper serves tests that pass
+			// --expires and tests that do not, and the correct value differs:
+			// what the user asked for, or nothing at all. The contract for the
+			// no-flag case has its own test, TestADefaultUploadSendsNoExpiry.
+			// It used to require ExpiresIn to be non-empty, which quietly pinned
+			// the client's hardcoded "7d" guess in place.
+			if req.SizeBytes != uint64(wantSize) || req.SHA256 == "" {
 				t.Fatalf("create request = %+v", req)
 			}
 			writeTestJSON(w, map[string]any{
@@ -3856,4 +3929,15 @@ func TestP2POutputRefusesASymlink(t *testing.T) {
 	if body, _ := os.ReadFile(victim); string(body) != "must survive" {
 		t.Fatalf("the victim was modified: %q", body)
 	}
+}
+
+// mustMarshal re-encodes a decoded body so the wrapped handler can read it
+// again: the first decode consumes r.Body.
+func mustMarshal(t *testing.T, v any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(v)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return raw
 }

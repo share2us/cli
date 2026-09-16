@@ -120,6 +120,26 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 	// cli-core skips OnRequest entirely for an already-trusted device, so trusting
 	// a peer once is what makes later transfers from it land without a prompt.
 	openMode := opts.noPassword && opts.password == "" && len(opts.allowIPs) == 0
+	// PUBLISH A DEVICE CARD (ADR-038). Without Identity the listener's certificate
+	// carries no card, so a scan learns an address and nothing else: no name, and
+	// no stable identity to recognise this machine by.
+	//
+	// That is not cosmetic. Local-first routing (ADR-040) matches a device in the
+	// account's list against the identity a peer PROVES it holds, so a receiver
+	// with no card can never be matched and a send to it uploads even when it is
+	// on the same network. Found by a two-node container test: the scan saw the
+	// receiver and reported an empty identity fingerprint.
+	//
+	// Best-effort: an unloadable identity leaves the listener exactly as it was.
+	receiverName := opts.name
+	if receiverName == "" {
+		receiverName, _ = os.Hostname()
+	}
+	receiverIdentity, identityErr := lanid.Identity()
+	if identityErr != nil {
+		fmt.Fprintf(a.stderr, "note: listening without a device identity (%v); senders cannot recognise this device\n", identityErr)
+		receiverIdentity = nil
+	}
 	ropts := lanshare.ReceiveOptions{
 		Bind:            opts.bind,
 		Port:            opts.port,
@@ -127,6 +147,8 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 		NoPassword:      opts.noPassword,
 		AllowIPs:        opts.allowIPs,
 		IsTrustedSender: trustedSender,
+		Identity:        receiverIdentity,
+		DeviceName:      receiverName,
 		DestDir:         opts.path,
 		Overwrite:       opts.overwrite,
 		OnListen: func(info lanshare.ListenInfo) {
