@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260916092626] - 2026-09-16
+
 ### Fixed
 - **Uploads were failing on the free plan.** Without `--expires`, the CLI asked to
   keep the file for 7 days — longer than the free plan now allows — so ordinary
