@@ -13,6 +13,7 @@ import (
 
 	clicore "github.com/share2us/cli-core"
 	"github.com/share2us/cli-core/daemonctl"
+	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli-core/lanshare"
 )
 
@@ -219,11 +220,24 @@ func (rt *Runtime) lanLoop(ctx context.Context, opts Options, deps Deps) {
 		instance, _ = os.Hostname()
 	}
 	var mdns io.Closer
+	// Publish a device card (ADR-038), for the same reason the `--receive`
+	// listener does: without Identity the certificate carries no card, so a peer
+	// scanning the network learns an address and nothing else. Local-first
+	// routing (ADR-040) matches on the identity a peer PROVES it holds, so a
+	// cardless daemon can never be matched and a send to this machine uploads
+	// even when the sender is in the same room. Best-effort.
+	identity, identityErr := lanid.Identity()
+	if identityErr != nil {
+		deps.logf("LAN receiver has no device identity (%v); senders cannot recognise this device", identityErr)
+		identity = nil
+	}
 	ropts := lanshare.ReceiveOptions{
 		Bind:            opts.Bind,
 		Port:            opts.Port,
 		NoPassword:      true,
 		IsTrustedSender: opts.IsTrustedSender,
+		Identity:        identity,
+		DeviceName:      instance,
 		DestDir:         opts.DestDir,
 		Loop:            true,
 		OnRequest:       rt.approve(opts.ApprovalPolicy, deps),
