@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260918201621] - 2026-09-18
+
 ### Fixed
 
 - Markdown shared through an AI agent now previews as formatted markdown
