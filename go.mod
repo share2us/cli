@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/share2us/cli-core v0.38.0
-	github.com/share2us/mcp v0.2.0
+	github.com/share2us/mcp v0.4.0
 )
 
 require (
