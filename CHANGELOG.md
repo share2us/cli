@@ -12,6 +12,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Markdown shared through an AI agent now previews as formatted markdown
+  instead of raw source. The MCP tools classified `.md` as plain text, because
+  `text/markdown` matched a `text/` check first, and the share page renders its
+  preview from that classification alone.
+- Re-sharing the same file through an AI agent keeps its link. The MCP tools
+  never sent the identifier the server dedups on, so every repeat share of a
+  file minted a new link. Sharing pasted text is unchanged and still creates a
+  new share each time, which is what you want for a note.
+
 ## [20260916092626] - 2026-09-16
 
 ### Fixed
