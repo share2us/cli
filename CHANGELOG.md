@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260923065015] - 2026-09-23
+
 ### Fixed
 
 - `s2u daemon uninstall` no longer claims to have removed something that was
