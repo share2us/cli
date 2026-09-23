@@ -116,6 +116,19 @@ func ServiceUninstall(out io.Writer) error {
 	// --now`; /end is the schtasks equivalent. Best-effort: it fails harmlessly
 	// when the task is not currently running.
 	_ = run("schtasks", "/end", "/tn", taskName)
+	// Ask whether the task exists before deleting it, because the three
+	// platforms were wrong in three different ways and none of them was this.
+	// `schtasks /delete` FAILS on a missing task, so uninstalling on a machine
+	// that never had it returned an error -- while darwin and linux printed
+	// "Removed ..." and exited 0 for the same situation, claiming an action
+	// that never happened.
+	//
+	// Uninstall should be idempotent: running it twice, or on a clean machine,
+	// is not a failure. But it should say which of the two things it did.
+	if err := run("schtasks", "/query", "/tn", taskName); err != nil {
+		fmt.Fprintf(out, "scheduled task %q was not installed; nothing to remove\n", taskName)
+		return nil
+	}
 	if err := run("schtasks", "/delete", "/tn", taskName, "/f"); err != nil {
 		return err
 	}
