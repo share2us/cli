@@ -105,10 +105,23 @@ func ServiceUninstall(out io.Writer) error {
 	}
 	domain := "gui/" + strconv.Itoa(os.Getuid())
 	_ = run("launchctl", "bootout", domain, path)
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	// Whether anything was actually there decides what we SAY, not what we
+	// return. Uninstall stays idempotent -- running it twice, or on a machine
+	// that never had it, is not an error and must not fail a script. But it
+	// used to print "Removed ..." either way, reporting an action that did not
+	// happen; found on a Mac where the daemon had never been installed.
+	removed := true
+	if err := os.Remove(path); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		removed = false
 	}
-	fmt.Fprintf(out, "Removed %s\n", launchdLabel)
+	if removed {
+		fmt.Fprintf(out, "Removed %s\n", launchdLabel)
+	} else {
+		fmt.Fprintf(out, "%s was not installed; nothing to remove\n", launchdLabel)
+	}
 	return nil
 }
 

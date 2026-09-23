@@ -12,6 +12,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- `s2u daemon uninstall` no longer claims to have removed something that was
+  never installed. On Linux and macOS it printed "Removed ..." whatever the
+  state; on Windows it did the opposite and failed outright, so uninstalling
+  twice returned an error. All three now exit cleanly either way and say which
+  of the two things happened.
+
 ## [20260918201621] - 2026-09-18
 
 ### Fixed

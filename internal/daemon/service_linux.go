@@ -127,11 +127,20 @@ func ServiceUninstall(out io.Writer) error {
 		return err
 	}
 	_ = run("systemctl", "--user", "disable", "--now", unitName)
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	// See the note in service_darwin.go: idempotent exit code, honest message.
+	removed := true
+	if err := os.Remove(path); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		removed = false
 	}
 	_ = run("systemctl", "--user", "daemon-reload")
-	fmt.Fprintf(out, "Removed %s\n", unitName)
+	if removed {
+		fmt.Fprintf(out, "Removed %s\n", unitName)
+	} else {
+		fmt.Fprintf(out, "%s was not installed; nothing to remove\n", unitName)
+	}
 	return nil
 }
 
