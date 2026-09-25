@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260925150632] - 2026-09-25
+
 ### Added
 
 - **Every bound agent now has a stable id**, printed by `s2u agent bind` and
