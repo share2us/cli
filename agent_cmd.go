@@ -51,15 +51,17 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentUnbind(args[1:])
 	case "bindings":
 		return a.agentBindings()
+	case "goal", "goals":
+		return a.agentGoal(ctx, args[1:])
 	default:
 		return a.agentUsage()
 	}
 }
 
 func (a app) agentUsage() int {
-	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|pending|approve|allow|revoke|allowed|bind|unbind|bindings|rules|policy>\n", commandName)
+	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|pending|approve|allow|revoke|allowed|bind|unbind|bindings|goal|rules|policy>\n", commandName)
 	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
-	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P [--file PATH]   inject a prompt (+ optional file)\n")
+	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
 	fmt.Fprintf(a.stderr, "  approve <request-id>                       approve ONE pending request (no standing access)\n")
@@ -70,6 +72,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "                                             is advertised until you bind it)\n")
 	fmt.Fprintf(a.stderr, "  unbind <session-id|--project DIR>          stop advertising it\n")
 	fmt.Fprintf(a.stderr, "  bindings                                   what this machine advertises\n")
+	fmt.Fprintf(a.stderr, "  goal <new|list|show|close|wait>            a unit of autonomous work, with a budget\n")
 	fmt.Fprintf(a.stderr, "  rules [--project DIR]                      show which .s2u.rules are hard-enforced vs advisory\n")
 	fmt.Fprintf(a.stderr, "  policy [--project DIR] [LEVEL]             show or set this agent's privilege\n")
 	fmt.Fprintf(a.stderr, "                                             (restricted | standard | privileged)\n")
@@ -222,7 +225,7 @@ func (a app) agentList(ctx context.Context) int {
 }
 
 func (a app) agentSend(ctx context.Context, args []string) int {
-	var deviceID, sessionID, prompt, tool, file string
+	var deviceID, sessionID, prompt, tool, file, goalID string
 	tool = "claude"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -250,6 +253,11 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 			i++
 			if i < len(args) {
 				file = args[i]
+			}
+		case "--goal":
+			i++
+			if i < len(args) {
+				goalID = args[i]
 			}
 		default:
 			fmt.Fprintf(a.stderr, "unknown flag %q\n", args[i])
@@ -325,6 +333,7 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		SealedPrompt:    sealed,
 		ObjectKey:       objectKey,
 		SealedFileKey:   sealedFileKey,
+		GoalID:          goalID,
 	})
 	if err != nil {
 		return a.fail("send", err)

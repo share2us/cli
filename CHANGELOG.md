@@ -12,6 +12,19 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **Goals: autonomous work with a budget.** `s2u agent goal new|list|show|close|wait`
+  opens a unit of work that agents hand between themselves, and
+  `s2u agent send --goal <id>` makes an injection a **counted hop** against it
+  instead of a one-off. Both ceilings are required when opening one — `--hops` and
+  `--time` — because a goal without a budget is unbounded work, and the server
+  refuses to invent one for you. When a ceiling is reached the goal closes with
+  everything preserved, and the refusal says which ceiling it was.
+  Completing a goal requires `--evidence`: the command that was run and its
+  output. Failing or cancelling does not, because those are outcomes anyone may
+  report honestly while a completion is a claim about the world.
+
 ## [20260925031816] - 2026-09-25
 
 ### Added
