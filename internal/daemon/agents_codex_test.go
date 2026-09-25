@@ -80,7 +80,7 @@ func TestDiscoverCodexMissingRoot(t *testing.T) {
 }
 
 func TestBuildCodexInjectArgs(t *testing.T) {
-	args := buildCodexInjectArgs("sess-9", "do it", codexSandbox(false))
+	args := buildCodexInjectArgs("sess-9", "do it", codexSandbox(PrivilegeStandard))
 	joined := strings.Join(args, " ")
 	if !strings.HasPrefix(joined, "exec resume") {
 		t.Fatalf("must use exec resume: %v", args)
@@ -111,7 +111,7 @@ func TestBuildCodexInjectArgs(t *testing.T) {
 }
 
 func TestCodexStrictIsReadOnly(t *testing.T) {
-	if got := codexSandbox(true); got != "read-only" {
+	if got := codexSandbox(PrivilegeRestricted); got != "read-only" {
 		t.Fatalf("strict must be read-only, got %q", got)
 	}
 }

@@ -98,14 +98,15 @@ func parseGeminiSessions(listing, project string) []DiscoveredSession {
 // RunGeminiInject resumes a Gemini session headlessly with the prompt, under a
 // restricted approval mode (auto-approve edits, never yolo). Resume is by index,
 // so it re-lists to find the index of the target UUID.
-func RunGeminiInject(ctx context.Context, sessionID, cwd, prompt string, strict bool) (string, error) {
+func RunGeminiInject(ctx context.Context, sessionID, cwd, prompt string, forceRestricted bool) (string, error) {
 	if cwd == "" {
 		return "", fmt.Errorf("gemini inject needs the session's project directory")
 	}
 	// Guardrails: the compiled rules become admin-tier policy-engine denies (the
 	// hard gate), and also ride in the prompt for the advisory ones that cannot be
 	// compiled. --approval-mode is NOT the gate; it only decides auto-approval.
-	policy := CompileRules(LoadRules(cwd))
+	priv := AgentPolicy(cwd, forceRestricted)
+	policy := CompileRules(LoadRules(cwd), priv)
 	if preamble := policy.PromptPreamble(); preamble != "" {
 		prompt = preamble + "\n" + prompt
 	}
@@ -129,7 +130,7 @@ func RunGeminiInject(ctx context.Context, sessionID, cwd, prompt string, strict 
 	}
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "gemini", buildGeminiInjectArgs(idx, prompt, geminiApproval(strict), policyDir)...)
+	cmd := exec.CommandContext(cctx, "gemini", buildGeminiInjectArgs(idx, prompt, geminiApproval(priv), policyDir)...)
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
 	return string(out), err
@@ -145,10 +146,12 @@ func buildGeminiInjectArgs(index, prompt, approval, policyDir string) []string {
 	return args
 }
 
-// geminiApproval picks the approval mode: "plan" (read-only) under --agent-strict,
-// else "auto_edit". Never yolo.
-func geminiApproval(strict bool) string {
-	if strict {
+// geminiApproval picks the approval mode from the agent's privilege (ADR-041 §6):
+// "plan" (read-only) when restricted, else "auto_edit". Never yolo — Gemini's
+// hard gate is the policy engine, not this flag, so privilege changes the denies
+// (in CompileRules) rather than the approval mode.
+func geminiApproval(priv Privilege) string {
+	if priv == PrivilegeRestricted {
 		return "plan"
 	}
 	return "auto_edit"
@@ -180,7 +183,8 @@ func splitLines(s string) []string {
 	return lines
 }
 
-// GeminiRunner adapts the Gemini CLI. Strict selects the read-only plan mode.
+// GeminiRunner adapts the Gemini CLI. Strict is the daemon-wide safety override
+// (`--agent-strict`); without it each project's own policy decides (AgentPolicy).
 type GeminiRunner struct{ Strict bool }
 
 func (GeminiRunner) Tool() string { return "gemini" }

@@ -147,13 +147,14 @@ func codexTruncate(s string, n int) string {
 //
 // Codex has no per-tool deny layer to compile .s2u.rules into, so the rules ride
 // in the prompt (best-effort) and the sandbox is the hard gate.
-func RunCodexInject(ctx context.Context, sessionID, cwd, prompt string, strict bool) (string, error) {
-	if preamble := CompileRules(LoadRules(cwd)).PromptPreamble(); preamble != "" {
+func RunCodexInject(ctx context.Context, sessionID, cwd, prompt string, forceRestricted bool) (string, error) {
+	priv := AgentPolicy(cwd, forceRestricted)
+	if preamble := CompileRules(LoadRules(cwd), priv).PromptPreamble(); preamble != "" {
 		prompt = preamble + "\n" + prompt
 	}
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "codex", buildCodexInjectArgs(sessionID, prompt, codexSandbox(strict))...)
+	cmd := exec.CommandContext(cctx, "codex", buildCodexInjectArgs(sessionID, prompt, codexSandbox(priv))...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -180,16 +181,31 @@ func buildCodexInjectArgs(sessionID, prompt, sandbox string) []string {
 	}
 }
 
-// codexSandbox picks the sandbox: read-only under --agent-strict, else
-// workspace-write (writes in the workspace, no network). Never bypasses.
-func codexSandbox(strict bool) string {
-	if strict {
+// codexSandbox picks the sandbox from the agent's privilege (ADR-041 §6).
+//
+// This is the function the P0 prototype tripped over (F1). `workspace-write`
+// gives Codex no network and no writes to .git, so a Codex agent could not
+// commit, push or call `gh` — and that was OUR hardcoding, not a fact about
+// Codex. An owner who runs an agent as their deployer sets `privileged`, and it
+// gets `danger-full-access`: the sandbox is the ONLY gate Codex has, so for this
+// tool the privilege must move the sandbox itself.
+//
+// `approval_policy=never` still rides alongside on every run (see
+// buildCodexInjectArgs): without it a denied command escalates into an approval
+// flow the host may auto-approve, re-running it unsandboxed.
+func codexSandbox(priv Privilege) string {
+	switch priv {
+	case PrivilegeRestricted:
 		return "read-only"
+	case PrivilegePrivileged:
+		return "danger-full-access"
+	default:
+		return "workspace-write"
 	}
-	return "workspace-write"
 }
 
-// CodexRunner adapts the Codex CLI. Strict selects the read-only sandbox.
+// CodexRunner adapts the Codex CLI. Strict is the daemon-wide safety override
+// (`--agent-strict`); without it each project's own policy decides (AgentPolicy).
 type CodexRunner struct{ Strict bool }
 
 func (CodexRunner) Tool() string { return "codex" }

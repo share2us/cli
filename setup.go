@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/share2us/cli/internal/daemon"
 )
@@ -75,6 +76,54 @@ func rulesPath(global bool) (string, error) {
 	return filepath.Join(cwd, ".s2u.rules"), nil
 }
 
+// agentPolicy shows or sets an agent's privilege for one project (ADR-041 §6).
+// This is the owner's act: the file it writes lives outside the project, so an
+// injected run cannot promote itself by editing its own repo.
+func (a app) agentPolicy(args []string) int {
+	project, err := os.Getwd()
+	if err != nil {
+		project = ""
+	}
+	level := ""
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--project" && i+1 < len(args):
+			i++
+			project = args[i]
+		case strings.HasPrefix(args[i], "-"):
+			fmt.Fprintf(a.stderr, "unknown flag %q\n", args[i])
+			return 2
+		default:
+			level = args[i]
+		}
+	}
+	if level == "" {
+		priv := daemon.AgentPolicy(project, false)
+		path, _ := daemon.EnforcedPolicyPath(project)
+		fmt.Fprintf(a.stdout, "%s  %s\n", priv, project)
+		fmt.Fprintf(a.stdout, "stored at: %s\n", path)
+		fmt.Fprintf(a.stdout, "\nlevels:\n")
+		fmt.Fprintf(a.stdout, "  restricted  read-only; the agent may look, not touch\n")
+		fmt.Fprintf(a.stdout, "  standard    edit inside the workspace, no network (default)\n")
+		fmt.Fprintf(a.stdout, "  privileged  network and pushes; for an agent meant to deploy\n")
+		return 0
+	}
+	p := daemon.Privilege(strings.ToLower(level))
+	if !p.Valid() {
+		fmt.Fprintf(a.stderr, "unknown level %q; use restricted, standard or privileged\n", level)
+		return 2
+	}
+	path, werr := daemon.WriteEnforcedPolicy(project, p)
+	if werr != nil {
+		return a.fail("write policy", werr)
+	}
+	fmt.Fprintf(a.stdout, "%s is now %s\n%s\n", project, p, path)
+	if p == daemon.PrivilegePrivileged {
+		fmt.Fprintf(a.stdout, "\nThis agent may now reach the network and push. Its baseline denies are gone;\nonly self-protection and any explicit `don't ...` lines in .s2u.rules remain.\n")
+	}
+	return 0
+}
+
 // agentRules loads + compiles the rules that apply to a project and prints what
 // is hard-enforced vs advisory, so the user knows exactly what a remote inject
 // can and cannot do.
@@ -89,10 +138,29 @@ func (a app) agentRules(args []string) int {
 			project = args[i]
 		}
 	}
-	policy := daemon.CompileRules(daemon.LoadRules(project))
+	priv := daemon.AgentPolicy(project, false)
+	policy := daemon.CompileRules(daemon.LoadRules(project), priv)
 	fmt.Fprintf(a.stdout, "Rules for %s (+ global ~/.s2u.rules)\n\n", project)
-	fmt.Fprintln(a.stdout, "HARD (enforced on injected runs, cannot be overridden — includes the")
-	fmt.Fprintln(a.stdout, "default baseline: push / delete / network, plus self-protection):")
+	fmt.Fprintf(a.stdout, "PRIVILEGE: %s", priv)
+	switch priv {
+	case daemon.PrivilegeRestricted:
+		fmt.Fprintln(a.stdout, "  (read-only: claude plan / codex read-only / gemini plan)")
+	case daemon.PrivilegePrivileged:
+		fmt.Fprintln(a.stdout, "  (network + pushes allowed; baseline denies dropped)")
+	default:
+		fmt.Fprintln(a.stdout, "  (edit in the workspace, no network — the default)")
+	}
+	if path, err := daemon.EnforcedPolicyPath(project); err == nil {
+		fmt.Fprintf(a.stdout, "  set with: %s agent policy --project %s <level>\n  stored at: %s\n", commandName, project, path)
+	}
+	fmt.Fprintln(a.stdout, "")
+	if priv == daemon.PrivilegePrivileged {
+		fmt.Fprintln(a.stdout, "HARD (enforced on injected runs, cannot be overridden. At `privileged` the")
+		fmt.Fprintln(a.stdout, "baseline push / delete / network denies are DROPPED; self-protection stays):")
+	} else {
+		fmt.Fprintln(a.stdout, "HARD (enforced on injected runs, cannot be overridden — includes the")
+		fmt.Fprintln(a.stdout, "default baseline: push / delete / network, plus self-protection):")
+	}
 	for _, d := range policy.DisallowedTools {
 		fmt.Fprintf(a.stdout, "  deny  %s\n", d)
 	}

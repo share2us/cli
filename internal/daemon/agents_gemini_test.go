@@ -38,7 +38,7 @@ func TestGeminiIndexForUUID(t *testing.T) {
 }
 
 func TestBuildGeminiInjectArgs(t *testing.T) {
-	args := buildGeminiInjectArgs("3", "do the task", geminiApproval(false), "/tmp/pol")
+	args := buildGeminiInjectArgs("3", "do the task", geminiApproval(PrivilegeStandard), "/tmp/pol")
 	joined := strings.Join(args, " ")
 	if !strings.Contains(joined, "-p do the task") || !strings.Contains(joined, "-r 3") {
 		t.Fatalf("args missing headless prompt/resume: %v", args)
@@ -56,7 +56,7 @@ func TestBuildGeminiInjectArgs(t *testing.T) {
 }
 
 func TestGeminiPolicyTOMLCompilesDenies(t *testing.T) {
-	toml := geminiPolicyTOML(CompileRules(nil)) // baseline only
+	toml := geminiPolicyTOML(CompileRules(nil, PrivilegeStandard)) // baseline only
 	if !strings.Contains(toml, `commandPrefix = 'git push'`) {
 		t.Errorf("baseline push deny must compile to a shell rule:\n%s", toml)
 	}
