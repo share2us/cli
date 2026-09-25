@@ -15,6 +15,14 @@ type fakeAgentClient struct {
 	reports    [][2]string // {status, result}
 	registered []string
 	deregd     []string
+	// remote is what the server already believes this device is running, used by
+	// the startup retire pass.
+	remote  []clicore.AgentSessionInfo
+	listErr error
+}
+
+func (f *fakeAgentClient) ListAgentSessions(_ context.Context) ([]clicore.AgentSessionInfo, error) {
+	return f.remote, f.listErr
 }
 
 func (f *fakeAgentClient) RegisterAgentSession(_ context.Context, in clicore.AgentRegisterInput) error {

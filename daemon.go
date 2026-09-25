@@ -148,6 +148,7 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		default:
 			runOpts.AgentBridge = true
 			deps.AgentClient = client
+			deps.DeviceSessionID = credential.DeviceSessionID
 			deps.AgentRunners = []daemon.AgentRunner{
 				daemon.ClaudeRunner{Strict: opts.agentStrict},
 				daemon.CodexRunner{Strict: opts.agentStrict},
