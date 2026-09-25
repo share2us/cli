@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260925031816] - 2026-09-25
+
 ### Added
 
 - `s2u agent policy [--project DIR] [restricted|standard|privileged]` sets how
