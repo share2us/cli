@@ -14,6 +14,9 @@ import (
 // by *clicore.Client). Kept an interface so the loop is unit-testable.
 type AgentClient interface {
 	RegisterAgentSession(ctx context.Context, in clicore.AgentRegisterInput) error
+	// ListAgentSessions is used once at startup to retire sessions this device
+	// advertised before they were bound (ADR-041 §1 / F2).
+	ListAgentSessions(ctx context.Context) ([]clicore.AgentSessionInfo, error)
 	DeregisterAgentSession(ctx context.Context, sessionID string) error
 	AgentLongPoll(ctx context.Context, waitSeconds int) ([]clicore.AgentRequest, error)
 	AgentReportResult(ctx context.Context, id, status, result string) error
@@ -44,6 +47,7 @@ func (rt *Runtime) agentBridge(ctx context.Context, client AgentClient, runners 
 // agentRegisterLoop discovers local sessions and registers/heartbeats them,
 // deregistering ones that have gone away.
 func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, runners []AgentRunner, deps Deps) {
+	rt.retireUnboundSessions(ctx, client, deps)
 	known := map[string]bool{}
 	sync := func() {
 		seen := map[string]bool{}
@@ -56,7 +60,19 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 			}
 			sessions = append(sessions, found...)
 		}
+		// Bindings are re-read every sync so `s2u agent bind` takes effect within
+		// one tick, without restarting the daemon.
+		bindings, berr := LoadBindings()
+		if berr != nil {
+			// Fail CLOSED. An unreadable whitelist must not mean "advertise
+			// everything" — that is the state this replaced.
+			deps.logf("agent-bridge: cannot read bindings, advertising nothing: %v", berr)
+			bindings = nil
+		}
 		for _, s := range sessions {
+			if !IsBound(bindings, s.Project, s.Tool) {
+				continue
+			}
 			seen[s.SessionID] = true
 			if err := client.RegisterAgentSession(ctx, clicore.AgentRegisterInput{
 				SessionID: s.SessionID, Tool: s.Tool, Name: s.Name, Project: s.Project, Status: s.Status,
@@ -81,6 +97,41 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 		case <-t.C:
 			sync()
 		}
+	}
+}
+
+// retireUnboundSessions deregisters anything this device advertised before
+// bindings existed (or before the owner unbound a project). The in-memory
+// `known` map only covers one daemon lifetime, so without this a session
+// registered by an older build stays visible on the server forever.
+//
+// Best-effort by design: a listing failure must not stop the bridge starting.
+func (rt *Runtime) retireUnboundSessions(ctx context.Context, client AgentClient, deps Deps) {
+	if deps.DeviceSessionID == "" {
+		return // cannot tell our own sessions from another device's
+	}
+	remote, err := client.ListAgentSessions(ctx)
+	if err != nil {
+		deps.logf("agent-bridge: could not list existing sessions to retire: %v", err)
+		return
+	}
+	bindings, berr := LoadBindings()
+	if berr != nil {
+		deps.logf("agent-bridge: cannot read bindings while retiring: %v", berr)
+		bindings = nil
+	}
+	for _, s := range remote {
+		if s.DeviceID != deps.DeviceSessionID {
+			continue // another device's session; not ours to retire
+		}
+		if IsBound(bindings, s.Project, s.Tool) {
+			continue
+		}
+		if err := client.DeregisterAgentSession(ctx, s.SessionID); err != nil {
+			deps.logf("agent-bridge: retire %s: %v", s.SessionID, err)
+			continue
+		}
+		deps.logf("agent-bridge: retired unbound session %s (%s in %s)", s.SessionID, s.Tool, s.Project)
 	}
 }
 
