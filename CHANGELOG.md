@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260925103526] - 2026-09-25
+
 ### Added
 
 - **Goals: autonomous work with a budget.** `s2u agent goal new|list|show|close|wait`
