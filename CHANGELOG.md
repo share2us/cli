@@ -12,6 +12,22 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Security
+
+- **Your machine now checks who sent a prompt before running it.** A prompt sent
+  to one of your agents was encrypted so only your device could read it, but
+  nothing proved who had written it: anyone who knew your device's public key
+  could send one, and the server was the only thing vouching for the sender.
+  Every prompt is now signed by the sending device, and the daemon verifies it
+  against that sender's key **before anything is decrypted or run**. The first
+  signed prompt from a sender pins its key on your machine, like SSH's
+  known_hosts. After that the daemon refuses a prompt under a different key, an
+  unsigned prompt from a sender that has signed before, a prompt signed for a
+  different session or device, and a prompt it has already run once. It checks
+  its own pinned copy, never the key the server hands it, so it holds even if
+  the server itself were compromised. Pins live outside every project at
+  `~/.config/share2us/agents/pinned_senders.json`.
+
 ### Added
 
 - **Goals: autonomous work with a budget.** `s2u agent goal new|list|show|close|wait`
