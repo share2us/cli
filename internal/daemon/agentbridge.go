@@ -70,12 +70,15 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 			bindings = nil
 		}
 		for _, s := range sessions {
-			if !IsBound(bindings, s.Project, s.Tool) {
+			b, bound := BindingFor(bindings, s.Project, s.Tool)
+			if !bound {
 				continue
 			}
 			seen[s.SessionID] = true
+			// The binding's agent id rides with every registration, so the server
+			// can tell that a forked or recreated session is still the same agent.
 			if err := client.RegisterAgentSession(ctx, clicore.AgentRegisterInput{
-				SessionID: s.SessionID, Tool: s.Tool, Name: s.Name, Project: s.Project, Status: s.Status,
+				AgentID: b.AgentID, SessionID: s.SessionID, Tool: s.Tool, Name: s.Name, Project: s.Project, Status: s.Status,
 			}); err != nil {
 				deps.logf("agent-bridge register %s: %v", s.SessionID, err)
 			}

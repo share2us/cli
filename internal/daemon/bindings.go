@@ -4,6 +4,8 @@
 package daemon
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -25,6 +27,13 @@ import (
 // So a binding is a whitelist entry, and it is also where the privilege for that
 // project lives (privilege.go). One object, three jobs, per ADR-041.
 type Binding struct {
+	// AgentID is this agent's stable identity (ADR-041 §1a): created once when the
+	// binding is made and NEVER changed afterwards. Session ids rotate — a fork per
+	// injected prompt, a new id on recreation — so anything that must outlive a
+	// single prompt, above all an invitation into another owner's project, is keyed
+	// to this. It lives here, outside the project, because the agent can edit its
+	// own project and an identity it could rewrite is not an identity.
+	AgentID string `json:"agent_id,omitempty"`
 	// Project is the absolute, cleaned session working directory.
 	Project string `json:"project"`
 	// Tool is "claude", "codex" or "gemini". A binding is per tool: binding a
@@ -106,7 +115,13 @@ func saveBindings(list []Binding) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(out, '\n'), 0o600)
+	// Write-then-rename: a crash mid-write must not truncate the file that holds
+	// every agent's identity.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(out, '\n'), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // IsBound reports whether sessions of this tool in this project may be
@@ -141,10 +156,26 @@ func Bind(project, tool, label string) (Binding, bool, error) {
 			if label != "" {
 				list[i].Label = label
 			}
+			// A binding made before agent ids existed gets one now — and only here,
+			// in a path that already writes. Backfilling on READ would make the
+			// daemon a writer racing this command, and a lost race regenerates the
+			// id: an agent's identity silently changing is the one thing this field
+			// must never do. An existing id is never replaced.
+			if list[i].AgentID == "" {
+				id, err := newAgentID()
+				if err != nil {
+					return Binding{}, false, err
+				}
+				list[i].AgentID = id
+			}
 			return list[i], false, saveBindings(list)
 		}
 	}
-	b := Binding{Project: p, Tool: tool, Label: label, BoundAt: time.Now().UTC()}
+	id, err := newAgentID()
+	if err != nil {
+		return Binding{}, false, err
+	}
+	b := Binding{AgentID: id, Project: p, Tool: tool, Label: label, BoundAt: time.Now().UTC()}
 	list = append(list, b)
 	return b, true, saveBindings(list)
 }
@@ -173,4 +204,33 @@ func Unbind(project, tool string) (int, error) {
 		return 0, nil
 	}
 	return removed, saveBindings(kept)
+}
+
+// agentIDPrefix makes an agent id recognisable wherever it appears — in a log, an
+// invitation, a support request — and lets the server reject anything that is not
+// one before it reaches the database.
+const agentIDPrefix = "agt_"
+
+// newAgentID returns a random agent id: 128 bits, unguessable, so knowing one
+// agent's id says nothing about another's.
+func newAgentID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return agentIDPrefix + base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+// BindingFor returns the binding covering a session's project and tool.
+func BindingFor(list []Binding, project, tool string) (Binding, bool) {
+	p := normalizeProject(project)
+	if p == "" {
+		return Binding{}, false
+	}
+	for _, b := range list {
+		if b.Tool == tool && normalizeProject(b.Project) == p {
+			return b, true
+		}
+	}
+	return Binding{}, false
 }
