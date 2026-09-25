@@ -21,7 +21,7 @@ func TestCompileRulesHardVsAdvisory(t *testing.T) {
 		"don't refactor the auth module", // fuzzy -> advisory
 		"always write tests",             // allowance -> ignored
 		"",
-	})
+	}, PrivilegeStandard)
 	if !denies(p, "Bash(git push:*)") {
 		t.Errorf("push should compile to a hard deny; got %v", p.DisallowedTools)
 	}
@@ -45,7 +45,7 @@ func TestCompileRulesHardVsAdvisory(t *testing.T) {
 }
 
 func TestCompileRulesNoDupes(t *testing.T) {
-	p := CompileRules([]string{"never push", "do not push either"})
+	p := CompileRules([]string{"never push", "do not push either"}, PrivilegeStandard)
 	n := 0
 	for _, d := range p.DisallowedTools {
 		if d == "Bash(git push:*)" {
@@ -71,7 +71,7 @@ func TestAppendSystemPrompt(t *testing.T) {
 
 func TestBuildClaudeInjectArgs(t *testing.T) {
 	p := Policy{DisallowedTools: []string{"Bash(git push:*)", "Bash(rm:*)"}, Advisory: []string{"be careful"}}
-	args := buildClaudeInjectArgs("sess-1", "do the thing", p, claudeMode(false))
+	args := buildClaudeInjectArgs("sess-1", "do the thing", p, claudeMode(PrivilegeStandard))
 	joined := strings.Join(args, " ")
 	// resume + restricted mode, never bypass.
 	if !strings.Contains(joined, "--resume sess-1") || !strings.Contains(joined, "--permission-mode acceptEdits") {
@@ -95,19 +95,44 @@ func TestBuildClaudeInjectArgs(t *testing.T) {
 	}
 }
 
-func TestStrictModesAreReadOnlyAndNeverBypass(t *testing.T) {
-	// permissive defaults
-	if claudeMode(false) != "acceptEdits" || codexSandbox(false) != "workspace-write" || geminiApproval(false) != "auto_edit" {
-		t.Fatalf("default modes changed: %s/%s/%s", claudeMode(false), codexSandbox(false), geminiApproval(false))
+func TestPrivilegeModesAcrossTools(t *testing.T) {
+	// The default is unchanged from ADR-036: work in the workspace, no network.
+	if claudeMode(PrivilegeStandard) != "acceptEdits" || codexSandbox(PrivilegeStandard) != "workspace-write" || geminiApproval(PrivilegeStandard) != "auto_edit" {
+		t.Fatalf("default modes changed: %s/%s/%s", claudeMode(PrivilegeStandard), codexSandbox(PrivilegeStandard), geminiApproval(PrivilegeStandard))
 	}
-	// --agent-strict => read-only across all three
-	if claudeMode(true) != "plan" || codexSandbox(true) != "read-only" || geminiApproval(true) != "plan" {
-		t.Fatalf("strict modes wrong: %s/%s/%s", claudeMode(true), codexSandbox(true), geminiApproval(true))
+	// restricted => read-only across all three (what --agent-strict used to mean)
+	if claudeMode(PrivilegeRestricted) != "plan" || codexSandbox(PrivilegeRestricted) != "read-only" || geminiApproval(PrivilegeRestricted) != "plan" {
+		t.Fatalf("restricted modes wrong: %s/%s/%s", claudeMode(PrivilegeRestricted), codexSandbox(PrivilegeRestricted), geminiApproval(PrivilegeRestricted))
 	}
-	// no mode may ever be a bypass
-	for _, m := range []string{claudeMode(false), claudeMode(true), codexSandbox(false), codexSandbox(true), geminiApproval(false), geminiApproval(true)} {
-		if strings.Contains(m, "bypass") || strings.Contains(m, "yolo") || strings.Contains(m, "danger") {
-			t.Fatalf("mode %q is a bypass", m)
+	// privileged moves ONLY Codex's sandbox, because for Codex the sandbox is the
+	// single gate and workspace-write denies both .git and the network — which is
+	// exactly what stopped a devops agent deploying (p0-orchestration-run.md F1).
+	if got := codexSandbox(PrivilegePrivileged); got != "danger-full-access" {
+		t.Fatalf("privileged codex sandbox = %q, want danger-full-access", got)
+	}
+	// An unknown or empty privilege must behave as the default, never as an
+	// escalation: a corrupt policy file must not promote an agent.
+	if claudeMode("") != "acceptEdits" || codexSandbox("nonsense") != "workspace-write" {
+		t.Fatal("an unknown privilege must fall back to the standard mode")
+	}
+}
+
+func TestClaudeAndGeminiNeverBypassAtAnyPrivilege(t *testing.T) {
+	// Codex is excluded deliberately: danger-full-access IS its privileged mode,
+	// chosen by the machine's owner. Claude's bypassPermissions and Gemini's yolo
+	// are never reachable, at any privilege — for those two, privilege changes the
+	// DENY LIST (CompileRules), not the mode.
+	for _, priv := range []Privilege{PrivilegeRestricted, PrivilegeStandard, PrivilegePrivileged} {
+		for _, m := range []string{claudeMode(priv), geminiApproval(priv)} {
+			if strings.Contains(m, "bypass") || strings.Contains(m, "yolo") || strings.Contains(m, "danger") {
+				t.Fatalf("mode %q at privilege %s is a bypass", m, priv)
+			}
+		}
+	}
+	// Codex must still be sandboxed below privileged.
+	for _, priv := range []Privilege{PrivilegeRestricted, PrivilegeStandard} {
+		if strings.Contains(codexSandbox(priv), "danger") {
+			t.Fatalf("codex at %s must stay sandboxed", priv)
 		}
 	}
 }
@@ -115,7 +140,7 @@ func TestStrictModesAreReadOnlyAndNeverBypass(t *testing.T) {
 func TestSelfProtectionUsesEditNotWrite(t *testing.T) {
 	// Claude ignores Write(path) deny rules; only Edit(path) is enforced. A
 	// Write(...) rule here would be a silent no-op — i.e. no self-protection.
-	p := CompileRules(nil)
+	p := CompileRules(nil, PrivilegeStandard)
 	for _, d := range p.DisallowedTools {
 		if strings.HasPrefix(d, "Write(") {
 			t.Fatalf("Write(...) deny is a no-op in Claude; use Edit(...): %q", d)
@@ -128,7 +153,7 @@ func TestSelfProtectionUsesEditNotWrite(t *testing.T) {
 
 func TestBaselineIsEnforcedWithNoRulesFile(t *testing.T) {
 	// The default state (no .s2u.rules) must NOT be wide open.
-	p := CompileRules(nil)
+	p := CompileRules(nil, PrivilegeStandard)
 	for _, must := range []string{"Bash(git push:*)", "Bash(rm:*)", "Bash(curl:*)", "Edit(**/.s2u.rules)"} {
 		if !denies(p, must) {
 			t.Fatalf("baseline missing %q — default would be unrestricted: %v", must, p.DisallowedTools)
@@ -137,7 +162,7 @@ func TestBaselineIsEnforcedWithNoRulesFile(t *testing.T) {
 }
 
 func TestBaselineOptOut(t *testing.T) {
-	p := CompileRules([]string{"allow push", "# but nothing else"})
+	p := CompileRules([]string{"allow push", "# but nothing else"}, PrivilegeStandard)
 	if denies(p, "Bash(git push:*)") {
 		t.Fatal("explicit `allow push` should opt out of the push baseline")
 	}
@@ -150,7 +175,7 @@ func TestBaselineOptOut(t *testing.T) {
 func TestSelfProtectionCannotBeOptedOut(t *testing.T) {
 	// No phrasing may disable the guardrails' own protection.
 	for _, line := range []string{"allow editing .s2u.rules", "allow rules", "permit settings edit", "enable everything"} {
-		p := CompileRules([]string{line})
+		p := CompileRules([]string{line}, PrivilegeStandard)
 		if !denies(p, "Edit(**/.s2u.rules)") || !denies(p, "Edit(**/.claude/settings.json)") {
 			t.Fatalf("self-protection was removed by %q: %v", line, p.DisallowedTools)
 		}
@@ -160,7 +185,7 @@ func TestSelfProtectionCannotBeOptedOut(t *testing.T) {
 // Codex and Gemini have no deny layer, so the compiled rules must survive into
 // the prompt — otherwise .s2u.rules silently applied to Claude only.
 func TestPromptPreambleCarriesRulesForToolsWithoutDenyLayer(t *testing.T) {
-	p := CompileRules([]string{"never touch the payment code"})
+	p := CompileRules([]string{"never touch the payment code"}, PrivilegeStandard)
 	got := p.PromptPreamble()
 	if got == "" {
 		t.Fatal("baseline guardrails must always produce a preamble")

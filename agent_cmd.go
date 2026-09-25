@@ -43,13 +43,15 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentAllowed(ctx)
 	case "rules":
 		return a.agentRules(args[1:])
+	case "policy":
+		return a.agentPolicy(args[1:])
 	default:
 		return a.agentUsage()
 	}
 }
 
 func (a app) agentUsage() int {
-	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|pending|approve|allow|revoke|allowed|rules>\n", commandName)
+	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|pending|approve|allow|revoke|allowed|rules|policy>\n", commandName)
 	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
 	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P [--file PATH]   inject a prompt (+ optional file)\n")
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
@@ -59,6 +61,8 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  revoke <sender-device-id>                  withdraw a device's standing access\n")
 	fmt.Fprintf(a.stderr, "  allowed                                    list devices with standing access\n")
 	fmt.Fprintf(a.stderr, "  rules [--project DIR]                      show which .s2u.rules are hard-enforced vs advisory\n")
+	fmt.Fprintf(a.stderr, "  policy [--project DIR] [LEVEL]             show or set this agent's privilege\n")
+	fmt.Fprintf(a.stderr, "                                             (restricted | standard | privileged)\n")
 	return 2
 }
 

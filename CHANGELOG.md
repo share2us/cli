@@ -12,6 +12,35 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u agent policy [--project DIR] [restricted|standard|privileged]` sets how
+  much an injected run may do, **per project**. Until now one `--agent-strict`
+  flag decided it for every agent on the machine, which could not express the
+  thing people actually want: a locked-down reviewer and a deploying devops
+  agent side by side on one laptop.
+  - `standard` is the default and is unchanged — edit inside the workspace, no
+    network, the usual push / delete / network denies.
+  - `restricted` is read-only, what `--agent-strict` always meant.
+  - `privileged` is for an agent that is meant to deploy: it reaches the network
+    and may push, and its baseline denies are dropped. Self-protection is not,
+    and an explicit `don't ...` line in `.s2u.rules` is still hard.
+  - The file the daemon obeys lives **outside** the project
+    (`~/.config/share2us/agents/<project>/policy.yaml`), because an agent has
+    write access to its own repo. A `.s2u/policy.yaml` inside the repo can still
+    **tighten** the level for everyone on the team; it can never raise it.
+  - `s2u agent rules` now shows the level in force and where it is stored.
+
+### Fixed
+
+- A Codex agent could not commit, push or reach the network, whatever its owner
+  intended, because the adapter hardcoded the `workspace-write` sandbox. At
+  `privileged` it now gets `danger-full-access`. Verified directly: the same
+  `git commit` fails under `workspace-write` with `Unable to create
+  '.git/index.lock': Read-only file system` and succeeds at the new level.
+  `approval_policy=never` still rides on every injected run, so a denied command
+  can never escalate into an auto-approved unsandboxed one.
+
 ## [20260923065015] - 2026-09-23
 
 ### Fixed
