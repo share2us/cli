@@ -102,11 +102,12 @@ func claudeStatus(e claudeAgentEntry) string {
 // the advisory rules in the system prompt. cwd is the session's project dir, used
 // to locate .s2u.rules. Returns the run's combined output. (Phase 4 adds the
 // delivered file.)
-func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string, strict bool) (string, error) {
-	policy := CompileRules(LoadRules(cwd))
+func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string, forceRestricted bool) (string, error) {
+	priv := AgentPolicy(cwd, forceRestricted)
+	policy := CompileRules(LoadRules(cwd), priv)
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "claude", buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(strict))...)
+	cmd := exec.CommandContext(cctx, "claude", buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv))...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -135,11 +136,17 @@ func buildClaudeInjectArgs(sessionID, prompt string, policy Policy, mode string)
 	return args
 }
 
-// claudeMode picks the injected run's permission mode: "plan" (read-only) under
-// --agent-strict, else "acceptEdits" (do the work, deny-listed tools still hard
-// blocked). Never bypassPermissions.
-func claudeMode(strict bool) string {
-	if strict {
+// claudeMode picks the injected run's permission mode from the agent's privilege
+// (ADR-041 §6): "plan" (read-only) when restricted, else "acceptEdits" — do the
+// work, with deny-listed tools still hard blocked.
+//
+// NOTE there is no third mode here. Claude's only step beyond acceptEdits is
+// bypassPermissions, which ADR-036 forbids and this does not reach. What
+// PrivilegePrivileged changes for Claude is the DENY LIST, not the mode: the
+// baseline `never push` / `never network` patterns are dropped in CompileRules,
+// which is what a deploying agent actually needs.
+func claudeMode(priv Privilege) string {
+	if priv == PrivilegeRestricted {
 		return "plan"
 	}
 	return "acceptEdits"

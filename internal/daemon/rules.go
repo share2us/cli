@@ -19,6 +19,10 @@ import (
 
 // Policy is the compiled enforcement for one injected run.
 type Policy struct {
+	// Privilege is the level this policy was compiled under (ADR-041 §6). At
+	// PrivilegePrivileged the baseline denies are dropped, because an agent whose
+	// owner set it that way is meant to push and deploy; self-protection is not.
+	Privilege Privilege
 	// DisallowedTools are Claude permission patterns passed to --disallowedTools.
 	// The tool executor refuses them regardless of what the prompt says (hard).
 	DisallowedTools []string
@@ -55,8 +59,9 @@ var hardRules = []struct {
 	{[]string{"reset --hard", "git reset"}, []string{"Bash(git reset:*)"}},
 }
 
-// baselineRules are ENFORCED BY DEFAULT on every injected run, even with no
-// .s2u.rules file: the irreversible or outbound actions. Without this an allowed
+// baselineRules are ENFORCED BY DEFAULT on every injected run at restricted and
+// standard privilege, even with no .s2u.rules file: the irreversible or outbound
+// actions. They are dropped at PrivilegePrivileged (ADR-041 §6). Without this an allowed
 // device had unrestricted code execution on the target by default. A project can
 // opt OUT of an individual item with an "allow ..." line (see allowPrefixes);
 // self-protection can never be opted out of.
@@ -86,10 +91,13 @@ var allowPrefixes = []string{"allow ", "permit ", "enable "}
 // prohibition word are matched against the hard-rule vocabulary; matched ones
 // become deny patterns, unmatched prohibitions become advisory. Self-protection
 // deny patterns are always included. Comments (#) and blank lines are ignored.
-func CompileRules(lines []string) Policy {
+func CompileRules(lines []string, priv Privilege) Policy {
 	// Start from the enforced baseline: self-protection (never removable) plus the
 	// default denies. Rules can ADD more, or opt OUT of a baseline item.
-	p := Policy{DisallowedTools: append([]string{}, selfProtection...)}
+	if !priv.Valid() {
+		priv = PrivilegeStandard
+	}
+	p := Policy{Privilege: priv, DisallowedTools: append([]string{}, selfProtection...)}
 	seen := map[string]bool{}
 	for _, d := range p.DisallowedTools {
 		seen[d] = true
@@ -109,6 +117,14 @@ func CompileRules(lines []string) Policy {
 	for _, b := range baselineRules {
 		if optedOut[b.name] {
 			continue // explicit opt-out for this project
+		}
+		if priv == PrivilegePrivileged {
+			// The owner has already said this agent may act outside the workspace.
+			// Keeping a baseline `never push` here would make "privileged" a lie,
+			// and it is the specific thing that stopped a devops agent deploying
+			// (p0-orchestration-run.md, F1). Self-protection above still stands,
+			// and an explicit `don't ...` line still compiles to a hard deny.
+			continue
 		}
 		for _, d := range b.deny {
 			if !seen[d] {
