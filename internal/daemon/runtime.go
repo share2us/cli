@@ -70,6 +70,9 @@ type Deps struct {
 	DownloadContent func(ctx context.Context, id string) ([]byte, error)
 	// OpenContentKey opens a sealed file content key with this device's key.
 	OpenContentKey func(sealed string) ([]byte, error)
+	// DeviceSessionID is this device's session id, used to tell our own agent
+	// sessions from another device's when retiring unbound ones.
+	DeviceSessionID string
 	// Logf writes an operational log line (to stderr/journal).
 	Logf func(format string, args ...any)
 }

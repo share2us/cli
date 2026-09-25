@@ -16,6 +16,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ### Added
 
+- `s2u agent bind <session-id> [PROJECT-NAME]`, `agent unbind` and
+  `agent bindings`. **Nothing is advertised until you bind it.** Until now,
+  starting the daemon with `--agent-bridge` registered *every* coding-agent
+  session on the machine — every Claude and Codex session, by name and working
+  directory, including work that had nothing to do with Share2Us. On a shared
+  sharenet that is someone else's view of your whole desk. A session is now
+  advertised only when its project and tool are bound, and the daemon retires
+  anything it advertised before. Bindings live outside any project
+  (`~/.config/share2us/agents/bindings.json`), so an agent cannot bind itself
+  into visibility.
+
 - `s2u agent policy [--project DIR] [restricted|standard|privileged]` sets how
   much an injected run may do, **per project**. Until now one `--agent-strict`
   flag decided it for every agent on the machine, which could not express the
