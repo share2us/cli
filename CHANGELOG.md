@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260925132557] - 2026-09-25
+
 ### Security
 
 - **Your machine now checks who sent a prompt before running it.** A prompt sent
