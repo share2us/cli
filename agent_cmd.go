@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	clicore "github.com/share2us/cli-core"
 	"github.com/share2us/cli/internal/daemon"
@@ -326,7 +327,7 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	if err != nil {
 		return a.fail("seal prompt", err)
 	}
-	res, err := client.AgentInject(ctx, clicore.AgentInjectInput{
+	injectIn := clicore.AgentInjectInput{
 		TargetDeviceID:  deviceID,
 		TargetSessionID: sessionID,
 		Tool:            tool,
@@ -334,7 +335,21 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		ObjectKey:       objectKey,
 		SealedFileKey:   sealedFileKey,
 		GoalID:          goalID,
-	})
+	}
+	// Sign the hop (ADR-041 §5), so the server can refuse a forgery and — the part
+	// that matters — the receiving machine can check it came from this device even
+	// if the server lies.
+	credential, cerr := clicore.LoadCredential()
+	if cerr != nil {
+		return a.fail("load login", cerr)
+	}
+	if credential, cerr = ensureSigningKey(ctx, client, credential); cerr != nil {
+		return a.fail("signing key", cerr)
+	}
+	if serr := signHop(&injectIn, credential, time.Now()); serr != nil {
+		return a.fail("sign hop", serr)
+	}
+	res, err := client.AgentInject(ctx, injectIn)
 	if err != nil {
 		return a.fail("send", err)
 	}

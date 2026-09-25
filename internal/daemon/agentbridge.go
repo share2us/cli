@@ -176,6 +176,23 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 		_ = client.AgentReportResult(ctx, req.ID, "failed", "this daemon does not run "+req.Tool+" sessions")
 		return
 	}
+	// Authenticate the sender FIRST (ADR-041 §5), before anything is unsealed or
+	// run. The server checked this hop's signature too, but a compromised server
+	// could skip that check or queue a hop it wrote itself; this check, against a
+	// key the server cannot change after the fact, is the one that defends against
+	// it. Fail closed: with no pin store there is nothing to enforce against.
+	if deps.SenderPins == nil {
+		deps.logf("agent-bridge: refusing inject %s: sender verification is unavailable", req.ID)
+		_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device cannot verify who sent this, so it will not run it")
+		return
+	}
+	if verr := deps.SenderPins.VerifyDelivered(req, deps.DeviceSessionID, time.Now()); verr != nil {
+		deps.logf("agent-bridge: refusing inject %s from %s: %v", req.ID, req.SenderDeviceID, verr)
+		rt.notify("Share2Us", "Refused a prompt that could not be verified as coming from its sender")
+		_ = client.AgentReportResult(ctx, req.ID, "failed", "refused by the receiving device: "+verr.Error())
+		return
+	}
+
 	// E2E (ADR-036 P4): the prompt is sealed to this device's key; unseal it before
 	// running. A decryption failure is fatal for the request (never run a garbled
 	// or unexpectedly-plaintext prompt). No key at all is fatal too: a prompt this
