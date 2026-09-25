@@ -129,6 +129,9 @@ func (a app) agentBind(ctx context.Context, args []string) int {
 		verb = "bound"
 	}
 	fmt.Fprintf(a.stdout, "%s: %s sessions in %s\n", verb, b.Tool, b.Project)
+	// The id is what another owner invites into their project, so it is shown —
+	// it names the agent, and grants nothing on its own.
+	fmt.Fprintf(a.stdout, "agent id: %s\n", b.AgentID)
 	if b.Label != "" {
 		fmt.Fprintf(a.stdout, "project name: %s\n", b.Label)
 	}
@@ -192,7 +195,12 @@ func (a app) agentBindings() int {
 		if label == "" {
 			label = "-"
 		}
-		fmt.Fprintf(a.stdout, "%-8s  %-12s  %-10s  %s\n", b.Tool, label, daemon.AgentPolicy(b.Project, false), b.Project)
+		id := b.AgentID
+		if id == "" {
+			// Made before agent ids existed; `agent bind` on it again assigns one.
+			id = "(none - re-bind)"
+		}
+		fmt.Fprintf(a.stdout, "%-8s  %-12s  %-10s  %-26s  %s\n", b.Tool, label, daemon.AgentPolicy(b.Project, false), id, b.Project)
 	}
 	return 0
 }

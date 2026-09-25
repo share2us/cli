@@ -12,6 +12,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **Every bound agent now has a stable id**, printed by `s2u agent bind` and
+  `s2u agent bindings` (`agt_…`). Session ids change constantly — Claude gets a new
+  one for every prompt it is sent — so nothing that has to outlive a single prompt
+  could be tied to them. This id can: it is what another owner will invite into
+  their project. It is created once, kept in your bindings outside every project,
+  and never changes afterwards; two clones of the same repository are two agents.
+  A binding made before today shows `(none - re-bind)` — run `s2u agent bind` on it
+  once and it gets its id.
+
 ## [20260925132557] - 2026-09-25
 
 ### Security
