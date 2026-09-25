@@ -6,6 +6,8 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	clicore "github.com/share2us/cli-core"
@@ -59,7 +61,20 @@ func (f *fakeRunner) Run(_ context.Context, sessionID, _, prompt string) (string
 }
 
 func rt() *Runtime { return &Runtime{notifier: NoopNotifier{}} }
-func noDeps() Deps { return Deps{Logf: func(string, ...any) {}} }
+// noDeps gives each test its own empty pin store. Without one the daemon fails
+// closed and refuses every hop (ADR-041 §5), which is correct, but these tests
+// exercise the unseal-and-run path: their hops are unsigned from senders that have
+// never signed, which is the legacy path a pin store still allows.
+func noDeps() Deps {
+	dir, err := os.MkdirTemp("", "s2u-pins-*")
+	if err != nil {
+		panic(err)
+	}
+	return Deps{
+		Logf:       func(string, ...any) {},
+		SenderPins: &SenderPins{path: filepath.Join(dir, "pinned_senders.json")},
+	}
+}
 
 // keyedDeps is a device that CAN unseal: the identity function stands in for
 // the sealed box so the tests below exercise what happens after decryption.

@@ -149,6 +149,17 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 			runOpts.AgentBridge = true
 			deps.AgentClient = client
 			deps.DeviceSessionID = credential.DeviceSessionID
+			// Receiver-side verification (ADR-041 §5). If the pin store cannot be
+			// opened the daemon refuses every hop rather than running unverified ones.
+			if pins, perr := daemon.NewSenderPins(); perr == nil {
+				deps.SenderPins = pins
+			} else {
+				fmt.Fprintf(a.stderr, "note: cannot open the sender pin store, so incoming prompts will be refused: %v\n", perr)
+			}
+			// Register this device's signing key so the hops it SENDS are signed.
+			if _, kerr := ensureSigningKey(context.Background(), client, credential); kerr != nil {
+				fmt.Fprintf(a.stderr, "note: this device's hops will go unsigned: %v\n", kerr)
+			}
 			deps.AgentRunners = []daemon.AgentRunner{
 				daemon.ClaudeRunner{Strict: opts.agentStrict},
 				daemon.CodexRunner{Strict: opts.agentStrict},

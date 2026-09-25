@@ -71,8 +71,12 @@ type Deps struct {
 	// OpenContentKey opens a sealed file content key with this device's key.
 	OpenContentKey func(sealed string) ([]byte, error)
 	// DeviceSessionID is this device's session id, used to tell our own agent
-	// sessions from another device's when retiring unbound ones.
+	// sessions from another device's when retiring unbound ones, and as the
+	// target a signed hop must have been signed for.
 	DeviceSessionID string
+	// SenderPins pins each sender's signing key on first use and verifies every
+	// later hop against it (ADR-041 §5). nil means the daemon refuses every hop.
+	SenderPins *SenderPins
 	// Logf writes an operational log line (to stderr/journal).
 	Logf func(format string, args ...any)
 }
