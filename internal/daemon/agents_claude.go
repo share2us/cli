@@ -26,6 +26,9 @@ const injectRunTimeout = 10 * time.Minute
 // claudeAgentEntry is one element of `claude agents --json`. Interactive sessions
 // carry `status` (idle/busy); background ones carry `state` (running/blocked/...).
 type claudeAgentEntry struct {
+	// PID is the Claude process of a live session; background entries without a
+	// running process have none.
+	PID       int    `json:"pid"`
 	SessionID string `json:"sessionId"`
 	CWD       string `json:"cwd"`
 	Kind      string `json:"kind"`
