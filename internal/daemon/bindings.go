@@ -234,3 +234,24 @@ func BindingFor(list []Binding, project, tool string) (Binding, bool) {
 	}
 	return Binding{}, false
 }
+
+// AgentIDForProject returns the stable agent id bound to a project directory,
+// whatever its tool. It reports false when there is none, or when several tools
+// are bound to the directory with different ids and the choice would be a guess.
+func AgentIDForProject(list []Binding, project string) (string, bool) {
+	p := normalizeProject(project)
+	if p == "" {
+		return "", false
+	}
+	id := ""
+	for _, b := range list {
+		if normalizeProject(b.Project) != p || b.AgentID == "" {
+			continue
+		}
+		if id != "" && id != b.AgentID {
+			return "", false
+		}
+		id = b.AgentID
+	}
+	return id, id != ""
+}

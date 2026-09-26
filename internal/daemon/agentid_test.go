@@ -128,3 +128,28 @@ func TestBindingsAreWrittenAtomically(t *testing.T) {
 		t.Fatal("a temporary file was left behind")
 	}
 }
+
+// A project hop names its sending agent from the directory it is run in.
+func TestAgentIDForProject(t *testing.T) {
+	dir := t.TempDir()
+	other := t.TempDir()
+	list := []Binding{
+		{Project: dir, Tool: "claude", AgentID: "agt_aaaaaaaaaaaaaaaaaaaaaa"},
+		{Project: other, Tool: "codex", AgentID: "agt_bbbbbbbbbbbbbbbbbbbbbb"},
+	}
+	if id, ok := AgentIDForProject(list, dir+"/"); !ok || id != "agt_aaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("got %q %v", id, ok)
+	}
+	if _, ok := AgentIDForProject(list, t.TempDir()); ok {
+		t.Fatal("an unbound directory produced an agent id")
+	}
+	// Two tools bound to one directory with different ids: refuse to guess.
+	list = append(list, Binding{Project: dir, Tool: "codex", AgentID: "agt_cccccccccccccccccccccc"})
+	if _, ok := AgentIDForProject(list, dir); ok {
+		t.Fatal("guessed between two agents bound to the same directory")
+	}
+	// A binding made before agent ids existed does not count.
+	if _, ok := AgentIDForProject([]Binding{{Project: other, Tool: "claude"}}, other); ok {
+		t.Fatal("an id-less binding produced an agent id")
+	}
+}

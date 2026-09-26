@@ -61,6 +61,7 @@ func (f *fakeRunner) Run(_ context.Context, sessionID, _, prompt string) (string
 }
 
 func rt() *Runtime { return &Runtime{notifier: NoopNotifier{}} }
+
 // noDeps gives each test its own empty pin store. Without one the daemon fails
 // closed and refuses every hop (ADR-041 §5), which is correct, but these tests
 // exercise the unseal-and-run path: their hops are unsigned from senders that have

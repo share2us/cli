@@ -54,6 +54,12 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentBindings()
 	case "goal", "goals":
 		return a.agentGoal(ctx, args[1:])
+	case "project":
+		return a.agentProject(ctx, args[1:])
+	case "invites":
+		return a.agentInvites(ctx, args[1:])
+	case "withdraw":
+		return a.agentWithdraw(ctx, args[1:])
 	default:
 		return a.agentUsage()
 	}
@@ -63,6 +69,10 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|pending|approve|allow|revoke|allowed|bind|unbind|bindings|goal|rules|policy>\n", commandName)
 	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
 	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
+	fmt.Fprintf(a.stderr, "       [--project ID [--as AGENT-ID]]       to an agent in another account: both agents must\n                                             be members of that project. The sending agent is\n                                             the one bound to this directory unless --as names it.\n")
+	fmt.Fprintf(a.stderr, "  project <project-id>                       a project's reachable member agents\n")
+	fmt.Fprintf(a.stderr, "  invites [accept|decline <id>]              invitations for your agents to join projects\n")
+	fmt.Fprintf(a.stderr, "  withdraw <project-id> <membership-id>      take your agent out of a project\n")
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
 	fmt.Fprintf(a.stderr, "  approve <request-id>                       approve ONE pending request (no standing access)\n")
@@ -234,7 +244,7 @@ func (a app) agentList(ctx context.Context) int {
 }
 
 func (a app) agentSend(ctx context.Context, args []string) int {
-	var deviceID, sessionID, prompt, tool, file, goalID string
+	var deviceID, sessionID, prompt, tool, file, goalID, projectID, asAgent string
 	tool = "claude"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -268,6 +278,16 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 			if i < len(args) {
 				goalID = args[i]
 			}
+		case "--project":
+			i++
+			if i < len(args) {
+				projectID = args[i]
+			}
+		case "--as":
+			i++
+			if i < len(args) {
+				asAgent = args[i]
+			}
 		default:
 			fmt.Fprintf(a.stderr, "unknown flag %q\n", args[i])
 			return 2
@@ -281,22 +301,33 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	if !ok {
 		return 1
 	}
+	// A project hop names the sending agent: the one bound to this directory,
+	// unless --as says otherwise. The server checks it really runs on this device.
+	senderAgent := strings.TrimSpace(asAgent)
+	if projectID != "" && senderAgent == "" {
+		list, _ := daemon.LoadBindings()
+		cwd, _ := os.Getwd()
+		id, ok := daemon.AgentIDForProject(list, cwd)
+		if !ok {
+			fmt.Fprintf(a.stderr, "no bound agent for this directory; run this from the agent's project, or pass --as AGENT-ID (see `%s agent bindings`)\n", commandName)
+			return 2
+		}
+		senderAgent = id
+	}
 	// E2E (ADR-036 P4): find the target session in the directory, take its device
 	// public key, and seal the prompt to it so the server relays ciphertext only.
-	sessions, err := client.ListAgentSessions(ctx)
+	// A project hop looks in the PROJECT's directory, which is where another
+	// account's agents appear; your own sessions list never shows them.
+	targetPub, found, err := a.resolveTarget(ctx, client, projectID, deviceID, sessionID)
 	if err != nil {
 		return a.fail("resolve target", err)
 	}
-	targetPub := ""
-	found := false
-	for _, s := range sessions {
-		if s.DeviceID == deviceID && s.SessionID == sessionID {
-			targetPub, found = s.DevicePublicKey, true
-			break
-		}
-	}
 	if !found {
-		fmt.Fprintln(a.stderr, "no such reachable session; run `"+commandName+" agent list`")
+		if projectID != "" {
+			fmt.Fprintln(a.stderr, "no such reachable agent in that project; run `"+commandName+" agent project "+projectID+"`")
+		} else {
+			fmt.Fprintln(a.stderr, "no such reachable session; run `"+commandName+" agent list`")
+		}
 		return 1
 	}
 	if targetPub == "" {
@@ -343,6 +374,8 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		ObjectKey:       objectKey,
 		SealedFileKey:   sealedFileKey,
 		GoalID:          goalID,
+		ProjectID:       strings.TrimSpace(projectID),
+		SenderAgentID:   senderAgent,
 	}
 	// Sign the hop (ADR-041 §5), so the server can refuse a forgery and — the part
 	// that matters — the receiving machine can check it came from this device even
@@ -370,6 +403,127 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	default:
 		fmt.Fprintf(a.stdout, "Sent (%s), queued for delivery. Track: %s agent status %s\n", res.ID, commandName, res.ID)
 	}
+	return 0
+}
+
+// resolveTarget finds the target's device key: in the project's directory for a
+// project hop, in your own sessions otherwise.
+func (a app) resolveTarget(ctx context.Context, client *clicore.Client, projectID, deviceID, sessionID string) (string, bool, error) {
+	if projectID != "" {
+		agents, err := client.ListProjectAgents(ctx, projectID)
+		if err != nil {
+			return "", false, err
+		}
+		for _, ag := range agents {
+			if ag.DeviceID == deviceID && ag.SessionID == sessionID {
+				return ag.DevicePublicKey, true, nil
+			}
+		}
+		return "", false, nil
+	}
+	sessions, err := client.ListAgentSessions(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	for _, s := range sessions {
+		if s.DeviceID == deviceID && s.SessionID == sessionID {
+			return s.DevicePublicKey, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+// agentProject lists a project's reachable member agents, with what `agent send
+// --project` needs to address them.
+func (a app) agentProject(ctx context.Context, args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintf(a.stderr, "usage: %s agent project <project-id>\n", commandName)
+		return 2
+	}
+	client, ok := a.agentClient()
+	if !ok {
+		return 1
+	}
+	agents, err := client.ListProjectAgents(ctx, args[0])
+	if err != nil {
+		return a.fail("list project agents", err)
+	}
+	if len(agents) == 0 {
+		fmt.Fprintln(a.stdout, "No member agents are online in that project.")
+		return 0
+	}
+	for _, ag := range agents {
+		whose := "theirs"
+		if ag.Yours {
+			whose = "yours"
+		}
+		fn := ag.Function
+		if fn == "" {
+			fn = "-"
+		}
+		fmt.Fprintf(a.stdout, "%s  %-10s  %-8s  %-11s  %-6s  --device %s --session %s\n",
+			ag.AgentID, fn, ag.Tool, ag.Status, whose, ag.DeviceID, ag.SessionID)
+	}
+	return 0
+}
+
+// agentInvites lists, accepts or declines invitations for this account's agents
+// to join other owners' projects. Accepting admits that one agent to that one
+// project; it gives the host nothing else of your account (ADR-041 §2a).
+func (a app) agentInvites(ctx context.Context, args []string) int {
+	client, ok := a.agentClient()
+	if !ok {
+		return 1
+	}
+	if len(args) == 2 && (args[0] == "accept" || args[0] == "decline") {
+		var err error
+		if args[0] == "accept" {
+			err = client.AcceptAgentInvite(ctx, args[1])
+		} else {
+			err = client.DeclineAgentInvite(ctx, args[1])
+		}
+		if err != nil {
+			return a.fail(args[0]+" invitation", err)
+		}
+		fmt.Fprintf(a.stdout, "Invitation %sed.\n", strings.TrimSuffix(args[0], "e"))
+		return 0
+	}
+	if len(args) != 0 {
+		fmt.Fprintf(a.stderr, "usage: %s agent invites [accept|decline <id>]\n", commandName)
+		return 2
+	}
+	invites, err := client.ListAgentInvites(ctx)
+	if err != nil {
+		return a.fail("list invitations", err)
+	}
+	if len(invites) == 0 {
+		fmt.Fprintln(a.stdout, "No invitations, and your agents are in no other projects.")
+		return 0
+	}
+	for _, inv := range invites {
+		state := "member "
+		if inv.Pending {
+			state = "PENDING"
+		}
+		fmt.Fprintf(a.stdout, "%s  %s  agent %s  project %q in %q  (project %s)\n",
+			inv.ID, state, inv.AgentID, inv.ProjectName, inv.SharenetName, inv.ProjectID)
+	}
+	return 0
+}
+
+func (a app) agentWithdraw(ctx context.Context, args []string) int {
+	if len(args) != 2 {
+		fmt.Fprintf(a.stderr, "usage: %s agent withdraw <project-id> <membership-id>\n", commandName)
+		return 2
+	}
+	client, ok := a.agentClient()
+	if !ok {
+		return 1
+	}
+	if err := client.WithdrawAgent(ctx, args[0], args[1]); err != nil {
+		return a.fail("withdraw agent", err)
+	}
+	fmt.Fprintln(a.stdout, "Withdrawn. The agent can no longer be reached through that project.")
 	return 0
 }
 
