@@ -170,3 +170,14 @@ func TestDaemonInstallSkipsFolderQuestionWhenDestGiven(t *testing.T) {
 		t.Fatalf("asked for a folder that was already given on the command line:\n%s", errOut.String())
 	}
 }
+
+func TestDaemonRunNoAgentBridgeFlag(t *testing.T) {
+	o, err := parseDaemonRunArgs([]string{"--no-agent-bridge"})
+	if err != nil || !o.noAgentBridge {
+		t.Fatalf("--no-agent-bridge = %+v, %v", o, err)
+	}
+	o, err = parseDaemonRunArgs([]string{"--agent-bridge"})
+	if err != nil || !o.agentBridge || o.noAgentBridge {
+		t.Fatalf("--agent-bridge is still accepted: %+v, %v", o, err)
+	}
+}

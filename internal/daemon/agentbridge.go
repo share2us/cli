@@ -5,6 +5,8 @@ package daemon
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	clicore "github.com/share2us/cli-core"
@@ -39,9 +41,65 @@ const (
 // agentBridge runs the two agent-bridge loops (ADR-036 P2): one keeps the server
 // directory in sync with local sessions, the other receives relayed inject
 // requests and runs them. Both stop on ctx cancel.
+//
+// The bridge is on by default (owner, 2026-09-27: joining must not require
+// starting anything by hand), but it stays IDLE, with no network calls at all,
+// until this machine has at least one binding. Binding is the explicit opt-in,
+// and nothing is advertised without one. Bindings made after the daemon started
+// (`s2u agent bind`, `s2u agent join`) wake it within agentBindingPoll.
 func (rt *Runtime) agentBridge(ctx context.Context, client AgentClient, runners []AgentRunner, deps Deps) {
+	if !waitForBinding(ctx, agentBindingPoll) {
+		return
+	}
+	deps.logf("agent-bridge: a session is bound; advertising bound sessions and receiving requests")
 	go rt.agentRegisterLoop(ctx, client, runners, deps)
 	rt.agentReceiveLoop(ctx, client, runners, deps)
+}
+
+// agentBindingPoll is how often an idle bridge checks for a first binding.
+var agentBindingPoll = 15 * time.Second
+
+// waitForBinding blocks until at least one binding exists (true) or ctx ends.
+func waitForBinding(ctx context.Context, every time.Duration) bool {
+	for {
+		if list, err := LoadBindings(); err == nil && len(list) > 0 {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(every):
+		}
+	}
+}
+
+// bridgeRefused reports a server answer that retrying soon cannot change: the
+// plan does not include agents, or the bridge is off on this server. The daemon
+// then waits agentRefusedBackoff instead of hammering the API every few seconds.
+func bridgeRefused(err error) bool {
+	if err == nil {
+		return false
+	}
+	m := err.Error()
+	return strings.Contains(m, "agent_bridge_not_allowed") || strings.Contains(m, "agent_bridge_disabled")
+}
+
+const agentRefusedBackoff = 15 * time.Minute
+
+// onceLogger logs a message only when it differs from the previous one, so a
+// persistent error is reported once rather than every cycle.
+type onceLogger struct {
+	last string
+	logf func(string, ...any)
+}
+
+func (o *onceLogger) log(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	if msg == o.last {
+		return
+	}
+	o.last = msg
+	o.logf("%s", msg)
 }
 
 // agentRegisterLoop discovers local sessions and registers/heartbeats them,
@@ -49,6 +107,7 @@ func (rt *Runtime) agentBridge(ctx context.Context, client AgentClient, runners 
 func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, runners []AgentRunner, deps Deps) {
 	rt.retireUnboundSessions(ctx, client, deps)
 	known := map[string]bool{}
+	quiet := &onceLogger{logf: deps.logf}
 	sync := func() {
 		seen := map[string]bool{}
 		var sessions []DiscoveredSession
@@ -80,7 +139,7 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 			if err := client.RegisterAgentSession(ctx, clicore.AgentRegisterInput{
 				AgentID: b.AgentID, SessionID: s.SessionID, Tool: s.Tool, Name: s.Name, Project: s.Project, Status: s.Status,
 			}); err != nil {
-				deps.logf("agent-bridge register %s: %v", s.SessionID, err)
+				quiet.log("agent-bridge register: %v", err)
 			}
 		}
 		for id := range known {
@@ -153,11 +212,19 @@ func (rt *Runtime) agentReceiveLoop(ctx context.Context, client AgentClient, run
 			if ctx.Err() != nil {
 				return
 			}
-			deps.logf("agent-bridge long-poll: %v", err)
+			wait := 5 * time.Second // back off on error
+			if bridgeRefused(err) {
+				// Nothing will change for a while (plan or server setting): say so
+				// once and check back rarely.
+				deps.logf("agent-bridge: the server refused (%v); checking again in %s", err, agentRefusedBackoff)
+				wait = agentRefusedBackoff
+			} else {
+				deps.logf("agent-bridge long-poll: %v", err)
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(5 * time.Second): // back off on error
+			case <-time.After(wait):
 			}
 			continue
 		}

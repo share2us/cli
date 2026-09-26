@@ -62,7 +62,9 @@ func (a app) daemon(ctx context.Context, args []string) int {
 
 func (a app) daemonUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s daemon <run|status|start|stop|install|uninstall|logs>\n", commandName)
-	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify] [--agent-bridge [--agent-strict]]  run the receiver\n")
+	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify] [--no-agent-bridge] [--agent-strict]  run the receiver\n")
+	fmt.Fprintf(a.stderr, "                                               (the agent bridge is on by default and stays idle\n")
+	fmt.Fprintf(a.stderr, "                                                until a session is bound)\n")
 	fmt.Fprintf(a.stderr, "  install [--dest DIR]                         install + start the per-user service\n")
 	fmt.Fprintf(a.stderr, "                                               (asks where files land and whether to save\n")
 	fmt.Fprintf(a.stderr, "                                                them automatically, since the service can't)\n")
@@ -135,12 +137,23 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 
 	// Agent-session bridge (ADR-036): register this machine's coding-agent sessions
 	// and receive relayed inject requests. Needs the authenticated device client.
-	if opts.agentBridge {
+	// ON by default (owner, 2026-09-27): it makes no network calls until a session
+	// is bound, so a machine with no agents pays nothing. --no-agent-bridge opts
+	// out; --agent-bridge is still accepted. Setup problems are reported only when
+	// someone actually uses agents here (a binding exists, or they asked for it).
+	bindings, _ := daemon.LoadBindings()
+	wantsBridge := opts.agentBridge || len(bindings) > 0
+	if !opts.noAgentBridge {
 		hasDeviceKey := credential.DevicePublicKey != "" && credential.DevicePrivateKey != ""
 		switch {
 		case client == nil:
-			fmt.Fprintln(a.stderr, "note: --agent-bridge needs an interactive login; the agent bridge is off")
+			if wantsBridge {
+				fmt.Fprintln(a.stderr, "note: the agent bridge needs an interactive login; it is off")
+			}
 		case !hasDeviceKey:
+			if !wantsBridge {
+				break
+			}
 			// A session from before device keys existed. Prompts are sealed to
 			// the device key; with none, nothing can be verified, so the bridge
 			// stays off rather than running plaintext from the server (§AJ #8).
@@ -157,8 +170,10 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 				fmt.Fprintf(a.stderr, "note: cannot open the sender pin store, so incoming prompts will be refused: %v\n", perr)
 			}
 			// Register this device's signing key so the hops it SENDS are signed.
-			if _, kerr := ensureSigningKey(context.Background(), client, credential); kerr != nil {
-				fmt.Fprintf(a.stderr, "note: this device's hops will go unsigned: %v\n", kerr)
+			if wantsBridge {
+				if _, kerr := ensureSigningKey(context.Background(), client, credential); kerr != nil {
+					fmt.Fprintf(a.stderr, "note: this device's hops will go unsigned: %v\n", kerr)
+				}
 			}
 			deps.AgentRunners = []daemon.AgentRunner{
 				daemon.ClaudeRunner{Strict: opts.agentStrict},
@@ -212,6 +227,11 @@ func (a app) daemonStatus() int {
 	fmt.Fprintf(a.stdout, "running (pid %d, %s)\n", resp.PID, resp.Version)
 	fmt.Fprintf(a.stdout, "  inbox receive: %s\n", onOff(resp.OwnsInbox))
 	fmt.Fprintf(a.stdout, "  LAN receiver:  %s\n", onOff(resp.OwnsLAN))
+	if list, err := daemon.LoadBindings(); err == nil && len(list) > 0 {
+		fmt.Fprintf(a.stdout, "  agent bridge:  on (%d bound session(s))\n", len(list))
+	} else {
+		fmt.Fprintf(a.stdout, "  agent bridge:  idle (no bound sessions)\n")
+	}
 	if resp.Since != "" {
 		fmt.Fprintf(a.stdout, "  since:         %s\n", resp.Since)
 	}
@@ -355,11 +375,12 @@ func (a app) daemonUpdateCheck(ctx context.Context) (bool, string) {
 }
 
 type daemonRunOpts struct {
-	dest        string
-	noLAN       bool
-	noNotify    bool
-	agentBridge bool
-	agentStrict bool
+	dest          string
+	noLAN         bool
+	noNotify      bool
+	agentBridge   bool
+	noAgentBridge bool
+	agentStrict   bool
 }
 
 func parseDaemonRunArgs(args []string) (daemonRunOpts, error) {
@@ -381,6 +402,8 @@ func parseDaemonRunArgs(args []string) (daemonRunOpts, error) {
 			o.noNotify = true
 		case arg == "--agent-bridge":
 			o.agentBridge = true
+		case arg == "--no-agent-bridge":
+			o.noAgentBridge = true
 		case arg == "--agent-strict":
 			o.agentStrict = true
 		case arg == "--foreground":
