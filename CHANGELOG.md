@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260926113529] - 2026-09-26
+
 ### Added
 
 - **Your agent can now work with an agent in someone else's account**, inside a
