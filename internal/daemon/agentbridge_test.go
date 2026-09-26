@@ -6,9 +6,11 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	clicore "github.com/share2us/cli-core"
 )
@@ -62,19 +64,47 @@ func (f *fakeRunner) Run(_ context.Context, sessionID, _, prompt string) (string
 
 func rt() *Runtime { return &Runtime{notifier: NoopNotifier{}} }
 
-// noDeps gives each test its own empty pin store. Without one the daemon fails
-// closed and refuses every hop (ADR-041 §5), which is correct, but these tests
-// exercise the unseal-and-run path: their hops are unsigned from senders that have
-// never signed, which is the legacy path a pin store still allows.
+// noDeps gives each test its own empty pin store, and names this device as the
+// one hops are signed for. Without a store the daemon fails closed and refuses
+// every hop (ADR-041 §5). Every hop must be signed (7.6): see signedReq.
 func noDeps() Deps {
 	dir, err := os.MkdirTemp("", "s2u-pins-*")
 	if err != nil {
 		panic(err)
 	}
 	return Deps{
-		Logf:       func(string, ...any) {},
-		SenderPins: &SenderPins{path: filepath.Join(dir, "pinned_senders.json")},
+		Logf:            func(string, ...any) {},
+		SenderPins:      &SenderPins{path: filepath.Join(dir, "pinned_senders.json")},
+		DeviceSessionID: self,
 	}
+}
+
+// bridgeSender signs the tests' hops as a genuine sending device would.
+var bridgeSender = func() sender {
+	kp, err := clicore.NewSigningKeyPair()
+	if err != nil {
+		panic(err)
+	}
+	return sender{id: "dev-a", kp: kp}
+}()
+
+// signedReq signs req, as delivered to this device, keeping its fields.
+func signedReq(t *testing.T, req clicore.AgentRequest) clicore.AgentRequest {
+	t.Helper()
+	at := time.Now().UTC().Truncate(time.Second)
+	nonce := fmt.Sprintf("n-%d", time.Now().UnixNano())
+	sig, err := clicore.SignHop(clicore.HopClaims{
+		SenderDeviceID: bridgeSender.id, TargetDeviceID: self, TargetSessionID: req.TargetSessionID,
+		Tool: req.Tool, SealedPrompt: req.SealedPrompt, SealedFileKey: req.SealedFileKey,
+		GoalID: req.GoalID, IssuedAt: at, Nonce: nonce,
+	}, bridgeSender.kp.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.SenderDeviceID = bridgeSender.id
+	req.Signature, req.IssuedAt, req.Nonce = sig, at.Format(time.RFC3339), nonce
+	req.SenderSigningPublicKey = bridgeSender.kp.PublicKey
+	return req
 }
 
 // keyedDeps is a device that CAN unseal: the identity function stands in for
@@ -93,7 +123,7 @@ func TestHandleInjectRefusesToRunWithoutDeviceKey(t *testing.T) {
 	c := &fakeAgentClient{}
 	r := &fakeRunner{out: "should never happen"}
 	rt().handleInject(context.Background(), c, r, noDeps(),
-		clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "rm -rf the project"})
+		signedReq(t, clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "rm -rf the project"}))
 	if r.ranSID != "" || r.ranPrompt != "" {
 		t.Fatalf("a plaintext prompt was RUN without a device key: session=%q prompt=%q", r.ranSID, r.ranPrompt)
 	}
@@ -106,7 +136,7 @@ func TestHandleInjectHappy(t *testing.T) {
 	c := &fakeAgentClient{}
 	r := &fakeRunner{out: "did the thing"}
 	rt().handleInject(context.Background(), c, r, keyedDeps(),
-		clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "do it"})
+		signedReq(t, clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "do it"}))
 	if r.ranSID != "s1" {
 		t.Fatalf("runner ran session %q, want s1", r.ranSID)
 	}
@@ -119,7 +149,7 @@ func TestHandleInjectRunError(t *testing.T) {
 	c := &fakeAgentClient{}
 	r := &fakeRunner{out: "boom output", err: errors.New("nonzero exit")}
 	rt().handleInject(context.Background(), c, r, keyedDeps(),
-		clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "x"})
+		signedReq(t, clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "x"}))
 	if len(c.reports) != 2 || c.reports[1][0] != "failed" {
 		t.Fatalf("reports = %v, want running then failed", c.reports)
 	}
@@ -129,7 +159,7 @@ func TestHandleInjectUnsupportedTool(t *testing.T) {
 	c := &fakeAgentClient{}
 	r := &fakeRunner{}
 	rt().handleInject(context.Background(), c, r, noDeps(),
-		clicore.AgentRequest{ID: "req-1", Tool: "codex", TargetSessionID: "s1"})
+		signedReq(t, clicore.AgentRequest{ID: "req-1", Tool: "codex", TargetSessionID: "s1"}))
 	if r.ranSID != "" {
 		t.Fatal("runner should not run for an unsupported tool")
 	}
@@ -164,7 +194,7 @@ func TestHandleInjectUnsealsPrompt(t *testing.T) {
 		return "the real prompt", nil
 	}
 	rt().handleInject(context.Background(), c, r, deps,
-		clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "CIPHERTEXT"})
+		signedReq(t, clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "CIPHERTEXT"}))
 	if r.ranPrompt != "the real prompt" {
 		t.Fatalf("runner got prompt %q, want the decrypted one", r.ranPrompt)
 	}
@@ -176,7 +206,7 @@ func TestHandleInjectUnsealFailureIsFatal(t *testing.T) {
 	deps := noDeps()
 	deps.Unseal = func(string) (string, error) { return "", errors.New("bad box") }
 	rt().handleInject(context.Background(), c, r, deps,
-		clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "x"})
+		signedReq(t, clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "x"}))
 	if r.ranSID != "" {
 		t.Fatal("must not run when the prompt cannot be decrypted")
 	}

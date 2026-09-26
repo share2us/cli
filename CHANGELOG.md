@@ -31,6 +31,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 - A session ready for work is now reported as `available` rather than `idle`,
   the word the rest of Share2Us uses for it.
 
+### Security
+
+- The daemon now refuses **every** unsigned agent request, including one from a
+  device it has never heard from. Previously a device that had never signed was
+  let through, so a request could be slipped in under a sender id nobody had
+  pinned yet. Share2Us no longer sends unsigned requests at all.
+
 ## [20260925150632] - 2026-09-25
 
 ### Added
