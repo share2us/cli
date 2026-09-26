@@ -151,7 +151,7 @@ func (a app) agentBind(ctx context.Context, args []string) int {
 	fmt.Fprintf(a.stdout, "privilege: %s (change with `%s agent policy --project %s <level>`)\n",
 		daemon.AgentPolicy(b.Project, false), commandName, b.Project)
 	// A bound session is only reachable while the daemon runs: make sure it does.
-	a.reportDaemon(a.ensureDaemon())
+	a.ensureAgentReachable()
 	return 0
 }
 
@@ -552,7 +552,7 @@ func (a app) agentJoin(ctx context.Context, args []string) int {
 		fmt.Fprintln(a.stdout, "Once approved, you are a member of the sharenet and this agent is in the project.")
 	}
 	// The agent can only receive work while the daemon runs: make sure it does.
-	a.reportDaemon(a.ensureDaemon())
+	a.ensureAgentReachable()
 	return 0
 }
 

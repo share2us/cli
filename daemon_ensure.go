@@ -114,3 +114,59 @@ func (a app) reportDaemon(state daemonState, err error) {
 		fmt.Fprintf(a.stderr, "Could not start the background receiver (%v). Start it with: %s daemon run\n", err, commandName)
 	}
 }
+
+// Keeping the service running after logout, on Linux (owner, 2026-09-27).
+//
+// A systemd --user service stops when its user's last session ends, so on a
+// server where agents run in tmux over SSH the agent outlives the logout but
+// becomes unreachable. For the agent flows (join, bind), where the person has
+// just asked for this agent to be reachable, we enable lingering for their OWN
+// user and say so; if the system refuses, we print the one line to run. Plain
+// `daemon install` does not do this: there, nobody asked for an always-on agent.
+
+type lingerOutcome int
+
+const (
+	lingerNotNeeded lingerOutcome = iota // not Linux, no service, or already on
+	lingerEnabledNow
+	lingerRefused
+)
+
+// shouldEnableLinger is the decision, kept pure so it can be tested.
+func shouldEnableLinger(supported bool, state daemonState, serviceActive, lingerOn bool) bool {
+	if !supported || lingerOn {
+		return false
+	}
+	return state == daemonServiceStarted || (state == daemonAlreadyRunning && serviceActive)
+}
+
+func (a app) ensureLinger(state daemonState) (lingerOutcome, error) {
+	if !shouldEnableLinger(daemon.LingerSupported(), state, daemon.ServiceActive(), daemon.LingerEnabled()) {
+		return lingerNotNeeded, nil
+	}
+	if err := daemon.EnableLinger(); err != nil {
+		return lingerRefused, err
+	}
+	return lingerEnabledNow, nil
+}
+
+func (a app) reportLinger(outcome lingerOutcome, err error) {
+	switch outcome {
+	case lingerEnabledNow:
+		fmt.Fprintln(a.stdout, "Kept the service running after you log out, so this agent stays reachable (undo: loginctl disable-linger).")
+	case lingerRefused:
+		fmt.Fprintf(a.stderr, "The service stops when you log out. To keep this agent reachable after logout, run once:\n  sudo loginctl enable-linger %s\n", os.Getenv("USER"))
+		_ = err
+	}
+}
+
+// ensureAgentReachable is what the agent flows call: a running daemon, and on
+// Linux a service that outlives the logout.
+func (a app) ensureAgentReachable() {
+	state, err := a.ensureDaemon()
+	a.reportDaemon(state, err)
+	if state == daemonNotStarted || state == daemonDetachedStarted {
+		return
+	}
+	a.reportLinger(a.ensureLinger(state))
+}

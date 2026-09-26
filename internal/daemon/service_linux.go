@@ -187,3 +187,24 @@ func currentUser() string {
 	}
 	return "$USER"
 }
+
+// LingerSupported reports whether "keep running after logout" is a thing here:
+// only for a systemd --user service.
+func LingerSupported() bool { return true }
+
+// LingerEnabled reports whether this user's services keep running after logout.
+func LingerEnabled() bool { return lingerEnabled() }
+
+// EnableLinger keeps this user's services running after logout (and starts them
+// at boot). For your OWN user, systemd's default policy allows this from an
+// active session (SSH included) without sudo. --no-ask-password makes it fail
+// fast instead of hanging on a password prompt nobody can answer (agent join
+// runs inside an agent session, with no terminal to type into).
+func EnableLinger() error {
+	return run("loginctl", "--no-ask-password", "enable-linger", currentUser())
+}
+
+// ServiceActive reports whether the per-user service unit is running.
+func ServiceActive() bool {
+	return exec.Command("systemctl", "--user", "is-active", "--quiet", unitName).Run() == nil
+}
