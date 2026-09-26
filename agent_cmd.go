@@ -150,6 +150,8 @@ func (a app) agentBind(ctx context.Context, args []string) int {
 	}
 	fmt.Fprintf(a.stdout, "privilege: %s (change with `%s agent policy --project %s <level>`)\n",
 		daemon.AgentPolicy(b.Project, false), commandName, b.Project)
+	// A bound session is only reachable while the daemon runs: make sure it does.
+	a.reportDaemon(a.ensureDaemon())
 	return 0
 }
 
@@ -549,7 +551,8 @@ func (a app) agentJoin(ctx context.Context, args []string) int {
 		fmt.Fprintf(a.stdout, "Asked to join %q in %q. A host approves it in the portal; they see your email (%s).\n", res.ProjectName, res.SharenetName, credential.Email)
 		fmt.Fprintln(a.stdout, "Once approved, you are a member of the sharenet and this agent is in the project.")
 	}
-	fmt.Fprintf(a.stdout, "To receive work, keep the daemon running: %s daemon run --agent-bridge\n", commandName)
+	// The agent can only receive work while the daemon runs: make sure it does.
+	a.reportDaemon(a.ensureDaemon())
 	return 0
 }
 

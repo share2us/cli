@@ -12,6 +12,20 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **No more starting the daemon by hand for agents.** `s2u agent join` and
+  `s2u agent bind` now make sure the Share2Us background service is running: they
+  install and start the per-user service (systemd, launchd or Windows), or, where
+  there is no service manager, start the receiver in the background. The daemon's
+  agent bridge is now **on by default** and stays idle, making no network calls,
+  until a session is bound; it wakes on its own when you bind one. Use
+  `s2u daemon run --no-agent-bridge` to opt out. `s2u daemon status` shows the
+  agent bridge.
+- The daemon backs off for 15 minutes when the server says agents are not
+  available (plan or server setting) instead of retrying every few seconds, and
+  reports a persistent registration error once instead of every cycle.
+
 ## [20260926215143] - 2026-09-26
 
 ### Fixed
