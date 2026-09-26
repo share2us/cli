@@ -168,5 +168,25 @@ func (a app) ensureAgentReachable() {
 	if state == daemonNotStarted || state == daemonDetachedStarted {
 		return
 	}
+	if state == daemonAlreadyRunning {
+		a.refreshServiceIfStale()
+	}
 	a.reportLinger(a.ensureLinger(state))
+}
+
+// refreshServiceIfStale rewrites an installed service written by an older build
+// or before agents were bound here, and restarts it, so it can run agents: the
+// tools on the user's PATH, and write access to their projects.
+func (a app) refreshServiceIfStale() {
+	exe, err := a.currentExecutable()
+	if err != nil || !daemon.ServiceNeedsRefresh(exe) {
+		return
+	}
+	if err := daemon.ServiceRefresh(exe, io.Discard); err != nil {
+		fmt.Fprintf(a.stderr, "Could not update the background service for agents (%v). Reinstall it with: %s daemon install\n", err, commandName)
+		return
+	}
+	if waitForDaemon(8 * time.Second) {
+		fmt.Fprintln(a.stdout, "Updated the background service so it can run your agents.")
+	}
 }
