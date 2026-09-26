@@ -123,6 +123,40 @@ func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string, forceRe
 // buildClaudeInjectArgs assembles the `claude` args for a guarded injected run.
 // --disallowedTools is variadic, so it is placed immediately before -p (a flag)
 // which bounds it.
+// RunClaudeInjectForked is RunClaudeInject that also reports the id of the fork
+// the run created, read from Claude's JSON result.
+func RunClaudeInjectForked(ctx context.Context, sessionID, cwd, prompt string, forceRestricted bool) (string, string, error) {
+	priv := AgentPolicy(cwd, forceRestricted)
+	policy := CompileRules(LoadRules(cwd), priv)
+	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
+	defer cancel()
+	args := append(buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv)), "--output-format", "json")
+	cmd := exec.CommandContext(cctx, "claude", args...)
+	if cwd != "" {
+		cmd.Dir = cwd
+	}
+	raw, err := cmd.CombinedOutput()
+	out, forked := parseClaudeResult(raw)
+	return out, forked, err
+}
+
+// parseClaudeResult reads `claude -p --output-format json`: the result text and
+// the session id of the run. Anything unparsable is returned as-is, with no id.
+func parseClaudeResult(raw []byte) (string, string) {
+	var r struct {
+		Result    string `json:"result"`
+		SessionID string `json:"session_id"`
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if i := strings.LastIndex(trimmed, "\n{"); i >= 0 {
+		trimmed = trimmed[i+1:] // stray lines before the JSON object
+	}
+	if err := json.Unmarshal([]byte(trimmed), &r); err != nil || r.SessionID == "" {
+		return string(raw), ""
+	}
+	return r.Result, r.SessionID
+}
+
 func buildClaudeInjectArgs(sessionID, prompt string, policy Policy, mode string) []string {
 	// A live session (interactive OR background) cannot be resumed in place
 	// headlessly — Claude refuses with "running as a background session ... add
@@ -164,6 +198,10 @@ func (ClaudeRunner) Tool() string { return "claude" }
 func (ClaudeRunner) Discover(ctx context.Context) ([]DiscoveredSession, error) {
 	return DiscoverClaude(ctx)
 }
+func (r ClaudeRunner) RunForked(ctx context.Context, sessionID, cwd, prompt string) (string, string, error) {
+	return RunClaudeInjectForked(ctx, sessionID, cwd, prompt, r.Strict)
+}
+
 func (r ClaudeRunner) Run(ctx context.Context, sessionID, cwd, prompt string) (string, error) {
 	return RunClaudeInject(ctx, sessionID, cwd, prompt, r.Strict)
 }

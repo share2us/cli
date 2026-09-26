@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 const launchdLabel = "us.share2.daemon"
@@ -31,7 +32,14 @@ func plistPath() (string, error) {
 // (a `daemon stop` / bootout). ProcessType Background keeps it low priority.
 // The daemon writes its own log to the user cache dir; StandardOut/Error capture
 // anything before logging is up.
+// renderPlist writes the LaunchAgent. PATH is the installing user's, so the agent
+// tools the daemon runs (claude, codex) are found; launchd otherwise starts it
+// with a bare PATH.
 func renderPlist(exePath, destDir string) string {
+	return renderPlistEnv(exePath, destDir, os.Getenv("PATH"))
+}
+
+func renderPlistEnv(exePath, destDir, pathEnv string) string {
 	args := []string{exePath, "daemon", "run"}
 	if destDir != "" {
 		args = append(args, "--dest", destDir)
@@ -61,14 +69,55 @@ func renderPlist(exePath, destDir string) string {
     <false/>
   </dict>
   <key>ProcessType</key>
-  <string>Background</string>
+  <string>Background</string>%s
   <key>StandardOutPath</key>
   <string>%s</string>
   <key>StandardErrorPath</key>
   <string>%s</string>
 </dict>
 </plist>
-`, launchdLabel, argXML, logPath, logPath)
+`, launchdLabel, argXML, envXML(pathEnv), logPath, logPath)
+}
+
+func envXML(pathEnv string) string {
+	if strings.TrimSpace(pathEnv) == "" {
+		return ""
+	}
+	return "\n  <key>EnvironmentVariables</key>\n  <dict>\n    <key>PATH</key>\n    <string>" + xmlEscape(pathEnv) + "</string>\n  </dict>"
+}
+
+// ServiceNeedsRefresh reports whether the installed plist differs from what this
+// build would write now (e.g. it predates recording PATH).
+func ServiceNeedsRefresh(exePath string) bool {
+	path, err := plistPath()
+	if err != nil {
+		return false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	return !strings.Contains(string(raw), envXML(os.Getenv("PATH")))
+}
+
+// ServiceRefresh rewrites and reloads the LaunchAgent (install boots it out and
+// back in). The receive folder is a --dest argument; keep it.
+func ServiceRefresh(exePath string, out io.Writer) error {
+	dest := ""
+	if path, err := plistPath(); err == nil {
+		if raw, err := os.ReadFile(path); err == nil {
+			parts := strings.Split(string(raw), "<string>--dest</string>")
+			if len(parts) > 1 {
+				if i := strings.Index(parts[1], "<string>"); i >= 0 {
+					rest := parts[1][i+len("<string>"):]
+					if j := strings.Index(rest, "</string>"); j >= 0 {
+						dest = rest[:j]
+					}
+				}
+			}
+		}
+	}
+	return ServiceInstall(exePath, dest, out)
 }
 
 func ServiceSupported() bool { return true }

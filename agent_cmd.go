@@ -133,7 +133,7 @@ func (a app) agentBind(ctx context.Context, args []string) int {
 	if len(args) > 1 {
 		label = args[1]
 	}
-	b, created, err := daemon.Bind(s.Project, s.Tool, label)
+	b, created, err := daemon.BindSession(s.Project, s.Tool, label, s.SessionID)
 	if err != nil {
 		return a.fail("bind", err)
 	}
@@ -141,7 +141,7 @@ func (a app) agentBind(ctx context.Context, args []string) int {
 	if created {
 		verb = "bound"
 	}
-	fmt.Fprintf(a.stdout, "%s: %s sessions in %s\n", verb, b.Tool, b.Project)
+	fmt.Fprintf(a.stdout, "%s: %s session %s in %s (only this session is advertised)\n", verb, b.Tool, shorten(s.SessionID), b.Project)
 	// The id is what another owner invites into their project, so it is shown —
 	// it names the agent, and grants nothing on its own.
 	fmt.Fprintf(a.stdout, "agent id: %s\n", b.AgentID)
@@ -520,7 +520,9 @@ func (a app) agentJoin(ctx context.Context, args []string) int {
 		return a.fail("load login", err)
 	}
 	// Bind: this machine may now advertise this session, under a stable agent id.
-	binding, _, err := daemon.Bind(sess.Project, sess.Tool, sess.Name)
+	// Only THIS session is bound (owner, 2026-09-27): other sessions in the same
+	// folder stay private.
+	binding, _, err := daemon.BindSession(sess.Project, sess.Tool, sess.Name, sess.SessionID)
 	if err != nil {
 		return a.fail("bind session", err)
 	}

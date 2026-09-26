@@ -13,7 +13,7 @@ import (
 )
 
 func TestRenderUnit(t *testing.T) {
-	unit := renderUnit("/usr/bin/share2us", "/srv/incoming")
+	unit := renderUnit("/usr/bin/share2us", "/srv/incoming", false, "")
 	for _, want := range []string{
 		"ExecStart=/usr/bin/share2us daemon run",
 		"WantedBy=default.target",
@@ -29,7 +29,7 @@ func TestRenderUnit(t *testing.T) {
 }
 
 func TestRenderUnitNoDest(t *testing.T) {
-	unit := renderUnit("/usr/bin/share2us", "")
+	unit := renderUnit("/usr/bin/share2us", "", false, "")
 	if strings.Contains(unit, "ReadWritePaths= \n") {
 		t.Error("empty dest left a trailing space in ReadWritePaths")
 	}
@@ -65,12 +65,12 @@ func TestUnitPathRejectsWhatWouldBreakTheUnit(t *testing.T) {
 
 // A path with spaces must land as ONE ReadWritePaths entry, not several.
 func TestUnitQuotesTheDestinationPath(t *testing.T) {
-	unit := renderUnit("/usr/local/bin/s2u", "/home/me/My Files/inbox")
+	unit := renderUnit("/usr/local/bin/s2u", "/home/me/My Files/inbox", false, "")
 	if !strings.Contains(unit, `ReadWritePaths=%h/.config/share2us %h/.cache/share2us %t/share2us "/home/me/My Files/inbox"`) {
 		t.Fatalf("destination not quoted as one entry:\n%s", unit)
 	}
 	// An empty destination adds nothing.
-	if strings.Contains(renderUnit("/usr/local/bin/s2u", ""), `""`) {
+	if strings.Contains(renderUnit("/usr/local/bin/s2u", "", false, ""), `""`) {
 		t.Fatal("an empty destination produced an empty quoted entry")
 	}
 }
@@ -98,5 +98,55 @@ func TestServiceUninstallSaysNothingWasInstalled(t *testing.T) {
 	}
 	if !strings.Contains(got, "not installed") {
 		t.Errorf("output = %q, want it to say nothing was installed", got)
+	}
+}
+
+// With agents bound, the daemon runs Claude/Codex in the user's projects: home
+// must be writable and /tmp shared, while system dirs stay read-only and it can
+// never gain privileges. The receiver-only sandbox would make every agent run fail.
+func TestAgentUnitLetsAgentsWorkButStaysUnprivileged(t *testing.T) {
+	unit := renderUnit("/usr/bin/share2us", "", true, "/home/me/.local/bin:/usr/bin")
+	for _, bad := range []string{"ProtectHome=read-only", "PrivateTmp=true", "ProtectSystem=strict", "RestrictAddressFamilies"} {
+		if strings.Contains(unit, bad) {
+			t.Fatalf("agent unit still has %q, which breaks agent runs:\n%s", bad, unit)
+		}
+	}
+	for _, want := range []string{"NoNewPrivileges=true", "ProtectSystem=full", `Environment="PATH=/home/me/.local/bin:/usr/bin"`} {
+		if !strings.Contains(unit, want) {
+			t.Fatalf("agent unit lacks %q:\n%s", want, unit)
+		}
+	}
+	// The receiver-only unit keeps its tight sandbox.
+	recv := renderUnit("/usr/bin/share2us", "", false, "/usr/bin")
+	if !strings.Contains(recv, "ProtectHome=read-only") || !strings.Contains(recv, `Environment="PATH=/usr/bin"`) {
+		t.Fatalf("receiver unit lost its sandbox or PATH:\n%s", recv)
+	}
+}
+
+// PATH goes inside a quoted Environment= line: nothing in it may add a
+// directive or expand as a specifier or variable.
+func TestUnitPathEscaping(t *testing.T) {
+	v, ok := unitEnvPath(`/a%b:/c$d:/e\\f`)
+	if !ok || v != `/a%%b:/c$$d:/e\\\\f` {
+		t.Fatalf("escaped = %q, %v", v, ok)
+	}
+	for _, bad := range []string{"/bin\nExecStartPre=/evil", `/bin"x`, ""} {
+		if _, ok := unitEnvPath(bad); ok {
+			t.Fatalf("unsafe PATH %q accepted", bad)
+		}
+	}
+	unit := renderUnit("/usr/bin/share2us", "", true, "/bin\nExecStartPre=/evil")
+	if strings.Contains(unit, "ExecStartPre") || strings.Contains(unit, "Environment=") {
+		t.Fatalf("an unsafe PATH reached the unit:\n%s", unit)
+	}
+}
+
+func TestUnitDestDirRoundTrips(t *testing.T) {
+	unit := renderUnit("/usr/bin/share2us", "/home/me/My Files/inbox", false, "/usr/bin")
+	if got := unitDestDir(unit); got != "/home/me/My Files/inbox" {
+		t.Fatalf("unitDestDir = %q", got)
+	}
+	if got := unitDestDir(renderUnit("/usr/bin/share2us", "", true, "/usr/bin")); got != "" {
+		t.Fatalf("agent unit dest = %q, want empty", got)
 	}
 }

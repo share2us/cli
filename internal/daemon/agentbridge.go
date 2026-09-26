@@ -73,6 +73,23 @@ func waitForBinding(ctx context.Context, every time.Duration) bool {
 	}
 }
 
+// coveringBinding finds the binding a session belongs to: its own single-session
+// binding, or a folder-wide one from before single-session binding existed.
+func coveringBinding(list []Binding, s DiscoveredSession) (Binding, bool) {
+	for _, b := range list {
+		if b.Covers(s) {
+			return b, true
+		}
+	}
+	return Binding{}, false
+}
+
+// forkingRunner is a runner whose hops create a new session (Claude forks on
+// every headless resume) and can say which.
+type forkingRunner interface {
+	RunForked(ctx context.Context, sessionID, cwd, prompt string) (output, newSessionID string, err error)
+}
+
 // bridgeRefused reports a server answer that retrying soon cannot change: the
 // plan does not include agents, or the bridge is off on this server. The daemon
 // then waits agentRefusedBackoff instead of hammering the API every few seconds.
@@ -128,8 +145,26 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 			deps.logf("agent-bridge: cannot read bindings, advertising nothing: %v", berr)
 			bindings = nil
 		}
+		// A single-session binding is advertised even when discovery does not
+		// list its session (a fork made by a hop often is not listed): the
+		// binding knows where it lives.
+		for _, b := range bindings {
+			if b.SessionID == "" {
+				continue
+			}
+			listed := false
+			for _, s := range sessions {
+				if s.SessionID == b.SessionID {
+					listed = true
+					break
+				}
+			}
+			if !listed {
+				sessions = append(sessions, DiscoveredSession{SessionID: b.SessionID, Tool: b.Tool, Name: b.Label, Project: b.Project, Status: "available"})
+			}
+		}
 		for _, s := range sessions {
-			b, bound := BindingFor(bindings, s.Project, s.Tool)
+			b, bound := coveringBinding(bindings, s)
 			if !bound {
 				continue
 			}
@@ -186,7 +221,7 @@ func (rt *Runtime) retireUnboundSessions(ctx context.Context, client AgentClient
 		if s.DeviceID != deps.DeviceSessionID {
 			continue // another device's session; not ours to retire
 		}
-		if IsBound(bindings, s.Project, s.Tool) {
+		if _, bound := coveringBinding(bindings, DiscoveredSession{SessionID: s.SessionID, Tool: s.Tool, Project: s.Project}); bound {
 			continue
 		}
 		if err := client.DeregisterAgentSession(ctx, s.SessionID); err != nil {
@@ -283,6 +318,13 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	env := ParseEnvelope(raw)
 	prompt := env.Prompt
 	cwd := ""
+	// The binding knows where its session lives even when discovery does not list
+	// it (a fork from an earlier hop).
+	if list, lerr := LoadBindings(); lerr == nil {
+		if b, ok := BindingForSession(list, req.TargetSessionID); ok {
+			cwd = b.Project
+		}
+	}
 	if sessions, derr := runner.Discover(ctx); derr == nil {
 		for _, s := range sessions {
 			if s.SessionID == req.TargetSessionID {
@@ -316,7 +358,21 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	rt.notify("Share2Us", "Running a prompt in your "+req.Tool+" session")
 	deps.logf("agent-bridge: running inject %s in session %s (cwd %s)", req.ID, req.TargetSessionID, cwd)
 	_ = client.AgentReportResult(ctx, req.ID, "running", "")
-	out, err := runner.Run(ctx, req.TargetSessionID, cwd, prompt)
+	var out string
+	var err error
+	if fr, ok := runner.(forkingRunner); ok {
+		var forked string
+		out, forked, err = fr.RunForked(ctx, req.TargetSessionID, cwd, prompt)
+		// The agent now IS the fork: move its binding, so the next hop continues
+		// this conversation and only the fork is advertised.
+		if moved, merr := MoveSession(req.TargetSessionID, forked); merr != nil {
+			deps.logf("agent-bridge: could not move the binding to session %s: %v", forked, merr)
+		} else if moved {
+			deps.logf("agent-bridge: agent continues in forked session %s", forked)
+		}
+	} else {
+		out, err = runner.Run(ctx, req.TargetSessionID, cwd, prompt)
+	}
 	if len(out) > maxReportedResult {
 		out = out[:maxReportedResult]
 	}
