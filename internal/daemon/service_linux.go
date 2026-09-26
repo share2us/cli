@@ -51,7 +51,59 @@ func validUnitPath(p string) error {
 	return nil
 }
 
-func renderUnit(exePath, destDir string) string {
+// unitEnvPath makes a PATH value safe inside a quoted systemd Environment=
+// assignment: control characters and quotes are refused (nothing is written),
+// and backslash, % (specifier) and $ (variable) are escaped.
+func unitEnvPath(p string) (string, bool) {
+	if p == "" || strings.ContainsAny(p, "\"\n\r") {
+		return "", false
+	}
+	for _, r := range p {
+		if r < 0x20 || r == 0x7f {
+			return "", false
+		}
+	}
+	return strings.NewReplacer(`\`, `\\`, "%", "%%", "$", "$$").Replace(p), true
+}
+
+// renderUnit writes the per-user unit. Two shapes (owner, 2026-09-27):
+//
+//   - receiver only (no bound agents): tightly sandboxed. It can write only its
+//     own folders and the receive folder; home is read-only, /tmp is private.
+//   - agents bound: the daemon launches Claude/Codex in the user's projects, which
+//     write project files and the tools' own state all over home, so home is
+//     writable and /tmp is shared. System directories stay read-only
+//     (ProtectSystem=full) and it can never gain privileges (NoNewPrivileges).
+//     What an agent may DO is governed by its own local rules and privilege
+//     level (ADR-041 §5-§6), not by this sandbox.
+//
+// PATH is the installing user's, so the tools the daemon runs are found: a
+// systemd --user service otherwise gets a bare PATH without ~/.local/bin or nvm.
+func renderUnit(exePath, destDir string, agents bool, pathEnv string) string {
+	env := ""
+	if v, ok := unitEnvPath(pathEnv); ok {
+		env = "Environment=\"PATH=" + v + "\"\n"
+	}
+	if agents {
+		return fmt.Sprintf(`[Unit]
+Description=Share2Us background receiver and agent bridge (s2u daemon)
+Documentation=https://share2.us
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%s daemon run
+%sRestart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectControlGroups=true
+
+[Install]
+WantedBy=default.target
+`, exePath, env)
+	}
 	rwPaths := "%h/.config/share2us %h/.cache/share2us %t/share2us"
 	if d := strings.TrimSpace(destDir); d != "" {
 		// Quoted, so a path with spaces is one entry rather than several.
@@ -66,7 +118,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=%s daemon run
-Restart=on-failure
+%sRestart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 PrivateTmp=true
@@ -78,7 +130,7 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
 WantedBy=default.target
-`, exePath, rwPaths)
+`, exePath, env, rwPaths)
 }
 
 // ServiceSupported reports that per-OS service integration exists here.
@@ -100,7 +152,7 @@ func ServiceInstall(exePath, destDir string, out io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(renderUnit(exePath, destDir)), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(renderUnit(exePath, destDir, agentsBound(), os.Getenv("PATH"))), 0o644); err != nil {
 		return err
 	}
 	if err := run("systemctl", "--user", "daemon-reload"); err != nil {
@@ -207,4 +259,48 @@ func EnableLinger() error {
 // ServiceActive reports whether the per-user service unit is running.
 func ServiceActive() bool {
 	return exec.Command("systemctl", "--user", "is-active", "--quiet", unitName).Run() == nil
+}
+
+// unitDestDir recovers the receive folder an existing unit was written with (the
+// quoted ReadWritePaths entry), so a refresh keeps it.
+func unitDestDir(unit string) string {
+	for _, line := range strings.Split(unit, "\n") {
+		if strings.HasPrefix(line, "ReadWritePaths=") {
+			if i := strings.Index(line, `"`); i >= 0 {
+				if j := strings.LastIndex(line, `"`); j > i {
+					return line[i+1 : j]
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// ServiceNeedsRefresh reports whether the installed unit is not what this build
+// would write now (a new PATH, agents bound since it was written, or an older
+// template). Only an installed unit can be stale.
+func ServiceNeedsRefresh(exePath string) bool {
+	path, err := unitPath()
+	if err != nil {
+		return false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	unit := string(raw)
+	return unit != renderUnit(exePath, unitDestDir(unit), agentsBound(), os.Getenv("PATH"))
+}
+
+// ServiceRefresh rewrites the unit (keeping its receive folder) and restarts it.
+func ServiceRefresh(exePath string, out io.Writer) error {
+	path, err := unitPath()
+	if err != nil {
+		return err
+	}
+	raw, _ := os.ReadFile(path)
+	if err := ServiceInstall(exePath, unitDestDir(string(raw)), out); err != nil {
+		return err
+	}
+	return run("systemctl", "--user", "restart", unitName)
 }

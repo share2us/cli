@@ -12,6 +12,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The background service could not run agents.** Installed as a service, the
+  daemon got a bare PATH, so it could not find `claude` or `codex`: Claude sessions
+  were never advertised and hops could not run. The service now records your PATH
+  when installed (systemd and launchd). When agents are bound, it is installed in an
+  agent mode that can write to your projects (system folders stay read-only and it
+  can never gain privileges); a receiver-only service keeps its tight sandbox.
+  `s2u agent join` and `s2u agent bind` refresh an existing service that predates
+  this and restart it.
+
 ## [20260926224817] - 2026-09-26
 
 ### Fixed

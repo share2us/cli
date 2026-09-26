@@ -40,3 +40,10 @@ func TestXMLEscape(t *testing.T) {
 		t.Fatalf("xmlEscape = %q", got)
 	}
 }
+
+func TestPlistCarriesPATH(t *testing.T) {
+	p := renderPlistEnv("/usr/local/bin/share2us", "", "/opt/homebrew/bin:/Users/me/.nvm/bin&x")
+	if !strings.Contains(p, "<key>PATH</key>") || !strings.Contains(p, "/opt/homebrew/bin:/Users/me/.nvm/bin&amp;x") {
+		t.Fatalf("plist PATH missing or unescaped:\n%s", p)
+	}
+}
