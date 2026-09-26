@@ -39,7 +39,7 @@ func TestParseClaudeAgents(t *testing.T) {
 		sort.Strings(ids)
 		t.Fatalf("want 4 unique sessions, got %d: %v", len(byID), ids)
 	}
-	if byID["live-idle"].Status != "idle" || byID["live-busy"].Status != "busy" {
+	if byID["live-idle"].Status != "available" || byID["live-busy"].Status != "busy" {
 		t.Errorf("interactive status mapping wrong: %+v", byID)
 	}
 	if byID["bg-run"].Status != "busy" {

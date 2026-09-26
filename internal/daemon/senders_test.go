@@ -145,13 +145,14 @@ func TestRedirectedSessionIsRefused(t *testing.T) {
 	}
 }
 
-// A sender that has never signed still gets through, until every sender has a
-// key — the legacy path. Nothing is pinned for it.
-func TestUnsignedFromANeverPinnedSenderIsAllowed(t *testing.T) {
+// 7.6: there is no legacy path any more. An unsigned hop is refused even from a
+// sender this machine has never seen, so a server cannot slip one in by picking
+// a sender id nobody has pinned.
+func TestUnsignedFromANeverPinnedSenderIsRefused(t *testing.T) {
 	pins := newPins(t)
 	legacy := clicore.AgentRequest{SenderDeviceID: "dev-old", TargetSessionID: "s1", Tool: "claude", SealedPrompt: "SEALED"}
-	if err := pins.VerifyDelivered(legacy, self, time.Now()); err != nil {
-		t.Fatalf("an unsigned hop from a never-signing sender was refused: %v", err)
+	if err := pins.VerifyDelivered(legacy, self, time.Now()); !errors.Is(err, ErrUnsignedHop) {
+		t.Fatalf("an unsigned hop from a never-seen sender = %v, want ErrUnsignedHop", err)
 	}
 }
 

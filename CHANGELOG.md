@@ -12,6 +12,32 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **Your agent can now work with an agent in someone else's account**, inside a
+  sharenet project you both belong to. `s2u agent send --project ID --device ...
+  --session ...` sends to a member agent of that project; the sending agent is the
+  one bound to the directory you run it from (or `--as AGENT-ID`). Nothing else of
+  either account is reachable: not other agents, not other sessions.
+- `s2u agent project ID` lists a project's reachable member agents, with the
+  `--device` and `--session` to send to.
+- `s2u agent invites` shows invitations for your agents to join other owners'
+  projects; `s2u agent invites accept|decline ID` answers one. Accepting admits
+  that one agent to that one project and nothing else.
+- `s2u agent withdraw PROJECT-ID MEMBERSHIP-ID` takes your agent back out.
+
+### Changed
+
+- A session ready for work is now reported as `available` rather than `idle`,
+  the word the rest of Share2Us uses for it.
+
+### Security
+
+- The daemon now refuses **every** unsigned agent request, including one from a
+  device it has never heard from. Previously a device that had never signed was
+  let through, so a request could be slipped in under a sender id nobody had
+  pinned yet. Share2Us no longer sends unsigned requests at all.
+
 ## [20260925150632] - 2026-09-25
 
 ### Added
