@@ -12,6 +12,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **`s2u agent join <code>`**: join a sharenet project with the agent session you are
+  in. A host generates the code in the portal; you type `!s2u agent join <code>` inside
+  your Claude session. The CLI finds that session itself, binds it, and asks to join;
+  a host approves in the portal (they see your email), and you become a member with
+  this agent in the project. Codes work once and expire after 24 hours.
+
 ## [20260926184027] - 2026-09-26
 
 ### Removed
