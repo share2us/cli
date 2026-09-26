@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -56,10 +57,11 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentGoal(ctx, args[1:])
 	case "project":
 		return a.agentProject(ctx, args[1:])
-	case "invites":
-		return a.agentInvites(ctx, args[1:])
-	case "withdraw":
-		return a.agentWithdraw(ctx, args[1:])
+	case "invites", "withdraw":
+		// Sharenet membership (inviting, accepting, removing) is managed in the
+		// portal; the CLI binds sessions and sends between agents.
+		fmt.Fprintf(a.stderr, "agent invitations and memberships are managed in the portal: %s\n", portalSharenetsURL())
+		return 2
 	default:
 		return a.agentUsage()
 	}
@@ -71,8 +73,6 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
 	fmt.Fprintf(a.stderr, "       [--project ID [--as AGENT-ID]]       to an agent in another account: both agents must\n                                             be members of that project. The sending agent is\n                                             the one bound to this directory unless --as names it.\n")
 	fmt.Fprintf(a.stderr, "  project <project-id>                       a project's reachable member agents\n")
-	fmt.Fprintf(a.stderr, "  invites [accept|decline <id>]              invitations for your agents to join projects\n")
-	fmt.Fprintf(a.stderr, "  withdraw <project-id> <membership-id>      take your agent out of a project\n")
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
 	fmt.Fprintf(a.stderr, "  approve <request-id>                       approve ONE pending request (no standing access)\n")
@@ -467,64 +467,25 @@ func (a app) agentProject(ctx context.Context, args []string) int {
 	return 0
 }
 
-// agentInvites lists, accepts or declines invitations for this account's agents
-// to join other owners' projects. Accepting admits that one agent to that one
-// project; it gives the host nothing else of your account (ADR-041 §2a).
-func (a app) agentInvites(ctx context.Context, args []string) int {
-	client, ok := a.agentClient()
-	if !ok {
-		return 1
+// portalSharenetsURL is where sharenets, invitations and agent memberships are
+// managed (owner, 2026-09-26: the portal only), for the server this CLI is
+// logged in to.
+func portalSharenetsURL() string {
+	apiBase := ""
+	if c, err := clicore.LoadCredential(); err == nil {
+		apiBase = c.APIBase
 	}
-	if len(args) == 2 && (args[0] == "accept" || args[0] == "decline") {
-		var err error
-		if args[0] == "accept" {
-			err = client.AcceptAgentInvite(ctx, args[1])
-		} else {
-			err = client.DeclineAgentInvite(ctx, args[1])
-		}
-		if err != nil {
-			return a.fail(args[0]+" invitation", err)
-		}
-		fmt.Fprintf(a.stdout, "Invitation %sed.\n", strings.TrimSuffix(args[0], "e"))
-		return 0
-	}
-	if len(args) != 0 {
-		fmt.Fprintf(a.stderr, "usage: %s agent invites [accept|decline <id>]\n", commandName)
-		return 2
-	}
-	invites, err := client.ListAgentInvites(ctx)
-	if err != nil {
-		return a.fail("list invitations", err)
-	}
-	if len(invites) == 0 {
-		fmt.Fprintln(a.stdout, "No invitations, and your agents are in no other projects.")
-		return 0
-	}
-	for _, inv := range invites {
-		state := "member "
-		if inv.Pending {
-			state = "PENDING"
-		}
-		fmt.Fprintf(a.stdout, "%s  %s  agent %s  project %q in %q  (project %s)\n",
-			inv.ID, state, inv.AgentID, inv.ProjectName, inv.SharenetName, inv.ProjectID)
-	}
-	return 0
+	return portalURLFor(apiBase) + "/sharenets"
 }
 
-func (a app) agentWithdraw(ctx context.Context, args []string) int {
-	if len(args) != 2 {
-		fmt.Fprintf(a.stderr, "usage: %s agent withdraw <project-id> <membership-id>\n", commandName)
-		return 2
+// portalURLFor maps an API base to its portal: https://api.X -> https://portal.X.
+// Anything else (a bare host, localhost, no login) falls back to production.
+func portalURLFor(apiBase string) string {
+	u, err := url.Parse(strings.TrimSpace(apiBase))
+	if err != nil || u.Scheme != "https" || !strings.HasPrefix(u.Host, "api.") {
+		return "https://portal.share2.us"
 	}
-	client, ok := a.agentClient()
-	if !ok {
-		return 1
-	}
-	if err := client.WithdrawAgent(ctx, args[0], args[1]); err != nil {
-		return a.fail("withdraw agent", err)
-	}
-	fmt.Fprintln(a.stdout, "Withdrawn. The agent can no longer be reached through that project.")
-	return 0
+	return "https://portal." + strings.TrimPrefix(u.Host, "api.")
 }
 
 func (a app) agentStatus(ctx context.Context, args []string) int {
