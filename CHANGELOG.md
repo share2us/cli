@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260926220430] - 2026-09-26
+
 ### Changed
 
 - **No more starting the daemon by hand for agents.** `s2u agent join` and
