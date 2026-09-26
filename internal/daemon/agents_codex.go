@@ -57,6 +57,22 @@ type codexRollout struct {
 	} `json:"payload"`
 }
 
+// codexBusyWindow: a rollout written this recently belongs to a session that is
+// working. Codex appends to the rollout continuously while it works (model
+// output, tool calls, results), so a quiet file means a quiet session.
+const codexBusyWindow = 20 * time.Second
+
+// codexStatus derives presence (ADR-041 §8) for a Codex session, which has no
+// status command of its own. Busy while its rollout is being written; otherwise
+// available: the daemon runs a hop by resuming the session headlessly, so a
+// session with no interactive window open can still receive work.
+func codexStatus(modTime, now time.Time) string {
+	if now.Sub(modTime) < codexBusyWindow {
+		return "busy"
+	}
+	return "available"
+}
+
 // DiscoverCodex lists recent Codex sessions from the rollout store.
 func DiscoverCodex(ctx context.Context) ([]DiscoveredSession, error) {
 	home, err := os.UserHomeDir()
@@ -82,6 +98,7 @@ func discoverCodexIn(root string, now time.Time) ([]DiscoveredSession, error) {
 			return nil
 		}
 		if s, ok := parseCodexRollout(path); ok {
+			s.Status = codexStatus(info.ModTime(), now)
 			out = append(out, s)
 		}
 		return nil

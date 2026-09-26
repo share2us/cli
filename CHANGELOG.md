@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Codex sessions now show real presence** instead of "unknown": **busy** while
+  Codex is working (its session file is being written), **available** otherwise,
+  since the daemon can resume a quiet Codex session to deliver work.
+
 ## [20260926221239] - 2026-09-26
 
 ### Changed

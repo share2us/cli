@@ -115,3 +115,43 @@ func TestCodexStrictIsReadOnly(t *testing.T) {
 		t.Fatalf("strict must be read-only, got %q", got)
 	}
 }
+
+// Presence for Codex: busy while its rollout is being written, available
+// otherwise (the daemon can resume a quiet session headlessly).
+func TestCodexPresenceFromRolloutWrites(t *testing.T) {
+	now := time.Now()
+	if got := codexStatus(now.Add(-3*time.Second), now); got != "busy" {
+		t.Fatalf("just written = %q, want busy", got)
+	}
+	if got := codexStatus(now.Add(-5*time.Minute), now); got != "available" {
+		t.Fatalf("quiet for minutes = %q, want available", got)
+	}
+
+	root := t.TempDir()
+	dir := filepath.Join(root, "2026", "09", "27")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, id string, mod time.Time) {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(`{"type":"session_meta","payload":{"session_id":"`+id+`","cwd":"/p"}}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("rollout-a.jsonl", "working", now.Add(-2*time.Second))
+	write("rollout-b.jsonl", "idle", now.Add(-10*time.Minute))
+	got, err := discoverCodexIn(root, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := map[string]string{}
+	for _, s := range got {
+		status[s.SessionID] = s.Status
+	}
+	if status["working"] != "busy" || status["idle"] != "available" {
+		t.Fatalf("discovered presence = %v, want working=busy idle=available (never unknown)", status)
+	}
+}

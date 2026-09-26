@@ -32,5 +32,5 @@ func TestLiveCodexSessionOf(t *testing.T) {
 	if !ok {
 		t.Fatal("no Codex session found for that pid")
 	}
-	t.Logf("found codex session %s in %s", s.SessionID, s.Project)
+	t.Logf("found codex session %s in %s, presence %s", s.SessionID, s.Project, s.Status)
 }
