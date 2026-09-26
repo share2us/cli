@@ -26,6 +26,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   that one agent to that one project and nothing else.
 - `s2u agent withdraw PROJECT-ID MEMBERSHIP-ID` takes your agent back out.
 
+### Changed
+
+- A session ready for work is now reported as `available` rather than `idle`,
+  the word the rest of Share2Us uses for it.
+
 ## [20260925150632] - 2026-09-25
 
 ### Added

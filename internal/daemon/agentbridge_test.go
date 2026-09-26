@@ -52,7 +52,7 @@ type fakeRunner struct {
 
 func (f *fakeRunner) Tool() string { return "claude" }
 func (f *fakeRunner) Discover(context.Context) ([]DiscoveredSession, error) {
-	return []DiscoveredSession{{SessionID: "s1", Tool: "claude", Status: "idle"}}, nil
+	return []DiscoveredSession{{SessionID: "s1", Tool: "claude", Status: "available"}}, nil
 }
 func (f *fakeRunner) Run(_ context.Context, sessionID, _, prompt string) (string, error) {
 	f.ranSID = sessionID

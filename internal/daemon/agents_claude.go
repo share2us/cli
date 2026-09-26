@@ -17,7 +17,7 @@ type DiscoveredSession struct {
 	Tool      string
 	Name      string
 	Project   string // cwd
-	Status    string // idle | busy | unknown
+	Status    string // available | busy | unknown
 }
 
 // injectRunTimeout bounds a single injected run.
@@ -80,8 +80,10 @@ func parseClaudeAgents(out []byte) ([]DiscoveredSession, error) {
 
 func claudeStatus(e claudeAgentEntry) string {
 	switch strings.ToLower(strings.TrimSpace(e.Status)) {
+	// The server's word for a session ready for work is "available" (ADR-041 §8);
+	// "idle" is Claude's.
 	case "idle":
-		return "idle"
+		return "available"
 	case "busy":
 		return "busy"
 	}
@@ -90,7 +92,7 @@ func claudeStatus(e claudeAgentEntry) string {
 	case "running":
 		return "busy"
 	case "blocked", "idle", "waiting":
-		return "idle"
+		return "available"
 	}
 	return "unknown"
 }
