@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260926224817] - 2026-09-26
+
 ### Fixed
 
 - **Codex sessions now show real presence** instead of "unknown": **busy** while
