@@ -50,11 +50,26 @@ type codexRollout struct {
 	Payload struct {
 		SessionID string `json:"session_id"`
 		Cwd       string `json:"cwd"`
-		Role      string `json:"role"`
-		Content   []struct {
+		// A sub-agent (e.g. Codex's "guardian" review) writes its own rollout
+		// that repeats its parent's session_id; it is not a user session.
+		ParentThreadID string `json:"parent_thread_id"`
+		// "cli" for a user session, {"subagent": ...} for a sub-agent.
+		Source  json.RawMessage `json:"source"`
+		Role    string          `json:"role"`
+		Content []struct {
 			Text string `json:"text"`
 		} `json:"content"`
 	} `json:"payload"`
+}
+
+// codexSubagentSource reports whether a rollout's source is a sub-agent object.
+func codexSubagentSource(raw json.RawMessage) bool {
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return false // a plain string such as "cli", or absent
+	}
+	_, ok := obj["subagent"]
+	return ok
 }
 
 // codexBusyWindow: a rollout written this recently belongs to a session that is
@@ -126,6 +141,9 @@ func parseCodexRollout(path string) (DiscoveredSession, bool) {
 	if err := json.Unmarshal(sc.Bytes(), &head); err != nil || head.Type != "session_meta" || head.Payload.SessionID == "" {
 		return DiscoveredSession{}, false
 	}
+	if head.Payload.ParentThreadID != "" || codexSubagentSource(head.Payload.Source) {
+		return DiscoveredSession{}, false // a sub-agent's rollout, not a session to advertise or bind
+	}
 	s := DiscoveredSession{
 		SessionID: head.Payload.SessionID,
 		Tool:      "codex",
@@ -138,8 +156,8 @@ func parseCodexRollout(path string) (DiscoveredSession, bool) {
 			continue
 		}
 		text := strings.TrimSpace(rec.Payload.Content[0].Text)
-		if text == "" || strings.HasPrefix(text, "<") {
-			continue // synthetic context block, not something the user typed
+		if text == "" || strings.HasPrefix(text, "<") || strings.HasPrefix(text, "# AGENTS.md instructions") {
+			continue // synthetic context block (or injected AGENTS.md), not something the user typed
 		}
 		s.Name = codexTruncate(text, 60)
 		break

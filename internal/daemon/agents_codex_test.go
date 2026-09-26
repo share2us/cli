@@ -155,3 +155,26 @@ func TestCodexPresenceFromRolloutWrites(t *testing.T) {
 		t.Fatalf("discovered presence = %v, want working=busy idle=available (never unknown)", status)
 	}
 }
+
+// A sub-agent (codex 0.156.1's "guardian" review) writes its own rollout that
+// repeats the parent's session_id. Listing it made one session look like two, so
+// `agent bind <id>` refused it as ambiguous.
+func TestDiscoverCodexSkipsSubagentRollouts(t *testing.T) {
+	now, _ := time.Parse(time.RFC3339, "2026-09-07T12:00:00Z")
+	root := t.TempDir()
+	writeRollout(t, root, "rollout-2026-09-07T11-00-00-parent.jsonl", now.Add(-time.Hour),
+		`{"type":"session_meta","payload":{"session_id":"parent","id":"parent","parent_thread_id":null,"cwd":"/home/x/proj","source":"cli","thread_source":"user"}}`,
+		userMsg("# AGENTS.md instructions for /home/x/proj"), userMsg("real work"))
+	writeRollout(t, root, "rollout-2026-09-07T11-30-00-guard.jsonl", now.Add(-time.Minute),
+		`{"type":"session_meta","payload":{"session_id":"parent","id":"guard","parent_thread_id":"parent","cwd":"/home/x/proj","source":{"subagent":{"other":"guardian"}}}}`)
+	writeRollout(t, root, "rollout-2026-09-07T11-40-00-sub2.jsonl", now.Add(-time.Minute),
+		`{"type":"session_meta","payload":{"session_id":"parent","id":"sub2","cwd":"/home/x/proj","source":{"subagent":"review"}}}`)
+
+	got, err := discoverCodexIn(root, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].SessionID != "parent" || got[0].Name != "real work" {
+		t.Fatalf("want only the parent session, got %+v", got)
+	}
+}

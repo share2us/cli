@@ -12,6 +12,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`s2u agent bind` works for Codex sessions again.** Codex's own sub-agents
+  (such as its review "guardian") write session files that repeat their parent's
+  id, which made one session look like two, so binding refused it as ambiguous.
+  Sub-agents are no longer listed. Codex sessions are also no longer named after
+  the injected AGENTS.md text.
+- **The background service no longer records temporary folders on its PATH.**
+  Temp, missing and repeated entries from the installing shell are dropped, so a
+  leftover scratch folder can never shadow the real `claude` or `codex`.
+
 ## [20260926234646] - 2026-09-26
 
 ### Changed
