@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260926221239] - 2026-09-26
+
 ### Changed
 
 - **Linux: agents stay reachable after you log out.** When `s2u agent join` or
