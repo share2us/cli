@@ -44,6 +44,76 @@ type Binding struct {
 	// binding, so it is recorded rather than asked for twice.
 	Label   string    `json:"label,omitempty"`
 	BoundAt time.Time `json:"bound_at"`
+	// SessionID is the ONE session this agent currently is (owner, 2026-09-27:
+	// bind a single session, not every session in the folder). Set by
+	// `agent join` / `agent bind <session>`; moved to the fork each time the
+	// daemon runs a Claude hop (a hop always forks), so the agent keeps its id and
+	// its conversation while only this session is advertised. Empty in a binding
+	// made before this existed: that one still covers every session of its tool
+	// in the folder until it is bound again.
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// Covers reports whether a discovered session belongs to this binding.
+func (b Binding) Covers(s DiscoveredSession) bool {
+	if b.Tool != s.Tool || normalizeProject(b.Project) != normalizeProject(s.Project) {
+		return false
+	}
+	return b.SessionID == "" || b.SessionID == s.SessionID
+}
+
+// BindSession binds exactly one session: the binding for its folder and tool
+// (created if new, keeping its agent id if not) now points at sessionID.
+func BindSession(project, tool, label, sessionID string) (Binding, bool, error) {
+	b, created, err := Bind(project, tool, label)
+	if err != nil || sessionID == "" {
+		return b, created, err
+	}
+	return setSession(b.Project, b.Tool, sessionID, created)
+}
+
+// MoveSession points the binding that is currently fromSession at toSession:
+// the fork a hop created. It reports whether a binding moved.
+func MoveSession(fromSession, toSession string) (bool, error) {
+	if fromSession == "" || toSession == "" || fromSession == toSession {
+		return false, nil
+	}
+	list, err := LoadBindings()
+	if err != nil {
+		return false, err
+	}
+	for i := range list {
+		if list[i].SessionID == fromSession {
+			list[i].SessionID = toSession
+			return true, saveBindings(list)
+		}
+	}
+	return false, nil
+}
+
+// BindingForSession returns the binding whose current session is sessionID.
+func BindingForSession(list []Binding, sessionID string) (Binding, bool) {
+	for _, b := range list {
+		if sessionID != "" && b.SessionID == sessionID {
+			return b, true
+		}
+	}
+	return Binding{}, false
+}
+
+func setSession(project, tool, sessionID string, created bool) (Binding, bool, error) {
+	list, err := LoadBindings()
+	if err != nil {
+		return Binding{}, false, err
+	}
+	p := normalizeProject(project)
+	for i := range list {
+		if list[i].Tool == tool && normalizeProject(list[i].Project) == p {
+			list[i].SessionID = sessionID
+			return list[i], created, saveBindings(list)
+		}
+	}
+	return Binding{}, false, os.ErrNotExist
 }
 
 // bindingsFile is the on-disk shape, versioned so the format can move.

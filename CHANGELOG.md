@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **An agent is now one session, not a whole folder.** `s2u agent join` and
+  `s2u agent bind` bind only the session you run them in; other Claude or Codex
+  sessions in the same folder are no longer advertised. When a Claude session
+  forks to take on sharenet work, the agent follows the fork. Bindings made
+  before this release still cover their folder; run `!s2u agent bind` inside
+  the session you want to keep to narrow one.
+
 ### Fixed
 
 - **The background service could not run agents.** Installed as a service, the
