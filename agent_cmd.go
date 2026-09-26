@@ -74,7 +74,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
 	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
 	fmt.Fprintf(a.stderr, "       [--project ID [--as AGENT-ID]]       to an agent in another account: both agents must\n                                             be members of that project. The sending agent is\n                                             the one bound to this directory unless --as names it.\n")
-	fmt.Fprintf(a.stderr, "  join <code>                                join a sharenet project with THIS session: type\n                                             !%s agent join <code> inside the agent session\n", commandName)
+	fmt.Fprintf(a.stderr, "  join <code>                                join a sharenet project with THIS session: type\n                                             !s2u agent join <code> in Claude Code or Codex\n")
 	fmt.Fprintf(a.stderr, "  project <project-id>                       a project's reachable member agents\n")
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
@@ -499,13 +499,14 @@ func portalURLFor(apiBase string) string {
 // portal-only sharenet management: it binds and asks; it decides nothing.
 func (a app) agentJoin(ctx context.Context, args []string) int {
 	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
-		fmt.Fprintf(a.stderr, "usage: %s agent join <code>   (type it inside the agent session: !%s agent join <code>)\n", commandName, commandName)
+		fmt.Fprintf(a.stderr, "usage: %s agent join <code>   (type it inside the agent session: !s2u agent join <code>)\n", commandName)
 		return 2
 	}
 	code := strings.TrimSpace(args[0])
 	sess, err := daemon.FindOwnSession(ctx)
 	if err != nil {
-		fmt.Fprintf(a.stderr, "Run this inside the agent session you want to join, e.g. type this in Claude Code:\n  !%s agent join %s\n", commandName, code)
+		// The line people paste is s2u (the installed alias), whatever this binary is called.
+		fmt.Fprintf(a.stderr, "Could not find the agent session this is running in. Paste it into the Claude Code or Codex session you want to add:\n  !s2u agent join %s\n", code)
 		return 1
 	}
 	client, ok := a.agentClient()
