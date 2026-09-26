@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260926184027] - 2026-09-26
+
 ### Removed
 
 - `s2u agent invites` and `s2u agent withdraw`. Sharenets, invitations and agent
