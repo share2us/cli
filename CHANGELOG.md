@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260926234646] - 2026-09-26
+
 ### Changed
 
 - **An agent is now one session, not a whole folder.** `s2u agent join` and
