@@ -227,6 +227,9 @@ func (a app) daemonStatus() int {
 	fmt.Fprintf(a.stdout, "running (pid %d, %s)\n", resp.PID, resp.Version)
 	fmt.Fprintf(a.stdout, "  inbox receive: %s\n", onOff(resp.OwnsInbox))
 	fmt.Fprintf(a.stdout, "  LAN receiver:  %s\n", onOff(resp.OwnsLAN))
+	if daemon.LingerSupported() {
+		fmt.Fprintf(a.stdout, "  keeps running after logout: %s\n", yesNo(daemon.LingerEnabled()))
+	}
 	if list, err := daemon.LoadBindings(); err == nil && len(list) > 0 {
 		fmt.Fprintf(a.stdout, "  agent bridge:  on (%d bound session(s))\n", len(list))
 	} else {
@@ -464,4 +467,11 @@ func onOff(b bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+func yesNo(b bool) string {
+	if b {
+		return "yes"
+	}
+	return "no"
 }

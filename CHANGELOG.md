@@ -12,6 +12,16 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **Linux: agents stay reachable after you log out.** When `s2u agent join` or
+  `s2u agent bind` sets up the background service, it now also keeps that service
+  running after logout (systemd "lingering", for your own user only) and says so;
+  undo with `loginctl disable-linger`. This matters on servers where agents run in
+  tmux over SSH. If the system does not allow it without a password, it prints the
+  one line to run instead. `s2u daemon status` shows whether it is on. Plain
+  `s2u daemon install` is unchanged and only suggests it.
+
 ## [20260926220430] - 2026-09-26
 
 ### Changed
