@@ -57,6 +57,8 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentGoal(ctx, args[1:])
 	case "project":
 		return a.agentProject(ctx, args[1:])
+	case "join":
+		return a.agentJoin(ctx, args[1:])
 	case "invites", "withdraw":
 		// Sharenet membership (inviting, accepting, removing) is managed in the
 		// portal; the CLI binds sessions and sends between agents.
@@ -72,6 +74,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
 	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
 	fmt.Fprintf(a.stderr, "       [--project ID [--as AGENT-ID]]       to an agent in another account: both agents must\n                                             be members of that project. The sending agent is\n                                             the one bound to this directory unless --as names it.\n")
+	fmt.Fprintf(a.stderr, "  join <code>                                join a sharenet project with THIS session: type\n                                             !%s agent join <code> inside the agent session\n", commandName)
 	fmt.Fprintf(a.stderr, "  project <project-id>                       a project's reachable member agents\n")
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
@@ -486,6 +489,67 @@ func portalURLFor(apiBase string) string {
 		return "https://portal.share2.us"
 	}
 	return "https://portal." + strings.TrimPrefix(u.Host, "api.")
+}
+
+// agentJoin redeems a sharenet join code for the session it runs inside
+// (phase-7 §10, owner 2026-09-27). Typed as `!s2u agent join <code>` in a Claude
+// session, it finds that session through the process tree, binds it (the CLI's
+// job), registers it so the server can see this device runs it, and files a join
+// request that a host approves in the portal. This is the CLI's one exception to
+// portal-only sharenet management: it binds and asks; it decides nothing.
+func (a app) agentJoin(ctx context.Context, args []string) int {
+	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+		fmt.Fprintf(a.stderr, "usage: %s agent join <code>   (type it inside the agent session: !%s agent join <code>)\n", commandName, commandName)
+		return 2
+	}
+	code := strings.TrimSpace(args[0])
+	sess, err := daemon.FindOwnSession(ctx)
+	if err != nil {
+		fmt.Fprintf(a.stderr, "Run this inside the agent session you want to join, e.g. type this in Claude Code:\n  !%s agent join %s\n", commandName, code)
+		return 1
+	}
+	client, ok := a.agentClient()
+	if !ok {
+		return 1
+	}
+	credential, err := clicore.LoadCredential()
+	if err != nil {
+		return a.fail("load login", err)
+	}
+	// Bind: this machine may now advertise this session, under a stable agent id.
+	binding, _, err := daemon.Bind(sess.Project, sess.Tool, sess.Name)
+	if err != nil {
+		return a.fail("bind session", err)
+	}
+	// Register it now rather than waiting for the daemon, so the server can check
+	// that this device runs the agent that is asking.
+	status := sess.Status
+	if status == "" || status == "idle" {
+		status = "available"
+	}
+	if err := client.RegisterAgentSession(ctx, clicore.AgentRegisterInput{
+		AgentID: binding.AgentID, SessionID: sess.SessionID, Tool: sess.Tool,
+		Name: sess.Name, Project: sess.Project, Status: status,
+	}); err != nil {
+		return a.fail("register session", err)
+	}
+	if _, err := ensureSigningKey(ctx, client, credential); err != nil {
+		return a.fail("signing key", err)
+	}
+	res, err := client.AgentJoin(ctx, code, binding.AgentID)
+	if err != nil {
+		return a.fail("join", err)
+	}
+	fmt.Fprintf(a.stdout, "Bound this %s session (agent %s) in %s.\n", sess.Tool, binding.AgentID, sess.Project)
+	switch res.Status {
+	case "admitted":
+		fmt.Fprintf(a.stdout, "Joined %q in %q. Other agents in the project can now reach this one.\n", res.ProjectName, res.SharenetName)
+	default:
+		fmt.Fprintf(a.stdout, "Asked to join %q in %q. A host approves it in the portal; they see your email (%s).\n", res.ProjectName, res.SharenetName, credential.Email)
+		fmt.Fprintln(a.stdout, "Once approved, you are a member of the sharenet and this agent is in the project.")
+	}
+	fmt.Fprintf(a.stdout, "To receive work, keep the daemon running: %s daemon run --agent-bridge\n", commandName)
+	return 0
 }
 
 func (a app) agentStatus(ctx context.Context, args []string) int {
