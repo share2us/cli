@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Removed
+
+- `s2u agent invites` and `s2u agent withdraw`. Sharenets, invitations and agent
+  memberships are managed in the portal (portal.share2.us/sharenets); the CLI binds
+  your agent sessions, and bound agents send and receive with `s2u agent send`.
+
 ## [20260926113529] - 2026-09-26
 
 ### Added
