@@ -100,6 +100,9 @@ func codexSessionOf(pid int) (DiscoveredSession, bool) {
 			continue
 		}
 		if s, ok := parseCodexRollout(path); ok {
+			if info, err := os.Stat(path); err == nil {
+				s.Status = codexStatus(info.ModTime(), time.Now())
+			}
 			return s, true
 		}
 	}
