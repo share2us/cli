@@ -45,6 +45,11 @@ var (
 	ErrUnsignedFromPinned = errors.New("this sender signs its hops, but this one is unsigned")
 	// ErrHopReplayed is a nonce this machine has already run from this sender.
 	ErrHopReplayed = errors.New("this hop has already been delivered once")
+	// ErrUnsignedHop is an unsigned hop from a sender never seen before. Every
+	// hop is signed now (ADR-041 §5, phase 7.6); the server refuses unsigned ones,
+	// so one arriving here was written or stripped by something that should not
+	// be trusted.
+	ErrUnsignedHop = errors.New("this hop is unsigned; every hop must be signed")
 )
 
 // seenNonceTTL bounds how long a nonce is remembered. The server refuses a hop
@@ -156,9 +161,7 @@ func (s *SenderPins) VerifyDelivered(req clicore.AgentRequest, selfDeviceID stri
 		if pinned {
 			return ErrUnsignedFromPinned
 		}
-		// A sender that has never signed: the legacy path, until every sender has
-		// a key. Nothing to pin and nothing to check a nonce against.
-		return nil
+		return ErrUnsignedHop
 	}
 
 	key := pin.SigningPublicKey
