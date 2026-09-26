@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260926204153] - 2026-09-26
+
 ### Added
 
 - **`s2u agent join <code>`**: join a sharenet project with the agent session you are
