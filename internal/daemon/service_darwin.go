@@ -36,7 +36,7 @@ func plistPath() (string, error) {
 // tools the daemon runs (claude, codex) are found; launchd otherwise starts it
 // with a bare PATH.
 func renderPlist(exePath, destDir string) string {
-	return renderPlistEnv(exePath, destDir, os.Getenv("PATH"))
+	return renderPlistEnv(exePath, destDir, servicePATH())
 }
 
 func renderPlistEnv(exePath, destDir, pathEnv string) string {
@@ -97,7 +97,7 @@ func ServiceNeedsRefresh(exePath string) bool {
 	if err != nil {
 		return false
 	}
-	return !strings.Contains(string(raw), envXML(os.Getenv("PATH")))
+	return !strings.Contains(string(raw), envXML(servicePATH()))
 }
 
 // ServiceRefresh rewrites and reloads the LaunchAgent (install boots it out and

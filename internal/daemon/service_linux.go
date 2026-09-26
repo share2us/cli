@@ -152,7 +152,7 @@ func ServiceInstall(exePath, destDir string, out io.Writer) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(renderUnit(exePath, destDir, agentsBound(), os.Getenv("PATH"))), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(renderUnit(exePath, destDir, agentsBound(), servicePATH())), 0o644); err != nil {
 		return err
 	}
 	if err := run("systemctl", "--user", "daemon-reload"); err != nil {
@@ -289,7 +289,7 @@ func ServiceNeedsRefresh(exePath string) bool {
 		return false
 	}
 	unit := string(raw)
-	return unit != renderUnit(exePath, unitDestDir(unit), agentsBound(), os.Getenv("PATH"))
+	return unit != renderUnit(exePath, unitDestDir(unit), agentsBound(), servicePATH())
 }
 
 // ServiceRefresh rewrites the unit (keeping its receive folder) and restarts it.
