@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260926235211] - 2026-09-26
+
 ### Fixed
 
 - **`s2u agent bind` works for Codex sessions again.** Codex's own sub-agents
