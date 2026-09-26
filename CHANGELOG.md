@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- `s2u agent join` now works inside **Codex** sessions, not only Claude Code: it finds
+  the Codex session it runs in from the session file that Codex holds open. When it
+  cannot find a session, the message now shows `!s2u agent join <code>` (what you
+  type) and says it works in Claude Code or Codex.
+
 ## [20260926204153] - 2026-09-26
 
 ### Added
