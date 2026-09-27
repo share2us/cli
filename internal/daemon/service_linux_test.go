@@ -93,6 +93,12 @@ func TestServiceUninstallSaysNothingWasInstalled(t *testing.T) {
 		t.Fatalf("ServiceUninstall() on a clean machine error = %v, want nil (idempotent)", err)
 	}
 	got := buf.String()
+	serviceCallsMu.Lock()
+	calls := strings.Join(serviceCalls, "; ")
+	serviceCallsMu.Unlock()
+	if !strings.Contains(calls, "systemctl --user disable --now s2u-daemon.service") {
+		t.Errorf("uninstall should disable the unit (through the test stub), calls: %s", calls)
+	}
 	if strings.Contains(got, "Removed") {
 		t.Errorf("claimed a removal that did not happen: %q", got)
 	}

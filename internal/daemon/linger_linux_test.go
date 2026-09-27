@@ -22,6 +22,7 @@ func TestEnableLingerAsksForNothingAndOnlyForMe(t *testing.T) {
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	t.Setenv("USER", "alice")
+	realRunForTest(t) // the stand-in loginctl above is first on PATH
 	if err := EnableLinger(); err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +39,7 @@ func TestEnableLingerReportsRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	realRunForTest(t)
 	if err := EnableLinger(); err == nil {
 		t.Fatal("a refused enable-linger reported success")
 	}

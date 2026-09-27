@@ -214,7 +214,12 @@ func ServiceLogs(follow bool) error {
 	return cmd.Run()
 }
 
-func run(name string, args ...string) error {
+// run executes a service-manager command. It is a variable so the test suite can
+// replace it: a test must never reach the developer's real systemctl, launchctl
+// or schtasks (one test disabled the real s2u-daemon.service on 2026-09-27).
+var run = runCommand
+
+func runCommand(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
