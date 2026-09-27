@@ -26,6 +26,9 @@ type Policy struct {
 	// DisallowedTools are Claude permission patterns passed to --disallowedTools.
 	// The tool executor refuses them regardless of what the prompt says (hard).
 	DisallowedTools []string
+	// AllowedTools are Claude permission patterns passed to --allowedTools: the
+	// read-only commands a hop may run without an approval nobody is there to give.
+	AllowedTools []string
 	// Advisory rules could not be mapped to a hard gate; they ride in the system
 	// prompt and are best-effort only.
 	Advisory []string
@@ -42,6 +45,23 @@ var selfProtection = []string{
 	"Edit(**/.s2u.rules)",
 	"Edit(**/.claude/settings.json)",
 	"Edit(**/.claude/settings.local.json)",
+}
+
+// hopReadOnly is what an unattended hop may run without approval (owner,
+// 2026-09-27). Claude already allows the plain form of simple reads; without
+// this, the same reads chained or piped (`grep ... | head`) are refused, because
+// the approval prompt has nobody to answer it. Deliberately narrow, verified on
+// claude 2026-09-27:
+//   - allowlisting does not widen WHERE a command may read: a path outside the
+//     project is still refused;
+//   - only commands with no flag that writes or runs something. Left out:
+//     git diff/log/show (--output=FILE), rg (--pre runs a program), find (-exec,
+//     -delete), sed (-i), tree (-o), file (-C), and `git -C` (it would allow every
+//     git subcommand, push included).
+var hopReadOnly = []string{
+	"Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(grep:*)",
+	"Bash(wc:*)", "Bash(pwd)", "Bash(stat:*)", "Bash(which:*)",
+	"Bash(git status:*)", "Bash(git blame:*)",
 }
 
 // hardRule maps a keyword found in a prohibition to the deny patterns it compiles
@@ -156,6 +176,17 @@ func CompileRules(lines []string, priv Privilege) Policy {
 		}
 		if !matched {
 			p.Advisory = append(p.Advisory, line)
+		}
+	}
+	// Reads come last, so a rule that denies one (`don't cat ...` compiling to a
+	// deny) removes it here too. Claude would let the deny win anyway; keeping
+	// the lists disjoint makes the compiled policy say what actually happens.
+	// Restricted runs in plan mode, which has no approvals to skip.
+	if priv != PrivilegeRestricted {
+		for _, a := range hopReadOnly {
+			if !seen[a] {
+				p.AllowedTools = append(p.AllowedTools, a)
+			}
 		}
 	}
 	return p

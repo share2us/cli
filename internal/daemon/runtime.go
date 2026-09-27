@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	clicore "github.com/share2us/cli-core"
@@ -91,6 +92,9 @@ type Runtime struct {
 	ownsLAN   bool
 	ownsInbox bool
 	stop      context.CancelFunc
+	// hopRunning is set while a hop's agent run is in progress, so `s2u update`
+	// can leave the daemon alone rather than kill the run by restarting it.
+	hopRunning atomic.Bool
 }
 
 func (d Deps) logf(format string, args ...any) {
@@ -181,6 +185,13 @@ func (rt *Runtime) control() func(daemonctl.Request) daemonctl.Response {
 			}
 		case "owns-receiver":
 			return daemonctl.Response{OK: rt.ownsLAN || rt.ownsInbox, OwnsLAN: rt.ownsLAN, OwnsInbox: rt.ownsInbox}
+		case "detached":
+			// OK means the CLI started this daemon in the background (no service
+			// manager), so an update may restart it the same way.
+			return daemonctl.Response{OK: os.Getenv("S2U_DAEMON_DETACHED") == "1"}
+		case "busy":
+			// OK means a hop is running right now (restarting would kill it).
+			return daemonctl.Response{OK: rt.hopRunning.Load()}
 		case "stop":
 			if rt.stop != nil {
 				rt.stop()

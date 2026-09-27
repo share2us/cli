@@ -189,6 +189,14 @@ func parseClaudeResult(raw []byte) (string, string) {
 	return r.Result, r.SessionID
 }
 
+// hopNote tells the agent it is unattended. Verified 2026-09-27: Claude refuses,
+// even with an allowlist, a command that changes into another git repository and
+// then runs git (its hooks could run), and it refuses chained commands it cannot
+// check piece by piece. Refused means stuck, since nobody can approve.
+const hopNote = "This prompt reached you through Share2Us while nobody is at the keyboard: a command that needs approval is refused, not asked. " +
+	"Run commands one at a time from the project directory instead of chaining them with variables or `cd`. " +
+	"To look at files, including another repository's, use your Read, Grep and Glob tools rather than changing into it.\n"
+
 // buildClaudeInjectArgs assembles the `claude` args for a guarded injected run.
 // --disallowedTools is variadic, so it is placed immediately before -p (a flag)
 // which bounds it.
@@ -204,8 +212,10 @@ func buildClaudeInjectArgs(sessionID, prompt string, policy Policy, mode string,
 		args = append(args, "--fork-session")
 	}
 	args = append(args, "--permission-mode", mode)
-	if sp := policy.AppendSystemPrompt(); sp != "" {
-		args = append(args, "--append-system-prompt", sp)
+	args = append(args, "--append-system-prompt", hopNote+policy.AppendSystemPrompt())
+	if len(policy.AllowedTools) > 0 {
+		args = append(args, "--allowedTools")
+		args = append(args, policy.AllowedTools...)
 	}
 	if len(policy.DisallowedTools) > 0 {
 		args = append(args, "--disallowedTools")

@@ -12,6 +12,23 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **`s2u update` restarts the background service** so it runs the new version,
+  instead of leaving the old one running until the next reboot. It never
+  restarts in the middle of a hop (it says how to restart once the hop is done),
+  and a daemon you started by hand in a terminal is left for you to restart.
+- **Hops can run read-only commands without an approval.** An agent reached
+  through Share2Us has nobody to approve a command, so chained or piped reads
+  (`grep ... | head`) used to be refused. A short list of commands that only read
+  (`ls`, `cat`, `head`, `tail`, `grep`, `wc`, `pwd`, `stat`, `which`,
+  `git status`, `git blame`) now runs. It does not widen where a hop may read:
+  paths outside the project are still refused. Commands with a flag that writes
+  or runs something (`git diff --output`, `rg --pre`, `find -exec`, `sed -i`)
+  are not on the list. Restricted agents are unchanged. The hop is also told it
+  is unattended, and to read other repositories with Claude's own tools rather
+  than changing into them, which Claude refuses to do.
+
 ## [20260927180032] - 2026-09-27
 
 ### Changed

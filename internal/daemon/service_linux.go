@@ -202,6 +202,9 @@ func ServiceStart() error { return run("systemctl", "--user", "start", unitName)
 // ServiceStop stops the installed unit.
 func ServiceStop() error { return run("systemctl", "--user", "stop", unitName) }
 
+// ServiceRestart restarts the unit, so it runs the binary now on disk.
+func ServiceRestart() error { return run("systemctl", "--user", "restart", unitName) }
+
 // ServiceLogs tails the unit's journal, inheriting stdio.
 func ServiceLogs(follow bool) error {
 	args := []string{"--user", "-u", unitName, "-n", "50"}
