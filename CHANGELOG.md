@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260927174513] - 2026-09-27
+
 ### Added
 
 - **`s2u agent send --agent <id>`.** An agent id never changes, so it is the
