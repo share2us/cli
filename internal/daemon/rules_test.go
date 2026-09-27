@@ -71,7 +71,7 @@ func TestAppendSystemPrompt(t *testing.T) {
 
 func TestBuildClaudeInjectArgs(t *testing.T) {
 	p := Policy{DisallowedTools: []string{"Bash(git push:*)", "Bash(rm:*)"}, Advisory: []string{"be careful"}}
-	args := buildClaudeInjectArgs("sess-1", "do the thing", p, claudeMode(PrivilegeStandard))
+	args := buildClaudeInjectArgs("sess-1", "do the thing", p, claudeMode(PrivilegeStandard), true)
 	joined := strings.Join(args, " ")
 	// resume + restricted mode, never bypass.
 	if !strings.Contains(joined, "--resume sess-1") || !strings.Contains(joined, "--permission-mode acceptEdits") {

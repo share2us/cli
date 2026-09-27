@@ -57,6 +57,8 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentGoal(ctx, args[1:])
 	case "project":
 		return a.agentProject(ctx, args[1:])
+	case "hops":
+		return a.agentHops()
 	case "join":
 		return a.agentJoin(ctx, args[1:])
 	case "invites", "withdraw":
@@ -70,13 +72,15 @@ func (a app) agent(ctx context.Context, args []string) int {
 }
 
 func (a app) agentUsage() int {
-	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|pending|approve|allow|revoke|allowed|bind|unbind|bindings|goal|rules|policy>\n", commandName)
+	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|bindings|goal|rules|policy>\n", commandName)
 	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
-	fmt.Fprintf(a.stderr, "  send --device ID --session ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
+	fmt.Fprintf(a.stderr, "  send --agent ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
+	fmt.Fprintf(a.stderr, "       [--device ID] [--session ID]         or name the session instead; any id may be a\n                                             unique prefix, as `agent list` prints it\n")
 	fmt.Fprintf(a.stderr, "       [--project ID [--as AGENT-ID]]       to an agent in another account: both agents must\n                                             be members of that project. The sending agent is\n                                             the one bound to this directory unless --as names it.\n")
 	fmt.Fprintf(a.stderr, "  join <code>                                join a sharenet project with THIS session: type\n                                             !s2u agent join <code> in Claude Code or Codex\n")
 	fmt.Fprintf(a.stderr, "  project <project-id>                       a project's reachable member agents\n")
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
+	fmt.Fprintf(a.stderr, "  hops                                       hops this machine ran, and the session each ran in\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
 	fmt.Fprintf(a.stderr, "  approve <request-id>                       approve ONE pending request (no standing access)\n")
 	fmt.Fprintf(a.stderr, "  allow <sender-device-id>                   ALWAYS-allow a device (standing access)\n")
@@ -141,7 +145,7 @@ func (a app) agentBind(ctx context.Context, args []string) int {
 	if created {
 		verb = "bound"
 	}
-	fmt.Fprintf(a.stdout, "%s: %s session %s in %s (only this session is advertised)\n", verb, b.Tool, shorten(s.SessionID), b.Project)
+	fmt.Fprintf(a.stdout, "%s: %s session %s in %s (only this session is advertised)\n", verb, b.Tool, s.SessionID, b.Project)
 	// The id is what another owner invites into their project, so it is shown —
 	// it names the agent, and grants nothing on its own.
 	fmt.Fprintf(a.stdout, "agent id: %s\n", b.AgentID)
@@ -241,18 +245,22 @@ func (a app) agentList(ctx context.Context) int {
 		fmt.Fprintln(a.stdout, "No reachable agent sessions. Start the daemon with --agent-bridge on your other devices.")
 		return 0
 	}
+	// Full ids only: everything printed here can be pasted into `agent send`.
 	for _, s := range sessions {
-		fmt.Fprintf(a.stdout, "%s  %-8s  %-6s  %s  (device %s / %s, session %s)\n",
-			s.DeviceName, s.Tool, s.Status, s.Name, shorten(s.DeviceID), s.DeviceName, shorten(s.SessionID))
+		fmt.Fprintln(a.stdout, sessionLine(s))
 	}
 	return 0
 }
 
 func (a app) agentSend(ctx context.Context, args []string) int {
-	var deviceID, sessionID, prompt, tool, file, goalID, projectID, asAgent string
-	tool = "claude"
+	var deviceID, sessionID, agentID, prompt, tool, file, goalID, projectID, asAgent string
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--agent", "--to":
+			i++
+			if i < len(args) {
+				agentID = args[i]
+			}
 		case "--device":
 			i++
 			if i < len(args) {
@@ -298,8 +306,8 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 			return 2
 		}
 	}
-	if deviceID == "" || sessionID == "" || strings.TrimSpace(prompt) == "" {
-		fmt.Fprintf(a.stderr, "usage: %s agent send --device ID --session ID --prompt \"...\"\n", commandName)
+	if (agentID == "" && sessionID == "") || strings.TrimSpace(prompt) == "" {
+		fmt.Fprintf(a.stderr, "usage: %s agent send --agent ID --prompt \"...\"   (or --session ID [--device ID])\n", commandName)
 		return 2
 	}
 	client, ok := a.agentClient()
@@ -323,17 +331,27 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	// public key, and seal the prompt to it so the server relays ciphertext only.
 	// A project hop looks in the PROJECT's directory, which is where another
 	// account's agents appear; your own sessions list never shows them.
-	targetPub, found, err := a.resolveTarget(ctx, client, projectID, deviceID, sessionID)
+	targets, err := a.reachableTargets(ctx, client, projectID)
 	if err != nil {
 		return a.fail("resolve target", err)
 	}
-	if !found {
+	target, perr := pickTarget(targets, targetQuery{Agent: agentID, Device: deviceID, Session: sessionID})
+	if perr != nil {
+		fmt.Fprintln(a.stderr, perr)
 		if projectID != "" {
-			fmt.Fprintln(a.stderr, "no such reachable agent in that project; run `"+commandName+" agent project "+projectID+"`")
+			fmt.Fprintf(a.stderr, "see `%s agent project %s`\n", commandName, projectID)
 		} else {
-			fmt.Fprintln(a.stderr, "no such reachable session; run `"+commandName+" agent list`")
+			fmt.Fprintf(a.stderr, "see `%s agent list`\n", commandName)
 		}
 		return 1
+	}
+	deviceID, sessionID = target.DeviceID, target.SessionID
+	targetPub := target.PublicKey
+	if tool == "" {
+		tool = target.Tool
+	}
+	if tool == "" {
+		tool = "claude"
 	}
 	if targetPub == "" {
 		fmt.Fprintln(a.stderr, "target device has no encryption key; cannot inject (end-to-end encryption required)")
@@ -411,31 +429,58 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	return 0
 }
 
-// resolveTarget finds the target's device key: in the project's directory for a
-// project hop, in your own sessions otherwise.
-func (a app) resolveTarget(ctx context.Context, client *clicore.Client, projectID, deviceID, sessionID string) (string, bool, error) {
+// sessionLine is one `agent list` row: agent id first, then the full --device
+// and --session, so any part of it pastes into `agent send`.
+func sessionLine(s clicore.AgentSessionInfo) string {
+	agent := s.AgentID
+	if agent == "" {
+		agent = "-"
+	}
+	return fmt.Sprintf("%s  %-8s  %-11s  %s  (on %s)  --device %s --session %s",
+		agent, s.Tool, s.Status, s.Name, s.DeviceName, s.DeviceID, s.SessionID)
+}
+
+// reachableTargets is the directory a send picks from: the project's member
+// agents for a project hop (where another account's agents appear), your own
+// sessions otherwise.
+func (a app) reachableTargets(ctx context.Context, client *clicore.Client, projectID string) ([]agentTarget, error) {
 	if projectID != "" {
 		agents, err := client.ListProjectAgents(ctx, projectID)
 		if err != nil {
-			return "", false, err
+			return nil, err
 		}
-		for _, ag := range agents {
-			if ag.DeviceID == deviceID && ag.SessionID == sessionID {
-				return ag.DevicePublicKey, true, nil
-			}
-		}
-		return "", false, nil
+		return targetsFromProject(agents), nil
 	}
 	sessions, err := client.ListAgentSessions(ctx)
 	if err != nil {
-		return "", false, err
+		return nil, err
 	}
-	for _, s := range sessions {
-		if s.DeviceID == deviceID && s.SessionID == sessionID {
-			return s.DevicePublicKey, true, nil
+	return targetsFromSessions(sessions), nil
+}
+
+// agentHops shows the hops this machine ran, newest first, with the session each
+// ran in: a hop into a session whose window was open ran in a fork, and this is
+// where to find it.
+func (a app) agentHops() int {
+	hops, err := daemon.LoadHops(30)
+	if err != nil {
+		return a.fail("read hop log", err)
+	}
+	if len(hops) == 0 {
+		fmt.Fprintln(a.stdout, "No hops have run on this machine.")
+		return 0
+	}
+	for i := len(hops) - 1; i >= 0; i-- {
+		h := hops[i]
+		where := h.Mode
+		if h.Tool == "claude" && h.RanIn != "" {
+			where += "  claude --resume " + h.RanIn
+		} else if h.RanIn != "" {
+			where += "  session " + h.RanIn
 		}
+		fmt.Fprintf(a.stdout, "%s  %-6s  %s\n    %q\n", h.Time.Local().Format("2006-01-02 15:04"), h.Status, where, h.Prompt)
 	}
-	return "", false, nil
+	return 0
 }
 
 // agentProject lists a project's reachable member agents, with what `agent send

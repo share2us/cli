@@ -86,8 +86,11 @@ func coveringBinding(list []Binding, s DiscoveredSession) (Binding, bool) {
 
 // forkingRunner is a runner whose hops create a new session (Claude forks on
 // every headless resume) and can say which.
-type forkingRunner interface {
-	RunForked(ctx context.Context, sessionID, cwd, prompt string) (output, newSessionID string, err error)
+// sessionRunner is a runner that can resume a session in place and reports the
+// session the agent is in after the hop (Claude): live says a running process
+// holds the session, so it must be forked rather than resumed.
+type sessionRunner interface {
+	RunSession(ctx context.Context, sessionID, cwd, prompt string, live bool) (output, sessionAfter string, err error)
 }
 
 // bridgeRefused reports a server answer that retrying soon cannot change: the
@@ -325,10 +328,12 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 			cwd = b.Project
 		}
 	}
+	live := false
 	if sessions, derr := runner.Discover(ctx); derr == nil {
 		for _, s := range sessions {
 			if s.SessionID == req.TargetSessionID {
 				cwd = s.Project
+				live = s.Live
 				break
 			}
 		}
@@ -360,18 +365,31 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	_ = client.AgentReportResult(ctx, req.ID, "running", "")
 	var out string
 	var err error
-	if fr, ok := runner.(forkingRunner); ok {
-		var forked string
-		out, forked, err = fr.RunForked(ctx, req.TargetSessionID, cwd, prompt)
-		// The agent now IS the fork: move its binding, so the next hop continues
-		// this conversation and only the fork is advertised.
-		if moved, merr := MoveSession(req.TargetSessionID, forked); merr != nil {
-			deps.logf("agent-bridge: could not move the binding to session %s: %v", forked, merr)
-		} else if moved {
-			deps.logf("agent-bridge: agent continues in forked session %s", forked)
+	hop := HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
+		Target: req.TargetSessionID, RanIn: req.TargetSessionID, Mode: "ran", Prompt: env.Prompt}
+	if sr, ok := runner.(sessionRunner); ok {
+		var after string
+		out, after, err = sr.RunSession(ctx, req.TargetSessionID, cwd, prompt, live)
+		hop.Mode = "resumed"
+		if after != "" && after != req.TargetSessionID {
+			hop.Mode, hop.RanIn = "forked", after
+			// The agent now IS the fork: move its binding, so the next hop
+			// continues this conversation and only the fork is advertised.
+			if moved, merr := MoveSession(req.TargetSessionID, after); merr != nil {
+				deps.logf("agent-bridge: could not move the binding to session %s: %v", after, merr)
+			} else if moved {
+				deps.logf("agent-bridge: agent continues in forked session %s (see `share2us agent hops`)", after)
+			}
 		}
 	} else {
 		out, err = runner.Run(ctx, req.TargetSessionID, cwd, prompt)
+	}
+	hop.Status = "done"
+	if err != nil {
+		hop.Status = "failed"
+	}
+	if herr := AppendHop(hop); herr != nil {
+		deps.logf("agent-bridge: could not record hop %s: %v", req.ID, herr)
 	}
 	if len(out) > maxReportedResult {
 		out = out[:maxReportedResult]

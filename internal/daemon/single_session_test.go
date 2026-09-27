@@ -71,7 +71,7 @@ func TestParseClaudeResult(t *testing.T) {
 
 type forkRunner struct{ fakeRunner }
 
-func (f *forkRunner) RunForked(_ context.Context, sessionID, _, prompt string) (string, string, error) {
+func (f *forkRunner) RunSession(_ context.Context, sessionID, _, prompt string, _ bool) (string, string, error) {
 	f.ranSID, f.ranPrompt = sessionID, prompt
 	return "forked ok", sessionID + "-fork", nil
 }
