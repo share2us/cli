@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260927175144] - 2026-09-27
+
 ### Fixed
 
 - **Running the CLI's test suite no longer stops your installed service.** One
