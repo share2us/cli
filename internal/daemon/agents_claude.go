@@ -18,6 +18,9 @@ type DiscoveredSession struct {
 	Name      string
 	Project   string // cwd
 	Status    string // available | busy | unknown
+	// Live: a running tool process holds the session (Claude lists it in
+	// `claude agents`), so a hop cannot resume it in place and must fork it.
+	Live bool
 }
 
 // injectRunTimeout bounds a single injected run.
@@ -68,8 +71,11 @@ func parseClaudeAgents(out []byte) ([]DiscoveredSession, error) {
 			Name:      e.Name,
 			Project:   e.CWD,
 			Status:    claudeStatus(e),
+			Live:      true,
 		}
-		if prev, ok := byID[s.SessionID]; ok && s.Status == "unknown" && prev.Status != "unknown" {
+		// One session can be listed twice (its window and a background entry).
+		// The busier report wins, so every path shows the same presence.
+		if prev, ok := byID[s.SessionID]; ok && presenceRank(prev.Status) >= presenceRank(s.Status) {
 			continue
 		}
 		byID[s.SessionID] = s
@@ -81,6 +87,23 @@ func parseClaudeAgents(out []byte) ([]DiscoveredSession, error) {
 	return list, nil
 }
 
+// presenceRank orders presence for merging duplicate reports: busy beats
+// available (sending work to a busy session is the mistake to avoid), and any
+// concrete report beats unknown.
+func presenceRank(status string) int {
+	switch status {
+	case "busy":
+		return 2
+	case "available":
+		return 1
+	}
+	return 0
+}
+
+// claudeStatus is the one mapping from Claude's words to presence (ADR-041 §8).
+// Interactive entries: idle -> available, busy -> busy. Background entries:
+// running -> busy; blocked, idle, waiting -> available (a hop runs as its own
+// process, so a session waiting on its user can still take one).
 func claudeStatus(e claudeAgentEntry) string {
 	switch strings.ToLower(strings.TrimSpace(e.Status)) {
 	// The server's word for a session ready for work is "available" (ADR-041 §8);
@@ -112,7 +135,7 @@ func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string, forceRe
 	policy := CompileRules(LoadRules(cwd), priv)
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "claude", buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv))...)
+	cmd := exec.CommandContext(cctx, "claude", buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv), true)...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -120,24 +143,33 @@ func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string, forceRe
 	return string(out), err
 }
 
-// buildClaudeInjectArgs assembles the `claude` args for a guarded injected run.
-// --disallowedTools is variadic, so it is placed immediately before -p (a flag)
-// which bounds it.
-// RunClaudeInjectForked is RunClaudeInject that also reports the id of the fork
-// the run created, read from Claude's JSON result.
-func RunClaudeInjectForked(ctx context.Context, sessionID, cwd, prompt string, forceRestricted bool) (string, string, error) {
+// RunClaudeInjectSession runs a hop in sessionID and reports the session the
+// agent is in afterwards, read from Claude's JSON result: a new id when it forked
+// (fork, or Claude refused to resume in place), the same id when it resumed.
+func RunClaudeInjectSession(ctx context.Context, sessionID, cwd, prompt string, forceRestricted, fork bool) (string, string, error) {
 	priv := AgentPolicy(cwd, forceRestricted)
 	policy := CompileRules(LoadRules(cwd), priv)
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	args := append(buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv)), "--output-format", "json")
-	cmd := exec.CommandContext(cctx, "claude", args...)
-	if cwd != "" {
-		cmd.Dir = cwd
+	run := func(fork bool) ([]byte, error) {
+		args := append(buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv), fork), "--output-format", "json")
+		cmd := exec.CommandContext(cctx, "claude", args...)
+		if cwd != "" {
+			cmd.Dir = cwd
+		}
+		return cmd.CombinedOutput()
 	}
-	raw, err := cmd.CombinedOutput()
-	out, forked := parseClaudeResult(raw)
-	return out, forked, err
+	raw, err := run(fork)
+	if !fork && err != nil && claudeWantsFork(raw) {
+		raw, err = run(true) // it was live after all: branch a copy instead
+	}
+	out, after := parseClaudeResult(raw)
+	return out, after, err
+}
+
+// claudeWantsFork recognises Claude refusing to resume a live session in place.
+func claudeWantsFork(out []byte) bool {
+	return strings.Contains(string(out), "--fork-session")
 }
 
 // parseClaudeResult reads `claude -p --output-format json`: the result text and
@@ -157,13 +189,21 @@ func parseClaudeResult(raw []byte) (string, string) {
 	return r.Result, r.SessionID
 }
 
-func buildClaudeInjectArgs(sessionID, prompt string, policy Policy, mode string) []string {
+// buildClaudeInjectArgs assembles the `claude` args for a guarded injected run.
+// --disallowedTools is variadic, so it is placed immediately before -p (a flag)
+// which bounds it.
+func buildClaudeInjectArgs(sessionID, prompt string, policy Policy, mode string, fork bool) []string {
 	// A live session (interactive OR background) cannot be resumed in place
 	// headlessly — Claude refuses with "running as a background session ... add
 	// --fork-session to branch off a copy" (verified 2026-09-07 on a real run).
-	// Discovery only surfaces live sessions, so the injected run always branches a
-	// copy: same project + history, new session id.
-	args := []string{"--resume", sessionID, "--fork-session", "--permission-mode", mode}
+	// So a live session is forked: same project + history, new session id. One no
+	// process holds (a fork from an earlier hop) is resumed in place, which keeps
+	// its id and its history in one place (verified 2026-09-27).
+	args := []string{"--resume", sessionID}
+	if fork {
+		args = append(args, "--fork-session")
+	}
+	args = append(args, "--permission-mode", mode)
 	if sp := policy.AppendSystemPrompt(); sp != "" {
 		args = append(args, "--append-system-prompt", sp)
 	}
@@ -198,8 +238,8 @@ func (ClaudeRunner) Tool() string { return "claude" }
 func (ClaudeRunner) Discover(ctx context.Context) ([]DiscoveredSession, error) {
 	return DiscoverClaude(ctx)
 }
-func (r ClaudeRunner) RunForked(ctx context.Context, sessionID, cwd, prompt string) (string, string, error) {
-	return RunClaudeInjectForked(ctx, sessionID, cwd, prompt, r.Strict)
+func (r ClaudeRunner) RunSession(ctx context.Context, sessionID, cwd, prompt string, live bool) (string, string, error) {
+	return RunClaudeInjectSession(ctx, sessionID, cwd, prompt, r.Strict, live)
 }
 
 func (r ClaudeRunner) Run(ctx context.Context, sessionID, cwd, prompt string) (string, error) {

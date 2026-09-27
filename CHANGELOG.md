@@ -12,6 +12,31 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **`s2u agent send --agent <id>`.** An agent id never changes, so it is the
+  address to use. `--device` and `--session` still work, and are now optional:
+  any id can be a unique prefix, and the device is worked out from the session.
+- **`s2u agent hops`** lists the hops this machine ran, what each asked, and the
+  session it ran in, with the `claude --resume` command to open it.
+
+### Changed
+
+- **A Claude agent keeps its session id across hops.** A hop now resumes the
+  agent's session in place, keeping the same id and one history. It forks only
+  when the session is open in a Claude window (Claude cannot resume a live
+  session), which happens at most once: after that the agent is the fork.
+- **`s2u agent list` prints full ids**, agent id first, in the same form as
+  `s2u agent project`, so anything it prints can be pasted into `agent send`.
+- **Clearer errors from `agent send`.** An id that matches several sessions
+  lists them in full. One that matches nothing says to address the agent by id.
+
+### Fixed
+
+- **Presence no longer depends on listing order.** A Claude session listed twice
+  (its window and a background entry) showed busy or available depending on which
+  came last. Busy now wins.
+
 ## [20260926235211] - 2026-09-26
 
 ### Fixed
