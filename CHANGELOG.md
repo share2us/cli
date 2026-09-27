@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260927183655] - 2026-09-27
+
 ### Changed
 
 - **`s2u update` restarts the background service** so it runs the new version,
