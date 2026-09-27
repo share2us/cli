@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260927180032] - 2026-09-27
+
 ### Changed
 
 - **`s2u agent send` tells an offline agent from a missing one.** When the agent
