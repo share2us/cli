@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -335,9 +336,18 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	if err != nil {
 		return a.fail("resolve target", err)
 	}
-	target, perr := pickTarget(targets, targetQuery{Agent: agentID, Device: deviceID, Session: sessionID})
+	query := targetQuery{Agent: agentID, Device: deviceID, Session: sessionID}
+	target, perr := pickTarget(targets, query)
 	if perr != nil {
-		fmt.Fprintln(a.stderr, perr)
+		note := ""
+		if errors.Is(perr, errNoTarget) {
+			note = a.offlineNoteFor(ctx, client, projectID, query)
+		}
+		if note != "" {
+			fmt.Fprintln(a.stderr, note)
+		} else {
+			fmt.Fprintln(a.stderr, perr)
+		}
 		if projectID != "" {
 			fmt.Fprintf(a.stderr, "see `%s agent project %s`\n", commandName, projectID)
 		} else {
@@ -456,6 +466,27 @@ func (a app) reachableTargets(ctx context.Context, client *clicore.Client, proje
 		return nil, err
 	}
 	return targetsFromSessions(sessions), nil
+}
+
+// offlineNoteFor asks the directory again, this time with offline sessions, to
+// tell an agent that is offline from one that does not exist. Best effort: any
+// error just keeps the plain "no such agent" answer.
+func (a app) offlineNoteFor(ctx context.Context, client *clicore.Client, projectID string, q targetQuery) string {
+	var listed []agentTarget
+	if projectID != "" {
+		agents, err := client.ListProjectAgentsIncludingOffline(ctx, projectID)
+		if err != nil {
+			return ""
+		}
+		listed = targetsFromProject(agents)
+	} else {
+		sessions, err := client.ListAgentSessionsIncludingOffline(ctx)
+		if err != nil {
+			return ""
+		}
+		listed = targetsFromSessions(sessions)
+	}
+	return offlineNote(listed, q, time.Now())
 }
 
 // agentHops shows the hops this machine ran, newest first, with the session each

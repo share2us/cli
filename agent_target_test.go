@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	clicore "github.com/share2us/cli-core"
 )
@@ -116,5 +117,40 @@ func TestAgentSendRefusesUnclearTargets(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := (app{stdout: &out, stderr: &errb}).run(context.Background(), []string{"agent", "send", "--prompt", "hi"}); code != 2 {
 		t.Fatalf("no target should be a usage error, got %d: %s", code, errb.String())
+	}
+}
+
+// Moki's point 4: an agent whose daemon stopped heartbeating is "offline, last
+// seen ...", not "no such agent". The offline entry is never picked as a target.
+func TestAgentSendSaysOfflineNotMissing(t *testing.T) {
+	withCredential(t, "https://api.example.test")
+	seen := time.Now().Add(-12 * time.Minute).UTC().Format(time.RFC3339)
+	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/agent/sessions" {
+			t.Fatalf("send must stop before %s %s", r.Method, r.URL.Path)
+		}
+		if r.URL.Query().Get("include_offline") == "1" {
+			writeTestJSON(w, map[string]any{"sessions": []map[string]any{{
+				"agent_id": "agt_OFFLINEOFFLINEOFFLINE", "session_id": "gone-1", "tool": "claude",
+				"status": "offline", "device_id": "dev-9", "device_name": "laptop", "last_seen": seen,
+			}}})
+			return
+		}
+		writeTestJSON(w, map[string]any{"sessions": []any{}})
+	}))
+	var out, errb bytes.Buffer
+	code := app{stdout: &out, stderr: &errb}.run(context.Background(), []string{"agent", "send", "--agent", "agt_OFFLINEOFFLINEOFFLINE", "--prompt", "hi"})
+	if code == 0 || !strings.Contains(errb.String(), "is offline: last seen 12 minutes ago on laptop") {
+		t.Fatalf("code %d stderr %q", code, errb.String())
+	}
+}
+
+func TestOfflineEntriesAreNeverTargets(t *testing.T) {
+	targets := []agentTarget{{AgentID: "agt_OFFLINEOFFLINEOFFLINE", SessionID: "gone-1", Status: "offline"}}
+	if _, err := pickTarget(targets, targetQuery{Agent: "agt_OFFLINEOFFLINEOFFLINE"}); err == nil {
+		t.Fatal("an offline session was picked as a target")
+	}
+	if note := offlineNote(targets, targetQuery{Agent: "agt_ZZZZZZZZ"}, time.Now()); note != "" {
+		t.Fatalf("an unrelated query got an offline note: %q", note)
 	}
 }
