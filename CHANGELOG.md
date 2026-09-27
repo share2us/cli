@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260927205644] - 2026-09-27
+
 ### Fixed
 
 - **Windows: `s2u update` now finds the running service on any display
