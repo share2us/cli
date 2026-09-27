@@ -58,7 +58,7 @@ func TestDaemonUnknownSubcommand(t *testing.T) {
 func TestDaemonInstallAsksAndRecordsReceiveSettings(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 
 	var errOut bytes.Buffer
 	a := app{stdout: io.Discard, stderr: &errOut, stdin: strings.NewReader("y\n" + filepath.Join(home, "inbox") + "\n"),
@@ -90,7 +90,7 @@ func TestDaemonInstallAsksAndRecordsReceiveSettings(t *testing.T) {
 // the question does not come back.
 func TestDaemonInstallDefaultsToNotAutoDownloading(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 
 	var errOut bytes.Buffer
 	a := app{stdout: io.Discard, stderr: &errOut, stdin: strings.NewReader("\n"),
@@ -118,7 +118,7 @@ func TestDaemonInstallDefaultsToNotAutoDownloading(t *testing.T) {
 // to ask and MUST NOT hang on a prompt.
 func TestDaemonInstallDoesNotPromptWithoutATerminal(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 
 	var errOut bytes.Buffer
 	a := app{stdout: io.Discard, stderr: &errOut, stdin: strings.NewReader(""),
@@ -137,7 +137,7 @@ func TestDaemonInstallDoesNotPromptWithoutATerminal(t *testing.T) {
 // Somebody who has already chosen must not be asked again on every reinstall.
 func TestDaemonInstallDoesNotReAskAnAnsweredQuestion(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	if err := clicore.SetReceiveAuto(false); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestDaemonInstallDoesNotReAskAnAnsweredQuestion(t *testing.T) {
 // --dest answers the folder question on the command line.
 func TestDaemonInstallSkipsFolderQuestionWhenDestGiven(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 
 	var errOut bytes.Buffer
 	a := app{stdout: io.Discard, stderr: &errOut, stdin: strings.NewReader("y\n"),

@@ -20,7 +20,7 @@ const unitName = "s2u-daemon.service"
 // unitPath returns the per-user systemd unit path
 // ($XDG_CONFIG_HOME/systemd/user/s2u-daemon.service, default ~/.config/...).
 func unitPath() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := userConfigDir()
 	if err != nil {
 		return "", err
 	}

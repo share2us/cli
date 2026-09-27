@@ -127,7 +127,7 @@ const bindingsVersion = 1
 // BindingsPath is where the local whitelist lives: beside the enforced policies,
 // outside any project, so an injected run cannot bind itself into visibility.
 func BindingsPath() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := userConfigDir()
 	if err != nil {
 		return "", err
 	}
