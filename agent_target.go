@@ -4,8 +4,10 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	clicore "github.com/share2us/cli-core"
 )
@@ -18,12 +20,13 @@ import (
 // agentTarget is one reachable session, from either directory.
 type agentTarget struct {
 	AgentID, SessionID, DeviceID, DeviceName, Tool, Status, PublicKey string
+	LastSeen                                                          string
 }
 
 func targetsFromSessions(list []clicore.AgentSessionInfo) []agentTarget {
 	out := make([]agentTarget, 0, len(list))
 	for _, s := range list {
-		out = append(out, agentTarget{s.AgentID, s.SessionID, s.DeviceID, s.DeviceName, s.Tool, s.Status, s.DevicePublicKey})
+		out = append(out, agentTarget{s.AgentID, s.SessionID, s.DeviceID, s.DeviceName, s.Tool, s.Status, s.DevicePublicKey, s.LastSeen})
 	}
 	return out
 }
@@ -31,7 +34,7 @@ func targetsFromSessions(list []clicore.AgentSessionInfo) []agentTarget {
 func targetsFromProject(list []clicore.ProjectAgentAddress) []agentTarget {
 	out := make([]agentTarget, 0, len(list))
 	for _, s := range list {
-		out = append(out, agentTarget{s.AgentID, s.SessionID, s.DeviceID, "", s.Tool, s.Status, s.DevicePublicKey})
+		out = append(out, agentTarget{s.AgentID, s.SessionID, s.DeviceID, "", s.Tool, s.Status, s.DevicePublicKey, s.LastSeen})
 	}
 	return out
 }
@@ -50,11 +53,18 @@ func idMatches(full, q string) bool {
 	return full == q || (len(q) >= minPrefix && strings.HasPrefix(full, q))
 }
 
+// errNoTarget marks "nothing matched", as opposed to "several did": only then is
+// it worth asking whether the agent is merely offline.
+var errNoTarget = errors.New("no reachable agent matches")
+
 // pickTarget returns the one target the query names, or an error saying why not:
 // nothing matches, or more than one does (listing them, in full).
 func pickTarget(targets []agentTarget, q targetQuery) (agentTarget, error) {
 	var hits []agentTarget
 	for _, t := range targets {
+		if t.Status == "offline" {
+			continue // listed only to explain a miss; not a target
+		}
 		if idMatches(t.AgentID, q.Agent) && idMatches(t.DeviceID, q.Device) && idMatches(t.SessionID, q.Session) {
 			hits = append(hits, t)
 		}
@@ -63,11 +73,10 @@ func pickTarget(targets []agentTarget, q targetQuery) (agentTarget, error) {
 	case 1:
 		return hits[0], nil
 	case 0:
-		msg := "no reachable agent matches"
 		if q.Agent == "" && q.Session != "" {
-			msg += ". A Claude agent's session id changes when a hop has to fork its session, so address it by agent id instead: --agent AGENT-ID"
+			return agentTarget{}, fmt.Errorf("%w. A Claude agent's session id changes when a hop has to fork its session, so address it by agent id instead: --agent AGENT-ID", errNoTarget)
 		}
-		return agentTarget{}, fmt.Errorf("%s", msg)
+		return agentTarget{}, errNoTarget
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d reachable sessions match; give more of an id:", len(hits))
@@ -83,4 +92,40 @@ func targetFlags(t agentTarget) string {
 		return fmt.Sprintf("--agent %s  (--device %s --session %s)", t.AgentID, t.DeviceID, t.SessionID)
 	}
 	return fmt.Sprintf("--device %s --session %s", t.DeviceID, t.SessionID)
+}
+
+// offlineNote explains a miss when the agent exists but its daemon has stopped
+// heartbeating: the listing that includes offline sessions has it. "" when it
+// does not, so the caller keeps its "no such agent" message.
+func offlineNote(listed []agentTarget, q targetQuery, now time.Time) string {
+	for _, t := range listed {
+		if t.Status != "offline" || !idMatches(t.AgentID, q.Agent) || !idMatches(t.DeviceID, q.Device) || !idMatches(t.SessionID, q.Session) {
+			continue
+		}
+		who := t.AgentID
+		if who == "" {
+			who = "session " + t.SessionID
+		}
+		when := "a while ago"
+		if seen, err := time.Parse(time.RFC3339, t.LastSeen); err == nil {
+			when = agoString(now.Sub(seen)) + " ago"
+		}
+		where := ""
+		if t.DeviceName != "" {
+			where = " on " + t.DeviceName
+		}
+		return fmt.Sprintf("%s is offline: last seen %s%s. A hop cannot reach it until its machine's Share2Us service is running again.", who, when, where)
+	}
+	return ""
+}
+
+func agoString(d time.Duration) string {
+	switch {
+	case d < 2*time.Minute:
+		return "a minute"
+	case d < 2*time.Hour:
+		return fmt.Sprintf("%d minutes", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%d hours", int(d.Hours()))
+	}
 }

@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **`s2u agent send` tells an offline agent from a missing one.** When the agent
+  you name exists but its machine has stopped checking in, it says so, with when
+  it was last seen, instead of "no reachable agent matches". Needs a server with
+  this change; against an older one the message is as before.
+
 ## [20260927175144] - 2026-09-27
 
 ### Fixed
