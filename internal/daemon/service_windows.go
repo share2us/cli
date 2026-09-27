@@ -142,11 +142,20 @@ func ServiceStart() error { return run("schtasks", "/run", "/tn", taskName) }
 // in daemon.go) is preferred; this is the service-manager fallback.
 func ServiceStop() error { return run("schtasks", "/end", "/tn", taskName) }
 
-// ServiceActive reports whether the scheduled task is running.
+// ServiceActive reports whether the scheduled task is running. It asks
+// PowerShell for the task's State, an enum name ("Ready", "Running") that
+// Windows does not translate; schtasks prints the status in the display
+// language, so matching its "Running" failed on non-English Windows. Verified on
+// Windows 10 (19045), 2026-09-28: Ready when stopped, Running when started,
+// nothing for a missing task.
 func ServiceActive() bool {
-	out, err := exec.Command("schtasks", "/query", "/tn", taskName, "/fo", "LIST").CombinedOutput()
-	return err == nil && strings.Contains(string(out), "Running")
+	out, err := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
+		"(Get-ScheduledTask -TaskName '"+taskName+"' -ErrorAction SilentlyContinue).State").Output()
+	return err == nil && taskRunning(string(out))
 }
+
+// taskRunning reads Get-ScheduledTask's State output.
+func taskRunning(state string) bool { return strings.TrimSpace(state) == "Running" }
 
 // ServiceRestart ends the running instance and starts the task again, so it runs
 // the binary now on disk.

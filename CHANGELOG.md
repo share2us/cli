@@ -12,6 +12,18 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Windows: `s2u update` now finds the running service on any display
+  language.** It read `schtasks`' "Running", which Windows translates, so on a
+  non-English system the service was never restarted after an update. It now
+  reads the scheduled task's state, which is not translated. Verified on
+  Windows 10: the update restarted the task onto the new version.
+- **Running the test suite on Windows no longer touches your real config.** Tests
+  set only `XDG_CONFIG_HOME`, which Windows ignores, so they wrote bindings, the
+  hop log, `config.json` and `credentials.json` into your own `%AppData%`. Only
+  contributors running `go test` on Windows were affected.
+
 ## [20260927183655] - 2026-09-27
 
 ### Changed

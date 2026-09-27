@@ -36,7 +36,7 @@ type HopRecord struct {
 }
 
 func hopLogPath() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := userConfigDir()
 	if err != nil {
 		return "", err
 	}

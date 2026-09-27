@@ -80,7 +80,7 @@ type SenderPins struct {
 // SenderPinsPath lives beside the bindings and enforced policies, outside any
 // project, so an injected run cannot rewrite who this machine trusts.
 func SenderPinsPath() (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := userConfigDir()
 	if err != nil {
 		return "", err
 	}

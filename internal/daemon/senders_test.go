@@ -193,7 +193,5 @@ func TestPinStoreIsPrivateAndOutsideProjects(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("pin store mode = %v, want 0600", info.Mode().Perm())
-	}
+	wantPrivate(t, info.Mode(), "pin store")
 }

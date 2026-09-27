@@ -94,7 +94,7 @@ type agentPolicyFile struct {
 // inside a git clone also gets committed, which is fine for team defaults and
 // wrong for anything enforced.
 func EnforcedPolicyPath(projectDir string) (string, error) {
-	base, err := os.UserConfigDir()
+	base, err := userConfigDir()
 	if err != nil {
 		return "", err
 	}

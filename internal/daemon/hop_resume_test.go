@@ -100,9 +100,11 @@ func TestHopLogTrimsAndTruncates(t *testing.T) {
 		t.Fatalf("LoadHops(3) = %d", len(last))
 	}
 	path, _ := hopLogPath()
-	if st, err := os.Stat(path); err != nil || st.Mode().Perm() != 0o600 {
-		t.Fatalf("hop log holds prompts in the clear and must be 0600: %v %v", st.Mode(), err)
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
 	}
+	wantPrivate(t, st.Mode(), "hop log (it holds prompts in the clear)")
 }
 
 // Moki's point 6: one session listed twice (its window and a background entry)

@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -27,7 +28,21 @@ func TestMain(m *testing.M) {
 		serviceCallsMu.Unlock()
 		return nil
 	}
-	os.Exit(m.Run())
+	// Config lives where the test says (XDG_CONFIG_HOME, on every OS), else in a
+	// scratch dir: never the machine's real config.
+	scratch, err := os.MkdirTemp("", "s2u-daemon-test-config-*")
+	if err != nil {
+		panic(err)
+	}
+	userConfigDir = func() (string, error) {
+		if x := os.Getenv("XDG_CONFIG_HOME"); x != "" {
+			return x, nil
+		}
+		return scratch, nil
+	}
+	code := m.Run()
+	_ = os.RemoveAll(scratch)
+	os.Exit(code)
 }
 
 // realRunForTest lets one test use the real runner, for a test that puts its own
@@ -37,4 +52,17 @@ func realRunForTest(t *testing.T) {
 	stub := run
 	run = runCommand
 	t.Cleanup(func() { run = stub })
+}
+
+// wantPrivate checks a file is 0600 where the OS has Unix permissions. Windows
+// has none to check (Go reports -rw-rw-rw-); there the file is private because
+// it lives in the user's own profile.
+func wantPrivate(t *testing.T, mode os.FileMode, what string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		return
+	}
+	if mode.Perm() != 0o600 {
+		t.Fatalf("%s mode = %v, want 0600", what, mode.Perm())
+	}
 }

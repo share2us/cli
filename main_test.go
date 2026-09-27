@@ -96,7 +96,7 @@ func TestCLIErrorMessageFor429AndCloudflare(t *testing.T) {
 }
 
 func TestAuthClientHonorsAPITokenEnv(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // no on-disk credential
+	setConfigHome(t, t.TempDir()) // no on-disk credential
 	t.Setenv("SHARE2US_API_BASE", "")
 	t.Setenv("SHARE2US_SHARE_BASE_URL", "")
 	t.Setenv("SHARE2US_BASE_URL", "")
@@ -121,7 +121,7 @@ func TestAuthClientHonorsAPITokenEnv(t *testing.T) {
 }
 
 func TestConfigCommands(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	t.Setenv("SHARE2US_API_BASE", "")
 	t.Setenv("SHARE2US_SHARE_BASE_URL", "")
 	t.Setenv("SHARE2US_SHARE_BASE", "")
@@ -310,7 +310,7 @@ func TestSuccessfulInteractiveCommandPrintsUpdateNotice(t *testing.T) {
 }
 
 func TestLoginHostPersistsConfig(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	t.Setenv("SHARE2US_API_BASE", "")
 	t.Setenv("SHARE2US_DEVICE_NAME", "Env Device")
 	var deviceRequest struct {
@@ -399,7 +399,7 @@ func TestLoginHostPersistsConfig(t *testing.T) {
 }
 
 func TestLoginDeviceLimitCanSignOutAndContinue(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	t.Setenv("SHARE2US_API_BASE", "")
 	polls := 0
 	revoked := false
@@ -1806,7 +1806,7 @@ func TestListTableIncludesSerialPathAndWritesIndex(t *testing.T) {
 }
 
 func TestResolveShareRef(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	if got, err := resolveShareRef("pub-1"); err != nil || got != "pub-1" {
 		t.Fatalf("public id resolve = %q, %v", got, err)
 	}
@@ -2051,7 +2051,7 @@ func TestParseUploadRejectsMissingPasswordValue(t *testing.T) {
 }
 
 func TestWhoamiNotLoggedIn(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -2168,7 +2168,7 @@ func TestMCPTokenJSONAndURLOverrides(t *testing.T) {
 }
 
 func TestMCPTokenNotLoggedIn(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -2234,7 +2234,7 @@ func enableP2P(t *testing.T) {
 // BEFORE it even looks at credentials — and it must do so for both the `p2p`
 // group and the legacy `stream` alias.
 func TestP2PDisabledByDefault(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	for _, args := range [][]string{
 		{"stream", "movie.mov"},
 		{"p2p", "send", "movie.mov"},
@@ -2265,7 +2265,7 @@ func TestP2PHiddenFromUsageWhenDisabled(t *testing.T) {
 
 func TestStreamRequiresLogin(t *testing.T) {
 	enableP2P(t)
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -2282,7 +2282,7 @@ func TestStreamRequiresLogin(t *testing.T) {
 
 func TestP2PRecvRequiresLogin(t *testing.T) {
 	enableP2P(t)
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -2316,7 +2316,7 @@ func TestPairingCodeRoundTrip(t *testing.T) {
 }
 
 func TestReceiveCommandRequiresLogin(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 
@@ -2438,7 +2438,7 @@ func withMockAPI(t *testing.T, handler http.Handler) {
 
 func withCredential(t *testing.T, apiBase string) {
 	t.Helper()
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	if err := clicore.SaveCredential(clicore.Credential{APIBase: apiBase, Token: "s2s_test", Email: "user@example.test"}); err != nil {
 		t.Fatalf("save credential: %v", err)
 	}
@@ -2843,7 +2843,7 @@ func TestTrustDeviceWithMFAVerifiesCodeThenCachesSignedList(t *testing.T) {
 
 func TestTrustDeviceWithMFARefusesAPITokensAndBlankCancels(t *testing.T) {
 	_, srv := newFakeTrustAPI(t)
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	t.Setenv("SHARE2US_API_BASE", srv.URL)
 	if err := clicore.SaveCredential(clicore.Credential{APIBase: srv.URL, Token: "s2u_pat_agent", Email: "agent@example.test"}); err != nil {
 		t.Fatal(err)
@@ -3081,7 +3081,7 @@ func TestGetDoesNotUnlockOnOtherRefusals(t *testing.T) {
 // Not signed in: there is nothing to mint with, so say what to do instead of
 // failing with a bare 403.
 func TestGetPrivateShareWithoutLoginExplains(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	t.Setenv("SHARE2US_API_BASE", "https://api.staging.example.test")
 	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/unlock") {
@@ -3855,7 +3855,7 @@ func TestExplicitOutputFileIsStillAFile(t *testing.T) {
 
 // receiveDir reports configuration as a folder and an explicit value as not.
 func TestReceiveDirReportsWhetherItIsAFolder(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	setConfigHome(t, t.TempDir())
 	a := app{}
 	if _, isFolder := a.receiveDir(""); !isFolder {
 		t.Fatal("the configured receive directory was not reported as a folder")

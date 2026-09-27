@@ -38,3 +38,11 @@ func TestXMLEscapeWindows(t *testing.T) {
 		t.Fatalf("xmlEscape = %q", got)
 	}
 }
+
+func TestTaskRunningReadsTheUntranslatedState(t *testing.T) {
+	for in, want := range map[string]bool{"Running\r\n": true, "Running": true, "Ready\r\n": false, "": false, "Wird ausgeführt": false} {
+		if got := taskRunning(in); got != want {
+			t.Errorf("taskRunning(%q) = %v, want %v", in, got, want)
+		}
+	}
+}

@@ -126,9 +126,7 @@ func TestEnforcedPolicyLivesOutsideTheProject(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("policy mode = %v, want 0600", info.Mode().Perm())
-	}
+	wantPrivate(t, info.Mode(), "policy")
 }
 
 func TestTwoProjectsWithTheSameNameDoNotShareAPolicy(t *testing.T) {
