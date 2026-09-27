@@ -11,4 +11,3 @@ package daemon
 func LingerSupported() bool { return false }
 func LingerEnabled() bool   { return true }
 func EnableLinger() error   { return nil }
-func ServiceActive() bool   { return false }

@@ -178,6 +178,18 @@ func ServiceStart() error {
 	return run("launchctl", "kickstart", "gui/"+strconv.Itoa(os.Getuid())+"/"+launchdLabel)
 }
 
+// ServiceActive reports whether launchd is running the agent.
+func ServiceActive() bool {
+	out, err := exec.Command("launchctl", "print", "gui/"+strconv.Itoa(os.Getuid())+"/"+launchdLabel).CombinedOutput()
+	return err == nil && strings.Contains(string(out), "state = running")
+}
+
+// ServiceRestart kills and restarts the agent (-k), so it runs the binary now on
+// disk.
+func ServiceRestart() error {
+	return run("launchctl", "kickstart", "-k", "gui/"+strconv.Itoa(os.Getuid())+"/"+launchdLabel)
+}
+
 func ServiceStop() error {
 	// Stopping via the control socket is preferred (daemon.go tries that first);
 	// this is the service-manager fallback.

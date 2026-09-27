@@ -142,6 +142,19 @@ func ServiceStart() error { return run("schtasks", "/run", "/tn", taskName) }
 // in daemon.go) is preferred; this is the service-manager fallback.
 func ServiceStop() error { return run("schtasks", "/end", "/tn", taskName) }
 
+// ServiceActive reports whether the scheduled task is running.
+func ServiceActive() bool {
+	out, err := exec.Command("schtasks", "/query", "/tn", taskName, "/fo", "LIST").CombinedOutput()
+	return err == nil && strings.Contains(string(out), "Running")
+}
+
+// ServiceRestart ends the running instance and starts the task again, so it runs
+// the binary now on disk.
+func ServiceRestart() error {
+	_ = ServiceStop()
+	return ServiceStart()
+}
+
 // ServiceLogs tails the daemon's log file via PowerShell (Windows has no tail).
 func ServiceLogs(follow bool) error {
 	log := windowsLogPath()

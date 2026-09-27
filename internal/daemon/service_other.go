@@ -14,3 +14,5 @@ func ServiceUninstall(io.Writer) error               { return ErrServiceUnsuppor
 func ServiceStart() error                            { return ErrServiceUnsupported }
 func ServiceStop() error                             { return ErrServiceUnsupported }
 func ServiceLogs(bool) error                         { return ErrServiceUnsupported }
+func ServiceActive() bool                            { return false }
+func ServiceRestart() error                          { return ErrServiceUnsupported }

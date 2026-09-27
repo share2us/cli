@@ -365,6 +365,8 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	_ = client.AgentReportResult(ctx, req.ID, "running", "")
 	var out string
 	var err error
+	rt.hopRunning.Store(true)
+	defer rt.hopRunning.Store(false)
 	hop := HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 		Target: req.TargetSessionID, RanIn: req.TargetSessionID, Mode: "ran", Prompt: env.Prompt}
 	if sr, ok := runner.(sessionRunner); ok {

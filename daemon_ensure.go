@@ -72,20 +72,29 @@ func (a app) ensureDaemon() (daemonState, error) {
 		}
 	}
 	// No service manager (or it would not start): run it detached for now.
+	if err := startDetachedDaemon(exe); err != nil {
+		return daemonNotStarted, errors.Join(serviceErr, err)
+	}
+	if waitForDaemon(8 * time.Second) {
+		return daemonDetachedStarted, nil
+	}
+	return daemonNotStarted, errors.Join(serviceErr, errors.New("the background receiver did not start"))
+}
+
+// startDetachedDaemon starts `daemon run` in the background, logging to the
+// cache dir, marked so a later update can restart it the same way.
+func startDetachedDaemon(exe string) error {
 	cmd := exec.Command(exe, "daemon", "run")
+	cmd.Env = append(os.Environ(), detachedMarker)
 	if logf, lerr := daemonLogFile(); lerr == nil {
 		cmd.Stdout, cmd.Stderr = logf, logf
 		defer logf.Close()
 	}
 	detach(cmd)
 	if err := cmd.Start(); err != nil {
-		return daemonNotStarted, errors.Join(serviceErr, err)
+		return err
 	}
-	_ = cmd.Process.Release()
-	if waitForDaemon(8 * time.Second) {
-		return daemonDetachedStarted, nil
-	}
-	return daemonNotStarted, errors.Join(serviceErr, errors.New("the background receiver did not start"))
+	return cmd.Process.Release()
 }
 
 // daemonLogFile is where a detached daemon writes, since it has no terminal.
