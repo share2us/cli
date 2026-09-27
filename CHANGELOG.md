@@ -12,6 +12,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Running the CLI's test suite no longer stops your installed service.** One
+  test called the real `systemctl --user disable --now s2u-daemon.service`, which
+  stopped and disabled the daemon on a developer's machine. Tests now never reach
+  systemctl, launchctl or schtasks. Only contributors running `go test` were
+  affected.
+
 ## [20260927174513] - 2026-09-27
 
 ### Added
