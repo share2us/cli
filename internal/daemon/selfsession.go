@@ -160,7 +160,7 @@ func parentPID(pid int) (int, error) {
 		return strconv.Atoi(fields[1])
 	}
 	if runtime.GOOS == "windows" {
-		return 0, errors.New("process ancestry is not supported on windows yet")
+		return windowsParentPID(pid)
 	}
 	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(pid)).Output()
 	if err != nil {

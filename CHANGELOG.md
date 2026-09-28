@@ -12,6 +12,18 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **`s2u agent join` on Windows.** It finds the Claude Code session it runs in
+  from the process tree, as on Linux and macOS. Codex's session cannot be told
+  from its process on Windows, so name it: `s2u agent join <code> --session <id>`.
+  `--session` works everywhere, and when the session cannot be found `join` lists
+  the live sessions in the current folder with the exact line to run.
+
+### Changed
+
+- **`agent join` says the request expires in 60 minutes** if nobody approves it.
+
 ## [20260928195436] - 2026-09-28
 
 ### Changed (breaking)
