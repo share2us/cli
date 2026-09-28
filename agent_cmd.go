@@ -98,6 +98,33 @@ func (a app) agentUsage() int {
 	return 2
 }
 
+// printJoinCandidates lists the live sessions in the current folder with the
+// exact line that joins each, for when the session could not be found from the
+// process tree (Codex on Windows has no way to tell which session file a process
+// holds).
+func (a app) printJoinCandidates(ctx context.Context, code string) {
+	cwd, _ := os.Getwd()
+	var here []daemon.DiscoveredSession
+	for _, r := range []daemon.AgentRunner{daemon.ClaudeRunner{}, daemon.CodexRunner{}, daemon.GeminiRunner{}} {
+		found, err := r.Discover(ctx)
+		if err != nil {
+			continue
+		}
+		for _, s := range found {
+			if daemon.SameProject(s.Project, cwd) {
+				here = append(here, s)
+			}
+		}
+	}
+	if len(here) == 0 {
+		return
+	}
+	fmt.Fprintln(a.stderr, "Or name the session. Live sessions in this folder:")
+	for _, s := range here {
+		fmt.Fprintf(a.stderr, "  %-6s %s  (%s)\n    s2u agent join %s --session %s\n", s.Tool, s.SessionID, s.Name, code, s.SessionID)
+	}
+}
+
 // localSession finds a live session on THIS machine by id (or unique prefix),
 // across every tool adapter. Binding is a local act: it decides what this
 // machine is willing to advertise, so it must not require the server.
@@ -577,16 +604,47 @@ func portalURLFor(apiBase string) string {
 // request that a host approves in the portal. This is the CLI's one exception to
 // portal-only sharenet management: it binds and asks; it decides nothing.
 func (a app) agentJoin(ctx context.Context, args []string) int {
-	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
-		fmt.Fprintf(a.stderr, "usage: %s agent join <code>   (type it inside the agent session: !s2u agent join <code>)\n", commandName)
+	code, sessionArg := "", ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--session":
+			i++
+			if i < len(args) {
+				sessionArg = strings.TrimSpace(args[i])
+			}
+		default:
+			if code == "" {
+				code = strings.TrimSpace(args[i])
+			} else {
+				code = ""
+				i = len(args)
+			}
+		}
+	}
+	if code == "" {
+		fmt.Fprintf(a.stderr, "usage: %s agent join <code> [--session ID]   (type it inside the agent session: !s2u agent join <code>)\n", commandName)
 		return 2
 	}
-	code := strings.TrimSpace(args[0])
-	sess, err := daemon.FindOwnSession(ctx)
-	if err != nil {
-		// The line people paste is s2u (the installed alias), whatever this binary is called.
-		fmt.Fprintf(a.stderr, "Could not find the agent session this is running in. Paste it into the Claude Code or Codex session you want to add:\n  !s2u agent join %s\n", code)
-		return 1
+	var sess daemon.DiscoveredSession
+	if sessionArg != "" {
+		// Named explicitly: where the session cannot be found from the process
+		// tree (Codex on Windows, owner 2026-09-29), or to pick one on purpose.
+		found, ok := a.localSession(ctx, sessionArg)
+		if !ok {
+			fmt.Fprintf(a.stderr, "No single live session here matches %q.\n", sessionArg)
+			a.printJoinCandidates(ctx, code)
+			return 1
+		}
+		sess = found
+	} else {
+		found, err := daemon.FindOwnSession(ctx)
+		if err != nil {
+			// The line people paste is s2u (the installed alias), whatever this binary is called.
+			fmt.Fprintf(a.stderr, "Could not find the agent session this is running in. Paste it into the Claude Code or Codex session you want to add:\n  !s2u agent join %s\n", code)
+			a.printJoinCandidates(ctx, code)
+			return 1
+		}
+		sess = found
 	}
 	client, ok := a.agentClient()
 	if !ok {
@@ -629,6 +687,7 @@ func (a app) agentJoin(ctx context.Context, args []string) int {
 	default:
 		fmt.Fprintf(a.stdout, "Asked to join %q in %q. A host approves it in the portal; they see your email (%s).\n", res.ProjectName, res.SharenetName, credential.Email)
 		fmt.Fprintln(a.stdout, "Once approved, you are a member of the sharenet and this agent is in the project.")
+		fmt.Fprintln(a.stdout, "If nobody approves it within 60 minutes the request expires; ask the host for a new code then.")
 	}
 	// The agent can only receive work while the daemon runs: make sure it does.
 	a.ensureAgentReachable()

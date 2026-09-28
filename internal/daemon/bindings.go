@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -324,4 +325,14 @@ func AgentIDForProject(list []Binding, project string) (string, bool) {
 		id = b.AgentID
 	}
 	return id, id != ""
+}
+
+// SameProject reports whether two paths name the same project folder, the way
+// bindings compare them.
+func SameProject(a, b string) bool {
+	na, nb := normalizeProject(a), normalizeProject(b)
+	if runtime.GOOS == "windows" {
+		return na != "" && strings.EqualFold(na, nb) // Windows paths are case-insensitive
+	}
+	return na != "" && na == nb
 }
