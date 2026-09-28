@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260928073228] - 2026-09-28
+
 ### Fixed
 
 - **The background service uses far less CPU.** Every 30 seconds it asked each
