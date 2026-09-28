@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260928211925] - 2026-09-28
+
 ### Added
 
 - **`s2u agent join` on Windows.** It finds the Claude Code session it runs in
