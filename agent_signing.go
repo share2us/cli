@@ -62,6 +62,9 @@ func signHop(in *clicore.AgentInjectInput, credential clicore.Credential, now ti
 	in.Tool = strings.ToLower(strings.TrimSpace(in.Tool))
 	in.SealedFileKey = strings.TrimSpace(in.SealedFileKey)
 	in.GoalID = strings.TrimSpace(in.GoalID)
+	in.ProjectID = strings.TrimSpace(in.ProjectID)
+	in.SenderAgentID = strings.TrimSpace(in.SenderAgentID)
+	in.TargetAgentID = strings.TrimSpace(in.TargetAgentID)
 	issued := now.UTC().Truncate(time.Second)
 
 	sig, err := clicore.SignHop(clicore.HopClaims{
@@ -74,6 +77,9 @@ func signHop(in *clicore.AgentInjectInput, credential clicore.Credential, now ti
 		GoalID:          in.GoalID,
 		IssuedAt:        issued,
 		Nonce:           nonce,
+		ProjectID:       in.ProjectID,
+		SenderAgentID:   in.SenderAgentID,
+		TargetAgentID:   in.TargetAgentID,
 	}, credential.DeviceSigningPrivateKey)
 	if err != nil {
 		return err

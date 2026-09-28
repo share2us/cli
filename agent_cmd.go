@@ -409,6 +409,7 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		GoalID:          goalID,
 		ProjectID:       strings.TrimSpace(projectID),
 		SenderAgentID:   senderAgent,
+		TargetAgentID:   target.AgentID,
 	}
 	// Sign the hop (ADR-041 §5), so the server can refuse a forgery and — the part
 	// that matters — the receiving machine can check it came from this device even
