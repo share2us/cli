@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260928195436] - 2026-09-28
+
 ### Changed (breaking)
 
 - **Hops use signing format v2: update every machine.** A hop's signature now
