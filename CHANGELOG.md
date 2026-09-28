@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **Hops use signing format v2: update every machine.** A hop's signature now
+  also covers its project and both agents, so a compromised server cannot relabel
+  which project a hop belongs to or which agent sent it. The receiving machine
+  checks them too. The old format is no longer accepted: a CLI older than this one
+  cannot send hops ("update s2u on this machine") or receive them. Run
+  `share2us update` on each machine.
+
 ## [20260928073228] - 2026-09-28
 
 ### Fixed

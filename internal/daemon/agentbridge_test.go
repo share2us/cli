@@ -97,6 +97,7 @@ func signedReq(t *testing.T, req clicore.AgentRequest) clicore.AgentRequest {
 		SenderDeviceID: bridgeSender.id, TargetDeviceID: self, TargetSessionID: req.TargetSessionID,
 		Tool: req.Tool, SealedPrompt: req.SealedPrompt, SealedFileKey: req.SealedFileKey,
 		GoalID: req.GoalID, IssuedAt: at, Nonce: nonce,
+		ProjectID: req.ProjectID, SenderAgentID: req.SenderAgentID, TargetAgentID: req.TargetAgentID,
 	}, bridgeSender.kp.PrivateKey)
 	if err != nil {
 		t.Fatal(err)
@@ -212,5 +213,35 @@ func TestHandleInjectUnsealFailureIsFatal(t *testing.T) {
 	}
 	if len(c.reports) != 1 || c.reports[0][0] != "failed" {
 		t.Fatalf("reports = %v, want a single failed", c.reports)
+	}
+}
+
+// v2: the receiver verifies the signed project and agents too. A server that
+// relabels which project (or which agent) a hop came from is caught here, and
+// the hop does not run.
+func TestReceiverRefusesARelabelledProjectOrAgent(t *testing.T) {
+	for name, relabel := range map[string]func(*clicore.AgentRequest){
+		"project":      func(r *clicore.AgentRequest) { r.ProjectID = "p-other" },
+		"sender agent": func(r *clicore.AgentRequest) { r.SenderAgentID = "agt_OtherOtherOtherOth1" },
+		"target agent": func(r *clicore.AgentRequest) { r.TargetAgentID = "agt_OtherOtherOtherOth2" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := &fakeAgentClient{}
+			r := &fakeRunner{out: "ran"}
+			req := signedReq(t, clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "go",
+				ProjectID: "p-1", SenderAgentID: "agt_SenderSenderSender1", TargetAgentID: "agt_TargetTargetTarget1"})
+			relabel(&req)
+			rt().handleInject(context.Background(), c, r, keyedDeps(), req)
+			if r.ranPrompt != "" {
+				t.Fatalf("a hop with a relabelled %s ran", name)
+			}
+		})
+	}
+	// Unaltered, it runs.
+	c, r := &fakeAgentClient{}, &fakeRunner{out: "ran"}
+	rt().handleInject(context.Background(), c, r, keyedDeps(), signedReq(t, clicore.AgentRequest{ID: "req-2", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "go",
+		ProjectID: "p-1", SenderAgentID: "agt_SenderSenderSender1", TargetAgentID: "agt_TargetTargetTarget1"}))
+	if r.ranPrompt != "go" {
+		t.Fatalf("a genuine v2 hop did not run: %q", r.ranPrompt)
 	}
 }

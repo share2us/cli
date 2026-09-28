@@ -188,6 +188,9 @@ func (s *SenderPins) VerifyDelivered(req clicore.AgentRequest, selfDeviceID stri
 		GoalID:          req.GoalID,
 		IssuedAt:        issuedAt,
 		Nonce:           req.Nonce,
+		ProjectID:       req.ProjectID,
+		SenderAgentID:   req.SenderAgentID,
+		TargetAgentID:   req.TargetAgentID,
 	}
 	// Signature only, not freshness: a hop can wait in the queue for hours while
 	// this machine is off, and the server already refused anything stale at
