@@ -6,6 +6,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -40,7 +41,7 @@ func TestReplaceExecutable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o111 == 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o111 == 0 { // Windows has no exec bit
 		t.Errorf("target is not executable: mode %v", info.Mode())
 	}
 

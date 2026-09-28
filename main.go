@@ -4819,6 +4819,19 @@ func (a app) p2pRecv(ctx context.Context, args []string) int {
 // p2pOutputWriter resolves the receiver's --out into a writer. "" → a default
 // file in cwd; "-" → stdout; a directory → the default name inside it; otherwise
 // the given file path.
+// refuseLink errors when path is a symbolic link or, on Windows, a reparse point
+// such as a junction (Go reports those as irregular files).
+func refuseLink(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil // nothing there yet, or unreadable: the open decides
+	}
+	if info.Mode()&(os.ModeSymlink|os.ModeIrregular) != 0 {
+		return fmt.Errorf("refusing to write %s: it is a link, and writing would change the file it points to", path)
+	}
+	return nil
+}
+
 func p2pOutputWriter(output, room string, stdout io.Writer) (io.Writer, string, func(), error) {
 	defaultName := "share2us-p2p-" + strings.ToLower(room) + ".bin"
 	if output == "-" {
@@ -4830,10 +4843,15 @@ func p2pOutputWriter(output, room string, stdout io.Writer) (io.Writer, string, 
 	} else if info, err := os.Stat(target); err == nil && info.IsDir() {
 		target = filepath.Join(target, defaultName)
 	}
-	// O_NOFOLLOW so a symlink already at this path is refused rather than
-	// followed and its target truncated. The peer-to-peer receiver writes
-	// wherever it is pointed, and the default name is predictable from the room
-	// code (§AJ low batch).
+	// A link already at this path is refused rather than followed and its target
+	// truncated: the peer-to-peer receiver writes wherever it is pointed, and the
+	// default name is predictable from the room code (§AJ low batch). O_NOFOLLOW
+	// does this atomically on POSIX; Windows has no such flag, so refuseLink
+	// checks first there too (seen truncating the target on Windows 10,
+	// 2026-09-28). The check-then-open gap is only on Windows.
+	if err := refuseLink(target); err != nil {
+		return nil, "", func() {}, err
+	}
 	f, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|oNoFollow, 0o600)
 	if err != nil {
 		return nil, "", func() {}, fmt.Errorf("open %s: %w", target, err)

@@ -12,6 +12,23 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The background service uses far less CPU.** Every 30 seconds it asked each
+  agent tool for its sessions, including tools you had never bound. Gemini's
+  `gemini --list-sessions` alone cost 4 to 5 seconds of CPU each time (measured:
+  the service used 16% of a core, about 90% of it Gemini). It now asks only the
+  tools you have bound a session for.
+- **Windows: receiving a peer-to-peer file no longer writes through a link.** If
+  a symbolic link or junction already sat at the destination, the file it pointed
+  to was overwritten. Such a destination is now refused, as it already was on
+  macOS and Linux.
+- **Windows: `--serve` refuses system and credential folders.** The Windows
+  folders, Program Files, ProgramData (which holds SSH keys) and your AppData
+  (browser profiles, cloud logins, this CLI's own login) were not on the list, and
+  the check was case-sensitive, so `c:\users\me` could slip past a rule for
+  `C:\Users\Me`.
+
 ## [20260927205644] - 2026-09-27
 
 ### Fixed

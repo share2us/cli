@@ -217,13 +217,13 @@ func TestUpdateDownloadsVerifiesAndReplacesCurrentBinary(t *testing.T) {
 				"update_available": true,
 				"platform":         runtime.GOOS + "/" + runtime.GOARCH,
 				"downloads": map[string]any{
-					"archive_url": server.URL + "/downloads/share2us_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz",
+					"archive_url": server.URL + "/downloads/share2us_" + runtime.GOOS + "_" + runtime.GOARCH + testArchiveExt(),
 					"crc32":       fmt.Sprint(checksum),
 					"size_bytes":  size,
 					"sha256":      hex.EncodeToString(digest[:]),
 				},
 			})
-		case strings.HasSuffix(r.URL.Path, ".tar.gz"):
+		case strings.HasSuffix(r.URL.Path, testArchiveExt()):
 			w.Write(archive)
 		default:
 			t.Fatalf("unexpected update path %s", r.URL.Path)
@@ -2453,9 +2453,32 @@ func writeTempFile(t *testing.T, name, content string) string {
 	return path
 }
 
+// testArchiveExt is the release archive format for this OS: Windows ships a
+// .zip holding share2us.exe, everything else a .tar.gz.
+func testArchiveExt() string {
+	if runtime.GOOS == "windows" {
+		return ".zip"
+	}
+	return ".tar.gz"
+}
+
 func testUpdateArchive(t *testing.T, binary []byte) []byte {
 	t.Helper()
 	var buf bytes.Buffer
+	if runtime.GOOS == "windows" {
+		zw := zip.NewWriter(&buf)
+		w, err := zw.Create(binaryFileName())
+		if err != nil {
+			t.Fatalf("zip entry: %v", err)
+		}
+		if _, err := w.Write(binary); err != nil {
+			t.Fatalf("zip write: %v", err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatalf("close zip: %v", err)
+		}
+		return buf.Bytes()
+	}
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 	if err := tw.WriteHeader(&tar.Header{
@@ -3581,7 +3604,7 @@ func updateFixture(t *testing.T, mutate func(downloads map[string]any)) (*httpte
 		switch {
 		case r.URL.Path == "/v1/cli/update":
 			downloads := map[string]any{
-				"archive_url": server.URL + "/downloads/share2us_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz",
+				"archive_url": server.URL + "/downloads/share2us_" + runtime.GOOS + "_" + runtime.GOARCH + testArchiveExt(),
 				"crc32":       fmt.Sprint(checksum),
 				"size_bytes":  size,
 				"sha256":      hex.EncodeToString(digest[:]),
@@ -3596,7 +3619,7 @@ func updateFixture(t *testing.T, mutate func(downloads map[string]any)) (*httpte
 			})
 		case strings.HasPrefix(r.URL.Path, "/redirect-off-host"):
 			http.Redirect(w, r, "http://evil.example.test/x.tar.gz", http.StatusFound)
-		case strings.HasSuffix(r.URL.Path, ".tar.gz"):
+		case strings.HasSuffix(r.URL.Path, testArchiveExt()):
 			w.Write(archive)
 		default:
 			t.Fatalf("unexpected update path %s", r.URL.Path)
@@ -3900,8 +3923,8 @@ func TestCopyFileDoesNotWriteThroughASymlink(t *testing.T) {
 	if body, _ := os.ReadFile(planted); string(body) != "the copied bytes" {
 		t.Fatalf("destination holds %q", body)
 	}
-	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("copy written %o, want 0600", perm)
+	if perm := info.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
+		t.Fatalf("copy written %o, want 0600", perm) // Windows has no Unix permissions to check
 	}
 }
 
