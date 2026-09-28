@@ -155,3 +155,32 @@ func TestSiblingSessionsAreNotAdvertised(t *testing.T) {
 		t.Fatalf("registered %v, want only the chosen session", c.registered)
 	}
 }
+
+// countingRunner counts Discover calls.
+type countingRunner struct {
+	tool  string
+	calls int
+}
+
+func (c *countingRunner) Tool() string { return c.tool }
+func (c *countingRunner) Discover(context.Context) ([]DiscoveredSession, error) {
+	c.calls++
+	return nil, nil
+}
+func (c *countingRunner) Run(context.Context, string, string, string) (string, error) { return "", nil }
+
+// Discovery costs real CPU (Gemini's took ~4-5 s a call), so a tool with no
+// binding is never asked: nothing it reports could be advertised anyway.
+func TestOnlyBoundToolsAreDiscovered(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if _, _, err := BindSession(t.TempDir(), "claude", "", "s1"); err != nil {
+		t.Fatal(err)
+	}
+	claude, gemini, codex := &countingRunner{tool: "claude"}, &countingRunner{tool: "gemini"}, &countingRunner{tool: "codex"}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rt().agentRegisterLoop(ctx, &fakeAgentClient{}, []AgentRunner{claude, gemini, codex}, keyedDeps())
+	if claude.calls != 1 || gemini.calls != 0 || codex.calls != 0 {
+		t.Fatalf("discover calls: claude %d gemini %d codex %d, want 1 0 0", claude.calls, gemini.calls, codex.calls)
+	}
+}

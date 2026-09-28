@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -29,7 +30,6 @@ func TestGuardServePath(t *testing.T) {
 	blocked := []string{
 		home,                                  // the whole home dir
 		filepath.Dir(home),                    // an ancestor of home (e.g. /home)
-		"/",                                   // filesystem root
 		filepath.Join(home, ".ssh"),           // credential store
 		filepath.Join(home, ".ssh", "id_rsa"), // a file inside one
 		filepath.Join(home, ".aws", "credentials"),
@@ -37,9 +37,18 @@ func TestGuardServePath(t *testing.T) {
 		filepath.Join(home, ".config", "gcloud"),
 		filepath.Join(home, ".gnupg"),
 		filepath.Join(home, ".npmrc"),
-		"/etc",
-		"/etc/passwd",
-		"/root",
+	}
+	if runtime.GOOS == "windows" {
+		blocked = append(blocked,
+			filepath.VolumeName(home)+`\`,                // the drive root
+			strings.ToUpper(home), strings.ToLower(home), // same folder, other case
+			filepath.Join(home, "AppData", "Roaming", "share2us"), // this CLI's own login
+			filepath.Join(os.Getenv("SystemRoot"), "System32"),
+			os.Getenv("ProgramFiles"),
+			filepath.Join(os.Getenv("ProgramData"), "ssh"), // SSH host keys
+		)
+	} else {
+		blocked = append(blocked, "/", "/etc", "/etc/passwd", "/root")
 	}
 	for _, p := range blocked {
 		if err := guardServePath(p); err == nil {

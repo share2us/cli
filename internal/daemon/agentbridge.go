@@ -75,6 +75,16 @@ func waitForBinding(ctx context.Context, every time.Duration) bool {
 
 // coveringBinding finds the binding a session belongs to: its own single-session
 // binding, or a folder-wide one from before single-session binding existed.
+// toolBound reports whether any binding is for tool.
+func toolBound(list []Binding, tool string) bool {
+	for _, b := range list {
+		if b.Tool == tool {
+			return true
+		}
+	}
+	return false
+}
+
 func coveringBinding(list []Binding, s DiscoveredSession) (Binding, bool) {
 	for _, b := range list {
 		if b.Covers(s) {
@@ -130,15 +140,6 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 	quiet := &onceLogger{logf: deps.logf}
 	sync := func() {
 		seen := map[string]bool{}
-		var sessions []DiscoveredSession
-		for _, runner := range runners {
-			found, err := runner.Discover(ctx)
-			if err != nil {
-				deps.logf("agent-bridge discover (%s): %v", runner.Tool(), err)
-				continue
-			}
-			sessions = append(sessions, found...)
-		}
 		// Bindings are re-read every sync so `s2u agent bind` takes effect within
 		// one tick, without restarting the daemon.
 		bindings, berr := LoadBindings()
@@ -147,6 +148,23 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 			// everything" — that is the state this replaced.
 			deps.logf("agent-bridge: cannot read bindings, advertising nothing: %v", berr)
 			bindings = nil
+		}
+		var sessions []DiscoveredSession
+		for _, runner := range runners {
+			// Only a tool with a binding can have anything advertised, so only
+			// those are asked. Discovery is not free: `gemini --list-sessions`
+			// cost ~4-5 s of CPU per call, every 30 s, on a machine with no
+			// Gemini binding (measured 2026-09-28: 16% of a core, ~90% of it
+			// Gemini).
+			if !toolBound(bindings, runner.Tool()) {
+				continue
+			}
+			found, err := runner.Discover(ctx)
+			if err != nil {
+				deps.logf("agent-bridge discover (%s): %v", runner.Tool(), err)
+				continue
+			}
+			sessions = append(sessions, found...)
 		}
 		// A single-session binding is advertised even when discovery does not
 		// list its session (a fork made by a hop often is not listed): the

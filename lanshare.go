@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -1080,6 +1081,20 @@ func sensitiveServeRoots(home string) []string {
 			roots = append(roots, filepath.Join(home, rel))
 		}
 	}
+	if runtime.GOOS == "windows" {
+		// Credential stores live under AppData (browser profiles, cloud CLIs,
+		// Share2Us's own login); the system and program folders, and ProgramData
+		// (SSH host keys, administrators_authorized_keys), are never shared.
+		if home != "" {
+			roots = append(roots, filepath.Join(home, "AppData"))
+		}
+		for _, env := range []string{"SystemRoot", "ProgramFiles", "ProgramFiles(x86)", "ProgramData"} {
+			if v := os.Getenv(env); v != "" {
+				roots = append(roots, filepath.Clean(v))
+			}
+		}
+		return roots
+	}
 	for _, sys := range []string{"/etc", "/root", "/var", "/proc", "/sys", "/dev", "/boot"} {
 		roots = append(roots, sys)
 	}
@@ -1090,12 +1105,17 @@ func sensitiveServeRoots(home string) []string {
 // expected to be cleaned absolute paths; the separator check stops /etc from
 // matching /etchings.
 func pathAtOrUnder(path, base string) bool {
+	if runtime.GOOS == "windows" {
+		// Windows paths are case-insensitive: C:\Users\Me and c:\users\me are
+		// one folder, and a case-sensitive compare let the second past the guard.
+		path, base = strings.ToLower(path), strings.ToLower(base)
+	}
 	if path == base {
 		return true
 	}
 	sep := string(filepath.Separator)
-	if base == sep { // filesystem root: every absolute path is under it
-		return strings.HasPrefix(path, sep)
+	if strings.HasSuffix(base, sep) { // a root ("/" or "C:\"): its own separator is the prefix
+		return strings.HasPrefix(path, base)
 	}
 	return strings.HasPrefix(path, base+sep)
 }
