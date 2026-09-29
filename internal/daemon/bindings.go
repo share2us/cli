@@ -52,6 +52,19 @@ type Binding struct {
 	// Empty in a binding made before this existed: that one still covers every session of its tool
 	// in the folder until it is bound again.
 	SessionID string `json:"session_id,omitempty"`
+	// Zellij records where the bound session lived when it was last bound. It
+	// is only a hint: every delivery re-proves the process, pane, command and
+	// project before typing anything. Nil means live typing is unavailable.
+	Zellij *ZellijPane `json:"zellij,omitempty"`
+}
+
+// ZellijPane is the small, non-secret part of a session process environment
+// needed to locate its terminal pane. Session can become stale after a zellij
+// rename; delivery resolves the current zellij session and requires one unique
+// match instead of trusting this name as an address.
+type ZellijPane struct {
+	Session string `json:"session"`
+	Pane    string `json:"pane"`
 }
 
 // Covers reports whether a discovered session belongs to this binding.
@@ -65,11 +78,18 @@ func (b Binding) Covers(s DiscoveredSession) bool {
 // BindSession binds exactly one session: the binding for its folder and tool
 // (created if new, keeping its agent id if not) now points at sessionID.
 func BindSession(project, tool, label, sessionID string) (Binding, bool, error) {
+	return BindSessionInPane(project, tool, label, sessionID, nil)
+}
+
+// BindSessionInPane binds exactly one session and refreshes its terminal-pane
+// hint. Passing nil deliberately clears an older hint: rebinding outside
+// zellij must never leave a stale pane eligible for typing.
+func BindSessionInPane(project, tool, label, sessionID string, pane *ZellijPane) (Binding, bool, error) {
 	b, created, err := Bind(project, tool, label)
 	if err != nil || sessionID == "" {
 		return b, created, err
 	}
-	return setSession(b.Project, b.Tool, sessionID, created)
+	return setSession(b.Project, b.Tool, sessionID, pane, created)
 }
 
 // BindingForSession returns the binding whose current session is sessionID.
@@ -82,7 +102,7 @@ func BindingForSession(list []Binding, sessionID string) (Binding, bool) {
 	return Binding{}, false
 }
 
-func setSession(project, tool, sessionID string, created bool) (Binding, bool, error) {
+func setSession(project, tool, sessionID string, pane *ZellijPane, created bool) (Binding, bool, error) {
 	list, err := LoadBindings()
 	if err != nil {
 		return Binding{}, false, err
@@ -91,6 +111,7 @@ func setSession(project, tool, sessionID string, created bool) (Binding, bool, e
 	for i := range list {
 		if list[i].Tool == tool && normalizeProject(list[i].Project) == p {
 			list[i].SessionID = sessionID
+			list[i].Zellij = pane
 			return list[i], created, saveBindings(list)
 		}
 	}

@@ -169,7 +169,7 @@ func (a app) agentBind(ctx context.Context, args []string) int {
 	if len(args) > 1 {
 		label = args[1]
 	}
-	b, created, err := daemon.BindSession(s.Project, s.Tool, label, s.SessionID)
+	b, created, err := daemon.BindSessionInPane(s.Project, s.Tool, label, s.SessionID, daemon.ProcessZellijPane(s.PID))
 	if err != nil {
 		return a.fail("bind", err)
 	}
@@ -663,7 +663,13 @@ func (a app) agentJoin(ctx context.Context, args []string) int {
 	// Bind: this machine may now advertise this session, under a stable agent id.
 	// Only THIS session is bound (owner, 2026-09-27): other sessions in the same
 	// folder stay private.
-	binding, _, err := daemon.BindSession(sess.Project, sess.Tool, sess.Name, sess.SessionID)
+	pane := daemon.ProcessZellijPane(sess.PID)
+	if sessionArg == "" {
+		// The join command is a child of the chosen agent, so its inherited
+		// zellij identifiers are stronger than a second process lookup.
+		pane = daemon.CurrentZellijPane()
+	}
+	binding, _, err := daemon.BindSessionInPane(sess.Project, sess.Tool, sess.Name, sess.SessionID, pane)
 	if err != nil {
 		return a.fail("bind session", err)
 	}
