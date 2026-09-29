@@ -50,6 +50,10 @@ func TestParseClaudeScreen(t *testing.T) {
 		{"owner text", "│ ❯ do not touch this │", false},
 		{"busy", "│ ❯  │\nesc to interrupt", false},
 		{"dialog", "Do you want to continue?\n  1. Yes\n  2. No\n│ ❯  │", false},
+		// Captured read-only from Claude Code 2.1.284 in the owner's scratch
+		// pane. Its empty input uses a non-breaking space and a bare ANSI reset,
+		// not the bordered form used by the synthetic fixtures above.
+		{"real idle ansi", "\x1b[38;5;244m────────────────\n\x1b[m❯\u00a0\n\x1b[38;5;220m⏵⏵ auto mode on\x1b[m", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
