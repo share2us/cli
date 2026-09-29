@@ -16,13 +16,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 - **`s2u claude`: prompts appear in your open Claude window.** Start Claude with
   `s2u claude [claude args]` (for example `s2u claude --resume <session>`) and a
-  prompt sent to that session's agent is delivered into the window you are
-  looking at, instead of waiting until you exit Claude. The agent reports its
-  result back to the sender. While a delivered prompt runs, the project's
-  `.s2u.rules` still apply, whatever mode the window is in, and a read-only agent
-  stays read-only. This uses Claude Code channels, a research preview: Claude asks
-  you to confirm the development channel each time, and on a Team or Enterprise
-  plan an admin must allow channels first. `s2u agent join` says which applies.
+  prompt sent to that session's agent is delivered into the Zellij pane you are
+  looking at, instead of waiting until you exit Claude. No Team/Enterprise admin
+  setting is needed. Share2Us verifies the bound process and an empty input box
+  before typing and never types into plain `claude`; outside Zellij the prompt
+  waits as before. The agent reports its result back to the sender. While a
+  delivered prompt runs, the project's `.s2u.rules` still apply, whatever mode
+  the window is in, and a read-only agent stays read-only.
 
 ## [20260929112713] - 2026-09-29
 
