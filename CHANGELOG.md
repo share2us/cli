@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260929184034] - 2026-09-29
+
 ### Fixed
 
 - **Live `s2u claude` delivery now fails closed without getting stuck.** A
