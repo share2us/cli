@@ -78,7 +78,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 // dialog, busy state, dump failure, or timeout still fails closed without Enter.
 func waitForPastedClaudeInput(ctx context.Context, z zellijDriver, pane resolvedZellijPane, visible string) bool {
 	deadline := time.Now().Add(pasteVerifyWindow)
-	want := strings.TrimSpace(visible)
+	want := withoutWhitespace(visible)
 	for {
 		after, err := z.Dump(ctx, pane.Session, pane.Pane)
 		if err != nil {
@@ -88,7 +88,7 @@ func waitForPastedClaudeInput(ctx context.Context, z zellijDriver, pane resolved
 			return true
 		}
 		state := parseClaudeScreen(after)
-		got := strings.TrimSpace(state.Input)
+		got := withoutWhitespace(state.Input)
 		transitioning := state.InputEmpty || (got != "" && strings.HasPrefix(want, got))
 		if state.Busy || state.Dialog || !transitioning || !time.Now().Before(deadline) {
 			return false

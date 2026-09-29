@@ -6,7 +6,10 @@ package daemon
 import (
 	"context"
 	"errors"
+	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 type fakeZellij struct {
@@ -166,4 +169,62 @@ func TestResolveZellijPaneFailsClosedWhenAnySessionIsUnreadable(t *testing.T) {
 	if _, err := resolveZellijPaneWith(context.Background(), z, binding, session, process); err == nil {
 		t.Fatal("a match was trusted while another listed session could not be inspected")
 	}
+}
+
+// Opt-in acceptance check against a disposable real Claude pane. The task is
+// deliberately one word: this is the case Claude leaves unfolded instead of
+// replacing it with a [Pasted text ...] marker.
+//
+// S2U_LIVE_ZELLIJ_SESSION=name S2U_LIVE_ZELLIJ_PANE=1 go test ./internal/daemon -run LiveZellijOneWord -v
+func TestLiveZellijOneWordPaste(t *testing.T) {
+	session, paneID := os.Getenv("S2U_LIVE_ZELLIJ_SESSION"), os.Getenv("S2U_LIVE_ZELLIJ_PANE")
+	if session == "" || paneID == "" {
+		t.Skip("set S2U_LIVE_ZELLIJ_SESSION and S2U_LIVE_ZELLIJ_PANE for a disposable idle Claude pane")
+	}
+	z := newSystemZellij()
+	pane := resolvedZellijPane{Session: session, Pane: paneID}
+	before, err := z.Dump(t.Context(), session, paneID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := parseClaudeScreen(before)
+	idle := !state.Busy && !state.Dialog && state.InputEmpty
+	// Claude 2.1.284 sometimes renders its untouched suggestion without the
+	// expected dim SGR bytes in dump-screen. For this opt-in live check only,
+	// accept that known placeholder when the real cursor is still parked at the
+	// prompt (owner text would move it right).
+	if !idle && !state.Busy && !state.Dialog && strings.HasPrefix(state.Input, `Try "`) {
+		if panes, err := z.Panes(t.Context(), session); err == nil {
+			for _, p := range panes {
+				if p.paneID() == paneID && len(p.CursorCoordinates) == 2 && p.CursorCoordinates[0] <= 3 {
+					idle = true
+				}
+			}
+		}
+	}
+	if !idle {
+		t.Fatalf("Claude pane is not idle: %+v", state)
+	}
+	visible := "[Share2Us] from device live-test, request live-one-word:\n\nok"
+	if err := z.Paste(t.Context(), session, paneID, visible); err != nil {
+		t.Fatal(err)
+	}
+	if !waitForPastedClaudeInput(t.Context(), z, pane, visible) {
+		after, _ := z.Dump(t.Context(), session, paneID)
+		got := parseClaudeScreen(after)
+		t.Fatalf("one-word prompt was not verified in the real input: %+v normalized=%q want=%q", got, withoutWhitespace(got.Input), withoutWhitespace(visible))
+	}
+	if err := z.Enter(t.Context(), session, paneID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		after, err := z.Dump(t.Context(), session, paneID)
+		if err == nil && !pastedClaudeInput(after, visible) {
+			t.Log("one-word prompt was verified and submitted in the real Claude pane")
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("Enter did not submit the verified one-word prompt")
 }

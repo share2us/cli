@@ -31,13 +31,14 @@ type zellijDriver interface {
 }
 
 type zellijPaneInfo struct {
-	ID      int    `json:"id"`
-	Plugin  bool   `json:"is_plugin"`
-	TabName string `json:"tab_name"`
-	Title   string `json:"title"`
-	Command string `json:"pane_command"`
-	CWD     string `json:"pane_cwd"`
-	Exited  bool   `json:"exited"`
+	ID                int    `json:"id"`
+	Plugin            bool   `json:"is_plugin"`
+	TabName           string `json:"tab_name"`
+	Title             string `json:"title"`
+	Command           string `json:"pane_command"`
+	CWD               string `json:"pane_cwd"`
+	Exited            bool   `json:"exited"`
+	CursorCoordinates []int  `json:"cursor_coordinates_in_pane"`
 }
 
 func (p zellijPaneInfo) paneID() string { return strconv.Itoa(p.ID) }

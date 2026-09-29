@@ -115,6 +115,18 @@ func TestOwnerInputRaceNeverPressesEnterAndKeepsGuard(t *testing.T) {
 	cancel()
 }
 
+func TestPasteVerificationAllowsWrappedIntermediatePrefix(t *testing.T) {
+	visible := "[Share2Us] from device live-test, request live-one-word:\n\nok"
+	z := &fakeZellij{screens: []string{
+		"────────────────────────\n❯ [Share2Us] from device live-test, request\n  live-one-word:\n────────────────────────",
+		"────────────────────────\n❯ [Share2Us] from device live-test, request\n  live-one-word:\n\n  ok\n────────────────────────",
+	}}
+	pane := resolvedZellijPane{Session: "test", Pane: "1"}
+	if !waitForPastedClaudeInput(t.Context(), z, pane, visible) {
+		t.Fatal("terminal wrapping made a valid intermediate paste fail verification")
+	}
+}
+
 func TestUnsafeOrWrongPaneTypesNothing(t *testing.T) {
 	for name, change := range map[string]func(*Runtime, *fakeZellij){
 		"owner input": func(_ *Runtime, z *fakeZellij) { z.screens = []string{"│ ❯ my draft │"} },
