@@ -227,6 +227,8 @@ func WriteChannelLaunchConfig(exe string) (mcpPath, settingsPath string, err err
 	// bash and in Windows shells alike.
 	quoted := `"` + filepath.ToSlash(exe) + `"`
 	settings := map[string]any{"hooks": map[string]any{
+		"SessionStart": []any{map[string]any{"hooks": []any{
+			map[string]any{"type": "command", "command": quoted + " agent hook session-start"}}}},
 		"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{
 			map[string]any{"type": "command", "command": quoted + " agent hook pre-tool-use"}}}},
 		"Stop": []any{map[string]any{"hooks": []any{

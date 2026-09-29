@@ -30,7 +30,7 @@ type HopRecord struct {
 	From      string    `json:"from_device"`
 	Target    string    `json:"target_session"`
 	RanIn     string    `json:"ran_in,omitempty"`
-	Mode      string    `json:"mode"`   // "resumed" (same session), "ran", or "expired" (waited too long)
+	Mode      string    `json:"mode"`   // "typed", "resumed" (same session), "ran", or "expired"
 	Status    string    `json:"status"` // "done" or "failed"
 	// Waited is how long the hop waited for an open window to let the session go.
 	Waited string `json:"waited,omitempty"`

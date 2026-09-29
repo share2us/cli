@@ -24,7 +24,13 @@ func TestChannelHubDeliverPollReport(t *testing.T) {
 	if h.alive("s1") {
 		t.Fatal("no channel has polled yet")
 	}
-	picked, result := h.deliver("s1", ChannelDelivery{RequestID: "r1", Prompt: "p", Strict: true})
+	picked, result, ok := h.deliver("s1", ChannelDelivery{RequestID: "r1", Prompt: "p", Strict: true})
+	if !ok {
+		t.Fatal("first delivery was refused")
+	}
+	if _, _, ok := h.deliver("s1", ChannelDelivery{RequestID: "r2"}); ok {
+		t.Fatal("a second delivery entered the same session")
+	}
 	if got := h.poll("s2"); len(got) != 0 {
 		t.Fatalf("another session got the delivery: %+v", got)
 	}
@@ -50,7 +56,7 @@ func TestChannelHubDeliverPollReport(t *testing.T) {
 
 func TestChannelHubTurnEndedWithoutReport(t *testing.T) {
 	h := newChannelHub()
-	_, result := h.deliver("s1", ChannelDelivery{RequestID: "r1"})
+	_, result, _ := h.deliver("s1", ChannelDelivery{RequestID: "r1"})
 	h.poll("s1")
 	h.turnEnded("s1")
 	if r := <-result; r != "" {
@@ -67,6 +73,39 @@ func TestChannelHubWithdraw(t *testing.T) {
 	h.withdraw("s1", "r1")
 	if got := h.poll("s1"); len(got) != 0 {
 		t.Fatalf("a withdrawn delivery was handed out: %+v", got)
+	}
+}
+
+func TestChannelHubTypedHopIsGuardedAndExclusive(t *testing.T) {
+	h := newChannelHub()
+	result, ok := h.beginTyped("s1", ChannelDelivery{RequestID: "typed-1", Strict: true})
+	if !ok {
+		t.Fatal("first typed hop was refused")
+	}
+	if active, strict := h.guarded("s1"); !active || !strict {
+		t.Fatalf("typed guard = %v/%v", active, strict)
+	}
+	if _, ok := h.beginTyped("s1", ChannelDelivery{RequestID: "typed-2"}); ok {
+		t.Fatal("a second typed hop entered the same session")
+	}
+	if _, _, ok := h.deliver("s1", ChannelDelivery{RequestID: "channel-2"}); ok {
+		t.Fatal("a channel hop entered beside a typed hop")
+	}
+	h.turnEnded("s1")
+	if got := <-result; got != "" {
+		t.Fatalf("stop result = %q", got)
+	}
+}
+
+func TestGuardedAliveNeedsChannelAndSessionStartHook(t *testing.T) {
+	h := newChannelHub()
+	h.poll("s1")
+	if h.guardedAlive("s1") {
+		t.Fatal("a channel without the guard settings was trusted")
+	}
+	h.markGuardReady("s1")
+	if !h.guardedAlive("s1") {
+		t.Fatal("the polling channel with its SessionStart hook was not recognised")
 	}
 }
 
@@ -196,9 +235,10 @@ func TestLiveSessionWithAChannelGetsTheHopDelivered(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Live: true}}, heldFor: 1 << 30}
-	c := &fakeAgentClient{}
+	c := &fakeAgentClient{reportNotify: make(chan struct{}, 1)}
 	runtime := rt()
 	runtime.hub().poll("win-1") // the channel is listening
+	runtime.hub().markGuardReady("win-1")
 	runtime.handleInject(context.Background(), c, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-5", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
 	var got []ChannelDelivery
@@ -226,6 +266,44 @@ func TestLiveSessionWithAChannelGetsTheHopDelivered(t *testing.T) {
 	}
 }
 
+func TestChannelPickupWithoutClaudeStartingFallsBackToWaiting(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	pickup, poll := channelPickup, channelBusyPoll
+	channelPickup, channelBusyPoll = 30*time.Millisecond, 2*time.Millisecond
+	t.Cleanup(func() { channelPickup, channelBusyPoll = pickup, poll })
+	dir := t.TempDir()
+	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
+		t.Fatal(err)
+	}
+	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "available", Live: true}}, heldFor: 1 << 30}
+	c := &fakeAgentClient{reportNotify: make(chan struct{}, 1)}
+	runtime := rt()
+	runtime.hub().poll("win-1")
+	runtime.hub().markGuardReady("win-1")
+	ctx, cancel := context.WithCancel(context.Background())
+	runtime.handleInject(ctx, c, r, keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-dropped", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got := runtime.hub().poll("win-1"); len(got) != 0 {
+			break // MCP picked it up, but Claude intentionally never becomes busy
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-c.reportNotify:
+	case <-time.After(time.Second):
+		t.Fatal("channel fallback did not report waiting")
+	}
+	cancel()
+	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(c.reports) == 0 || c.reports[0][0] != "waiting" || r.ran != 0 {
+		t.Fatalf("reports=%v ran=%d; a silently dropped channel event must wait", c.reports, r.ran)
+	}
+}
+
 func TestChannelLaunchConfig(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	mcp, settings, err := WriteChannelLaunchConfig("/opt/s2u/share2us")
@@ -243,7 +321,7 @@ func TestChannelLaunchConfig(t *testing.T) {
 		t.Fatalf("mcp config = %s (%v)", b, err)
 	}
 	s, _ := os.ReadFile(settings)
-	if !strings.Contains(string(s), `agent hook pre-tool-use`) || !strings.Contains(string(s), `agent hook stop`) {
+	if !strings.Contains(string(s), `agent hook session-start`) || !strings.Contains(string(s), `agent hook pre-tool-use`) || !strings.Contains(string(s), `agent hook stop`) {
 		t.Fatalf("settings = %s", s)
 	}
 	args := strings.Join(ClaudeChannelArgs(mcp, settings), " ")

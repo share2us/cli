@@ -357,17 +357,22 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	env := ParseEnvelope(raw)
 	prompt := env.Prompt
 	cwd := ""
+	var binding Binding
+	bound := false
 	// The binding knows where its session lives even when discovery does not list
 	// it (one no window has open).
 	if list, lerr := LoadBindings(); lerr == nil {
 		if b, ok := BindingForSession(list, req.TargetSessionID); ok {
+			binding, bound = b, true
 			cwd = b.Project
 		}
 	}
 	live := false
+	var discovered DiscoveredSession
 	if sessions, derr := runner.Discover(ctx); derr == nil {
 		for _, s := range sessions {
 			if s.SessionID == req.TargetSessionID {
+				discovered = s
 				cwd = s.Project
 				live = s.Live
 				break
@@ -397,7 +402,10 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 		prompt = prompt + "\n\n(A file for this task was placed at " + path + ".)"
 	}
 	if live {
-		if rt.hub().alive(req.TargetSessionID) {
+		if bound && rt.tryTypedInject(ctx, client, runner, deps, req, binding, discovered, env.Prompt, prompt, cwd, 0) {
+			return
+		}
+		if rt.hub().guardedAlive(req.TargetSessionID) {
 			rt.deliverViaChannel(ctx, client, runner, deps, req, env.Prompt, prompt, cwd, 0)
 			return
 		}
@@ -430,9 +438,22 @@ func (rt *Runtime) holdInject(ctx context.Context, client AgentClient, runner Ag
 				return
 			case <-t.C:
 			}
+			// Prefer guarded typing when the bound s2u-claude session owns a safe
+			// zellij pane. Binding and process identity are re-read every time.
+			if list, err := LoadBindings(); err == nil {
+				if binding, ok := BindingForSession(list, req.TargetSessionID); ok {
+					if sessions, err := runner.Discover(ctx); err == nil {
+						for _, session := range sessions {
+							if session.SessionID == req.TargetSessionID && session.Live && rt.tryTypedInject(ctx, client, runner, deps, req, binding, session, shown, prompt, cwd, time.Since(began)) {
+								return
+							}
+						}
+					}
+				}
+			}
 			// A channel for the session came up (the window was restarted with
-			// `s2u claude`): deliver into it now.
-			if rt.hub().alive(req.TargetSessionID) {
+			// `s2u claude`): deliver into it now when no safe pane was available.
+			if rt.hub().guardedAlive(req.TargetSessionID) {
 				rt.deliverViaChannel(ctx, client, runner, deps, req, shown, prompt, cwd, time.Since(began))
 				return
 			}
@@ -455,6 +476,11 @@ func (rt *Runtime) holdInject(ctx context.Context, client AgentClient, runner Ag
 // the hop falls back to waiting for the window.
 var channelPickup = 30 * time.Second
 
+// A poll only proves the MCP server received the event. With channels disabled
+// Claude silently discards it, so the session must either turn busy or finish
+// through its Stop/report hook before channel delivery is accepted.
+var channelBusyPoll = 200 * time.Millisecond
+
 // deliverViaChannel hands the hop to the Share2Us channel of the open session:
 // the prompt appears in that window and runs there, under the window's own mode
 // with the hop's guardrails enforced by the s2u PreToolUse hook. The result is
@@ -466,7 +492,12 @@ func (rt *Runtime) deliverViaChannel(ctx context.Context, client AgentClient, ru
 	if cr, ok := runner.(ClaudeRunner); ok {
 		strict = cr.Strict
 	}
-	picked, result := rt.hub().deliver(req.TargetSessionID, ChannelDelivery{RequestID: req.ID, Prompt: prompt, From: req.SenderDeviceID, Strict: strict})
+	picked, result, accepted := rt.hub().deliver(req.TargetSessionID, ChannelDelivery{RequestID: req.ID, Prompt: prompt, From: req.SenderDeviceID, Strict: strict})
+	if !accepted {
+		rt.holding.Add(-1)
+		rt.holdInject(ctx, client, runner, deps, req, shown, prompt, cwd)
+		return
+	}
 	go func() {
 		defer rt.holding.Add(-1)
 		select {
@@ -479,6 +510,36 @@ func (rt *Runtime) deliverViaChannel(ctx context.Context, client AgentClient, ru
 			return
 		case <-ctx.Done():
 			return
+		}
+		var earlyResult *string
+		confirmed := false
+		confirmTimer := time.NewTimer(channelPickup)
+		confirmTicker := time.NewTicker(channelBusyPoll)
+		for !confirmed {
+			select {
+			case out := <-result:
+				earlyResult = &out
+				confirmed = true
+			case <-confirmTicker.C:
+				confirmed = sessionBusy(ctx, runner, req.TargetSessionID)
+			case <-confirmTimer.C:
+				confirmTicker.Stop()
+				rt.hub().withdraw(req.TargetSessionID, req.ID)
+				deps.logf("agent-bridge: channel picked up inject %s but Claude never started it; waiting instead", req.ID)
+				rt.holdInject(ctx, client, runner, deps, req, shown, prompt, cwd)
+				return
+			case <-ctx.Done():
+				confirmTicker.Stop()
+				confirmTimer.Stop()
+				return
+			}
+		}
+		confirmTicker.Stop()
+		if !confirmTimer.Stop() {
+			select {
+			case <-confirmTimer.C:
+			default:
+			}
 		}
 		deps.logf("agent-bridge: delivered inject %s into the open session %s", req.ID, req.TargetSessionID)
 		rt.notify("Share2Us", "A prompt was delivered into your open "+req.Tool+" session")
@@ -493,16 +554,20 @@ func (rt *Runtime) deliverViaChannel(ctx context.Context, client AgentClient, ru
 			deadline = t.Add(injectHoldMax)
 		}
 		var out string
-		select {
-		case out = <-result:
-		case <-time.After(time.Until(deadline)):
-			rt.hub().withdraw(req.TargetSessionID, req.ID)
-			hop.Status = "failed"
-			_ = AppendHop(hop)
-			_ = client.AgentReportResult(ctx, req.ID, "failed", "The agent did not finish within "+injectHoldMax.String()+".")
-			return
-		case <-ctx.Done():
-			return
+		if earlyResult != nil {
+			out = *earlyResult
+		} else {
+			select {
+			case out = <-result:
+			case <-time.After(time.Until(deadline)):
+				rt.hub().withdraw(req.TargetSessionID, req.ID)
+				hop.Status = "failed"
+				_ = AppendHop(hop)
+				_ = client.AgentReportResult(ctx, req.ID, "failed", "The agent did not finish within "+injectHoldMax.String()+".")
+				return
+			case <-ctx.Done():
+				return
+			}
 		}
 		hop.Status = "done"
 		_ = AppendHop(hop)
@@ -514,6 +579,19 @@ func (rt *Runtime) deliverViaChannel(ctx context.Context, client AgentClient, ru
 		}
 		_ = client.AgentReportResult(ctx, req.ID, "done", out)
 	}()
+}
+
+func sessionBusy(ctx context.Context, runner AgentRunner, sessionID string) bool {
+	sessions, err := runner.Discover(ctx)
+	if err != nil {
+		return false
+	}
+	for _, session := range sessions {
+		if session.SessionID == sessionID {
+			return session.Status == "busy"
+		}
+	}
+	return false
 }
 
 // sessionHeld reports whether a running process (an open window) holds the

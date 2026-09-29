@@ -49,12 +49,13 @@ type hookInput struct {
 }
 
 // agentHook is `s2u agent hook <event>`, run by Claude in an `s2u claude`
-// session. pre-tool-use applies a delivered hop's guardrails while one is in
-// progress in the session; stop tells the daemon the agent's turn ended. It
+// session. session-start proves the guard settings loaded; pre-tool-use applies
+// a delivered hop's guardrails while one is in progress; stop tells the daemon
+// the agent's turn ended. It
 // never fails a turn the user started: anything unexpected allows the call.
 func (a app) agentHook(args []string) int {
 	if len(args) != 1 {
-		fmt.Fprintf(a.stderr, "usage: %s agent hook <pre-tool-use|stop>\n", commandName)
+		fmt.Fprintf(a.stderr, "usage: %s agent hook <session-start|pre-tool-use|stop>\n", commandName)
 		return 2
 	}
 	var in hookInput
@@ -62,6 +63,8 @@ func (a app) agentHook(args []string) int {
 		return 0
 	}
 	switch args[0] {
+	case "session-start":
+		daemonctl.Call(daemonctl.Request{Op: "channel-guard-ready", Args: map[string]string{"session": in.SessionID}})
 	case "pre-tool-use":
 		resp, ok := daemonctl.Call(daemonctl.Request{Op: "channel-guarded", Args: map[string]string{"session": in.SessionID}})
 		if !ok || !resp.OK {

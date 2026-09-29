@@ -104,12 +104,33 @@ type Runtime struct {
 	// channels is the daemon side of the Share2Us channel (channelhub.go).
 	channels     *channelHub
 	channelsOnce sync.Once
+	// zellij is the terminal driver for guarded live delivery. Tests install a
+	// fake before first use; production constructs the system driver lazily.
+	zellij      zellijDriver
+	zellijOnce  sync.Once
+	processPane func(int) *ZellijPane
+}
+
+func (rt *Runtime) processZellijPane(pid int) *ZellijPane {
+	if rt.processPane != nil {
+		return rt.processPane(pid)
+	}
+	return ProcessZellijPane(pid)
 }
 
 // hub returns the channel hub, made on first use.
 func (rt *Runtime) hub() *channelHub {
 	rt.channelsOnce.Do(func() { rt.channels = newChannelHub() })
 	return rt.channels
+}
+
+func (rt *Runtime) paneDriver() zellijDriver {
+	rt.zellijOnce.Do(func() {
+		if rt.zellij == nil {
+			rt.zellij = newSystemZellij()
+		}
+	})
+	return rt.zellij
 }
 
 func (d Deps) logf(format string, args ...any) {

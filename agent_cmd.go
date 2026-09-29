@@ -53,7 +53,7 @@ func (a app) agent(ctx context.Context, args []string) int {
 	case "unbind":
 		return a.agentUnbind(args[1:])
 	case "bindings":
-		return a.agentBindings()
+		return a.agentBindings(ctx)
 	case "goal", "goals":
 		return a.agentGoal(ctx, args[1:])
 	case "project":
@@ -186,8 +186,10 @@ func (a app) agentBind(ctx context.Context, args []string) int {
 	}
 	fmt.Fprintf(a.stdout, "privilege: %s (change with `%s agent policy --project %s <level>`)\n",
 		daemon.AgentPolicy(b.Project, false), commandName, b.Project)
+	a.printZellijDelivery(ctx, b, s)
 	// A bound session is only reachable while the daemon runs: make sure it does.
 	a.ensureAgentReachable()
+	a.channelHint(s)
 	return 0
 }
 
@@ -231,7 +233,7 @@ func (a app) agentUnbind(args []string) int {
 	return 0
 }
 
-func (a app) agentBindings() int {
+func (a app) agentBindings(ctx context.Context) int {
 	list, err := daemon.LoadBindings()
 	if err != nil {
 		return a.fail("read bindings", err)
@@ -241,6 +243,7 @@ func (a app) agentBindings() int {
 		fmt.Fprintf(a.stdout, "Start a session, then: %s agent bind <session-id> [PROJECT-NAME]\n", commandName)
 		return 0
 	}
+	locations := a.localZellijLocations(ctx)
 	for _, b := range list {
 		label := b.Label
 		if label == "" {
@@ -251,9 +254,57 @@ func (a app) agentBindings() int {
 			// Made before agent ids existed; `agent bind` on it again assigns one.
 			id = "(none - re-bind)"
 		}
-		fmt.Fprintf(a.stdout, "%-8s  %-12s  %-10s  %-26s  %s\n", b.Tool, label, daemon.AgentPolicy(b.Project, false), id, b.Project)
+		where := ""
+		if current := locations[b.SessionID]; current != "" {
+			where = "  [" + current + "]"
+		} else if b.Zellij != nil {
+			where = "  [zellij pane " + b.Zellij.Pane + "]"
+		}
+		fmt.Fprintf(a.stdout, "%-8s  %-12s  %-10s  %-26s  %s%s\n", b.Tool, label, daemon.AgentPolicy(b.Project, false), id, b.Project, where)
 	}
 	return 0
+}
+
+func (a app) printZellijDelivery(ctx context.Context, b daemon.Binding, session daemon.DiscoveredSession) {
+	if b.Zellij == nil {
+		return
+	}
+	if location, ok := daemon.FindZellijLocation(ctx, b, session); ok {
+		fmt.Fprintf(a.stdout, "zellij: tab %q, pane terminal_%s (revalidated before every delivery)\n", location.TabName, location.Pane)
+		return
+	}
+	fmt.Fprintf(a.stdout, "zellij: recorded pane terminal_%s; it will be revalidated before any delivery\n", b.Zellij.Pane)
+}
+
+func (a app) localZellijLocations(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	bindings, err := daemon.LoadBindings()
+	if err != nil {
+		return out
+	}
+	bySession := map[string]daemon.Binding{}
+	for _, binding := range bindings {
+		if binding.SessionID != "" && binding.Zellij != nil {
+			bySession[binding.SessionID] = binding
+		}
+	}
+	if len(bySession) == 0 {
+		return out
+	}
+	sessions, err := (daemon.ClaudeRunner{}).Discover(ctx)
+	if err != nil {
+		return out
+	}
+	for _, session := range sessions {
+		binding, ok := bySession[session.SessionID]
+		if !ok {
+			continue
+		}
+		if location, ok := daemon.FindZellijLocation(ctx, binding, session); ok {
+			out[session.SessionID] = fmt.Sprintf("zellij tab %q pane terminal_%s", location.TabName, location.Pane)
+		}
+	}
+	return out
 }
 
 func (a app) agentClient() (*clicore.Client, bool) {
@@ -278,8 +329,13 @@ func (a app) agentList(ctx context.Context) int {
 		return 0
 	}
 	// Full ids only: everything printed here can be pasted into `agent send`.
+	locations := a.localZellijLocations(ctx)
 	for _, s := range sessions {
-		fmt.Fprintln(a.stdout, sessionLine(s))
+		line := sessionLine(s)
+		if where := locations[s.SessionID]; where != "" {
+			line += "  [" + where + "]"
+		}
+		fmt.Fprintln(a.stdout, line)
 	}
 	return 0
 }
@@ -538,7 +594,9 @@ func (a app) agentHops() int {
 		if h.Waited != "" {
 			where += " after waiting " + h.Waited
 		}
-		if h.Tool == "claude" && h.RanIn != "" {
+		if h.Mode == "typed" && h.RanIn != "" {
+			where += "  session " + h.RanIn
+		} else if h.Tool == "claude" && h.RanIn != "" {
 			where += "  claude --resume " + h.RanIn
 		} else if h.RanIn != "" {
 			where += "  session " + h.RanIn
@@ -693,6 +751,7 @@ func (a app) agentJoin(ctx context.Context, args []string) int {
 		return a.fail("join", err)
 	}
 	fmt.Fprintf(a.stdout, "Bound this %s session (agent %s) in %s.\n", sess.Tool, binding.AgentID, sess.Project)
+	a.printZellijDelivery(ctx, binding, sess)
 	switch res.Status {
 	case "admitted":
 		fmt.Fprintf(a.stdout, "Joined %q in %q. Other agents in the project can now reach this one.\n", res.ProjectName, res.SharenetName)

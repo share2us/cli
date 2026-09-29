@@ -46,6 +46,24 @@ type resolvedZellijPane struct {
 	TabName string
 }
 
+// ZellijLocation is safe display metadata for a pane whose process identity
+// was revalidated. TabName is presentation only and is never used as an id.
+type ZellijLocation struct {
+	Session string
+	Pane    string
+	TabName string
+}
+
+// FindZellijLocation resolves a binding for CLI display using the same strict
+// identity checks as delivery.
+func FindZellijLocation(ctx context.Context, binding Binding, session DiscoveredSession) (ZellijLocation, bool) {
+	pane, err := resolveZellijPane(ctx, newSystemZellij(), binding, session)
+	if err != nil {
+		return ZellijLocation{}, false
+	}
+	return ZellijLocation{Session: pane.Session, Pane: pane.Pane, TabName: pane.TabName}, true
+}
+
 type systemZellij struct{ executable string }
 
 func newSystemZellij() *systemZellij {

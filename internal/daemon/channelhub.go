@@ -39,6 +39,7 @@ type channelHub struct {
 	result map[string]chan string       // request -> the result, once
 	active map[string]map[string]bool   // session -> requests in progress
 	owner  map[string]string            // request -> session
+	guard  map[string]bool              // session -> SessionStart hook proved loaded
 }
 
 func newChannelHub() *channelHub {
@@ -46,7 +47,25 @@ func newChannelHub() *channelHub {
 		seen: map[string]time.Time{}, queue: map[string][]ChannelDelivery{},
 		picked: map[string]chan struct{}{}, result: map[string]chan string{},
 		active: map[string]map[string]bool{}, owner: map[string]string{},
+		guard: map[string]bool{},
 	}
+}
+
+func (h *channelHub) markGuardReady(session string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if session != "" {
+		h.guard[session] = true
+	}
+}
+
+// guardedAlive proves both halves started by `s2u claude` are present: the
+// channel is polling now and its settings ran the SessionStart guard hook.
+func (h *channelHub) guardedAlive(session string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	seen, ok := h.seen[session]
+	return ok && time.Since(seen) < channelAlive && h.guard[session]
 }
 
 // alive reports whether a channel for session polled recently.
@@ -60,13 +79,40 @@ func (h *channelHub) alive(session string) bool {
 // deliver queues d for session's channel. picked closes when the channel takes
 // it; result yields what the agent reported (or "" when its turn ended without
 // a report).
-func (h *channelHub) deliver(session string, d ChannelDelivery) (picked <-chan struct{}, result <-chan string) {
+func (h *channelHub) deliver(session string, d ChannelDelivery) (picked <-chan struct{}, result <-chan string, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.occupied(session) {
+		return nil, nil, false
+	}
 	p, r := make(chan struct{}), make(chan string, 1)
 	h.queue[session] = append(h.queue[session], d)
 	h.picked[d.RequestID], h.result[d.RequestID], h.owner[d.RequestID] = p, r, session
-	return p, r
+	return p, r, true
+}
+
+// beginTyped marks a hop active before any bytes are pasted. That makes the
+// PreToolUse hook enforce its guardrails even if the owner submits the text in
+// the small interval before the daemon's post-paste check. One session accepts
+// exactly one queued or active hop.
+func (h *channelHub) beginTyped(session string, d ChannelDelivery) (<-chan string, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.occupied(session) {
+		return nil, false
+	}
+	r := make(chan string, 1)
+	if h.active[session] == nil {
+		h.active[session] = map[string]bool{}
+	}
+	h.active[session][d.RequestID] = d.Strict
+	h.result[d.RequestID], h.owner[d.RequestID] = r, session
+	return r, true
+}
+
+// occupied is called with h.mu held.
+func (h *channelHub) occupied(session string) bool {
+	return len(h.queue[session]) != 0 || len(h.active[session]) != 0
 }
 
 // withdraw takes back a delivery its channel never picked up.
@@ -174,7 +220,10 @@ func (h *channelHub) channelControl(req daemonctl.Request) (daemonctl.Response, 
 		h.turnEnded(req.Args["session"])
 		return daemonctl.Response{OK: true}, true
 	case "channel-alive":
-		return daemonctl.Response{OK: h.alive(req.Args["session"])}, true
+		return daemonctl.Response{OK: h.guardedAlive(req.Args["session"])}, true
+	case "channel-guard-ready":
+		h.markGuardReady(req.Args["session"])
+		return daemonctl.Response{OK: req.Args["session"] != ""}, true
 	case "channel-guarded":
 		active, strict := h.guarded(req.Args["session"])
 		b, _ := json.Marshal(map[string]bool{"strict": strict})

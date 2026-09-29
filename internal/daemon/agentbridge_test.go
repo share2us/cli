@@ -16,9 +16,10 @@ import (
 )
 
 type fakeAgentClient struct {
-	reports    [][2]string // {status, result}
-	registered []string
-	deregd     []string
+	reports      [][2]string // {status, result}
+	reportNotify chan struct{}
+	registered   []string
+	deregd       []string
 	// remote is what the server already believes this device is running, used by
 	// the startup retire pass.
 	remote   []clicore.AgentSessionInfo
@@ -48,6 +49,12 @@ func (f *fakeAgentClient) AgentLongPoll(_ context.Context, _ int) ([]clicore.Age
 }
 func (f *fakeAgentClient) AgentReportResult(_ context.Context, _, status, result string) error {
 	f.reports = append(f.reports, [2]string{status, result})
+	if f.reportNotify != nil {
+		select {
+		case f.reportNotify <- struct{}{}:
+		default:
+		}
+	}
 	return nil
 }
 
