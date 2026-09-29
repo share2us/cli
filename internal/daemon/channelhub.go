@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"time"
 
@@ -32,14 +33,16 @@ type ChannelDelivery struct {
 const channelAlive = 5 * time.Second
 
 type channelHub struct {
-	mu     sync.Mutex
-	seen   map[string]time.Time         // session -> last poll
-	queue  map[string][]ChannelDelivery // session -> not yet picked up
-	picked map[string]chan struct{}     // request -> closed when picked up
-	result map[string]chan string       // request -> the result, once
-	active map[string]map[string]bool   // session -> requests in progress
-	owner  map[string]string            // request -> session
-	guard  map[string]bool              // session -> SessionStart hook proved loaded
+	mu      sync.Mutex
+	seen    map[string]time.Time         // session -> last poll
+	queue   map[string][]ChannelDelivery // session -> not yet picked up
+	picked  map[string]chan struct{}     // request -> closed when picked up
+	result  map[string]chan string       // request -> the result, once
+	active  map[string]map[string]bool   // session -> requests in progress
+	owner   map[string]string            // request -> session
+	guard   map[string]bool              // session -> SessionStart hook proved loaded
+	proven  map[string]bool              // session -> a live request was answered via report
+	channel map[string]bool              // request -> requires an explicit report, never Stop
 }
 
 func newChannelHub() *channelHub {
@@ -47,7 +50,7 @@ func newChannelHub() *channelHub {
 		seen: map[string]time.Time{}, queue: map[string][]ChannelDelivery{},
 		picked: map[string]chan struct{}{}, result: map[string]chan string{},
 		active: map[string]map[string]bool{}, owner: map[string]string{},
-		guard: map[string]bool{},
+		guard: map[string]bool{}, proven: map[string]bool{}, channel: map[string]bool{},
 	}
 }
 
@@ -56,7 +59,19 @@ func (h *channelHub) markGuardReady(session string) {
 	defer h.mu.Unlock()
 	if session != "" {
 		h.guard[session] = true
+		delete(h.proven, session)
 	}
+}
+
+// channelReady is separate from guardedAlive: polling and hooks do not prove
+// Claude can report a request. A successful report establishes readiness, even
+// from a typed request. This does not prove notifications are enabled, so each
+// subsequent channel request still needs its own report to finish.
+func (h *channelHub) channelReady(session string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	seen, ok := h.seen[session]
+	return ok && time.Since(seen) < channelAlive && h.guard[session] && h.proven[session]
 }
 
 // guardedAlive proves both halves started by `s2u claude` are present: the
@@ -77,8 +92,7 @@ func (h *channelHub) alive(session string) bool {
 }
 
 // deliver queues d for session's channel. picked closes when the channel takes
-// it; result yields what the agent reported (or "" when its turn ended without
-// a report).
+// it; result yields what the agent explicitly reported for this request.
 func (h *channelHub) deliver(session string, d ChannelDelivery) (picked <-chan struct{}, result <-chan string, ok bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -88,6 +102,7 @@ func (h *channelHub) deliver(session string, d ChannelDelivery) (picked <-chan s
 	p, r := make(chan struct{}), make(chan string, 1)
 	h.queue[session] = append(h.queue[session], d)
 	h.picked[d.RequestID], h.result[d.RequestID], h.owner[d.RequestID] = p, r, session
+	h.channel[d.RequestID] = true
 	return p, r, true
 }
 
@@ -158,23 +173,30 @@ func (h *channelHub) report(requestID, text string) bool {
 	if !ok {
 		return false
 	}
+	session := h.owner[requestID]
+	if _, active := h.active[session][requestID]; !active || strings.TrimSpace(text) == "" {
+		return false
+	}
+	h.proven[session] = true
 	r <- text
 	h.forget(requestID)
 	return true
 }
 
-// turnEnded is the session's Stop hook: work the agent never reported is done
-// now, with no result text.
+// turnEnded completes typed work without a report. Channel requests require
+// their own explicit report: this Stop could belong to the owner's turn.
 func (h *channelHub) turnEnded(session string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id := range h.active[session] {
+		if h.channel[id] {
+			continue // an unrelated owner turn is not this request's report
+		}
 		if r, ok := h.result[id]; ok {
 			r <- ""
 		}
 		h.forget(id)
 	}
-	delete(h.active, session)
 }
 
 // guarded reports whether a delivered hop is in progress in session, so the
@@ -191,6 +213,7 @@ func (h *channelHub) guarded(session string) (active, strict bool) {
 
 // forget drops every record of a request. Callers hold h.mu.
 func (h *channelHub) forget(requestID string) {
+	delete(h.channel, requestID)
 	if s, ok := h.owner[requestID]; ok {
 		delete(h.active[s], requestID)
 		if len(h.active[s]) == 0 {
