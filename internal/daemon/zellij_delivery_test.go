@@ -17,6 +17,9 @@ import (
 
 func typedRuntime(t *testing.T, screens ...string) (*Runtime, *fakeZellij, string) {
 	t.Helper()
+	for i := range screens {
+		screens[i] = claudeFixture(screens[i])
+	}
 	dir := t.TempDir()
 	pane := &ZellijPane{Session: "stale-name", Pane: "4"}
 	if _, _, err := BindSessionInPane(dir, "claude", "", "win-1", pane); err != nil {
@@ -68,6 +71,10 @@ func TestLiveS2UClaudeHopIsTypedAndReported(t *testing.T) {
 		t.Fatal("hook guard was not active after submission")
 	}
 	runtime.hub().report("req-typed", "finished safely")
+	if active, _ := runtime.hub().guarded("win-1"); !active {
+		t.Fatal("report dropped the guard before Stop")
+	}
+	runtime.hub().turnEnded("win-1")
 	deadline := time.Now().Add(5 * time.Second)
 	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -96,6 +103,37 @@ func TestPlainClaudeIsNeverTypedInto(t *testing.T) {
 	}
 }
 
+func TestTerminalControlTextNeverReachesZellij(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	for _, prompt := range []string{"safe\x1b[201~\runsafe", "safe\runsafe\x07"} {
+		runtime, z, dir := typedRuntime(t, "│ ❯  │")
+		ctx, cancel := context.WithCancel(context.Background())
+		runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
+			signedReq(t, clicore.AgentRequest{ID: "req-controls", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: prompt}))
+		cancel()
+		if len(z.pasted) != 0 || z.entered != 0 {
+			t.Fatalf("control-bearing prompt reached Zellij: paste=%q enter=%d", z.pasted, z.entered)
+		}
+	}
+	clean, ok := safeTerminalText("a\rb\a\n\tc")
+	if !ok || clean != "ab\n\tc" {
+		t.Fatalf("control stripping = %q, %v", clean, ok)
+	}
+}
+
+func TestClaudeExitAfterPasteNeverPressesEnter(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, z, dir := typedRuntime(t, "│ ❯  │", "│ ❯ [Pasted text +3 lines] │")
+	z.onPaste = func() { z.panes["renamed"][0].Command = "zsh" }
+	ctx, cancel := context.WithCancel(context.Background())
+	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-exit", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
+	cancel()
+	if len(z.pasted) != 1 || z.entered != 0 {
+		t.Fatalf("Claude exit race: paste=%q enter=%d", z.pasted, z.entered)
+	}
+}
+
 func TestOwnerInputRaceNeverPressesEnterAndKeepsGuard(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	runtime, z, dir := typedRuntime(t, "│ ❯  │", "│ ❯ owner text [Pasted text +3 lines] │")
@@ -118,8 +156,8 @@ func TestOwnerInputRaceNeverPressesEnterAndKeepsGuard(t *testing.T) {
 func TestPasteVerificationAllowsWrappedIntermediatePrefix(t *testing.T) {
 	visible := "[Share2Us] from device live-test, request live-one-word:\n\nok"
 	z := &fakeZellij{screens: []string{
-		"────────────────────────\n❯ [Share2Us] from device live-test, request\n  live-one-word:\n────────────────────────",
-		"────────────────────────\n❯ [Share2Us] from device live-test, request\n  live-one-word:\n\n  ok\n────────────────────────",
+		claudeFixture("────────────────────────\n❯ [Share2Us] from device live-test, request\n  live-one-word:\n────────────────────────"),
+		claudeFixture("────────────────────────\n❯ [Share2Us] from device live-test, request\n  live-one-word:\n\n  ok\n────────────────────────"),
 	}}
 	pane := resolvedZellijPane{Session: "test", Pane: "1"}
 	if !waitForPastedClaudeInput(t.Context(), z, pane, visible) {

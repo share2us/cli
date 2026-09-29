@@ -33,16 +33,17 @@ type ChannelDelivery struct {
 const channelAlive = 5 * time.Second
 
 type channelHub struct {
-	mu      sync.Mutex
-	seen    map[string]time.Time         // session -> last poll
-	queue   map[string][]ChannelDelivery // session -> not yet picked up
-	picked  map[string]chan struct{}     // request -> closed when picked up
-	result  map[string]chan string       // request -> the result, once
-	active  map[string]map[string]bool   // session -> requests in progress
-	owner   map[string]string            // request -> session
-	guard   map[string]bool              // session -> SessionStart hook proved loaded
-	proven  map[string]bool              // session -> a live request was answered via report
-	channel map[string]bool              // request -> requires an explicit report, never Stop
+	mu       sync.Mutex
+	seen     map[string]time.Time         // session -> last poll
+	queue    map[string][]ChannelDelivery // session -> not yet picked up
+	picked   map[string]chan struct{}     // request -> closed when picked up
+	result   map[string]chan string       // request -> the result, once
+	active   map[string]map[string]bool   // session -> requests in progress
+	owner    map[string]string            // request -> session
+	guard    map[string]bool              // session -> SessionStart hook proved loaded
+	proven   map[string]bool              // session -> a live request was answered via report
+	channel  map[string]bool              // request -> requires an explicit report, never Stop
+	reported map[string]string            // request -> result, held until the guarded turn ends
 }
 
 func newChannelHub() *channelHub {
@@ -51,6 +52,7 @@ func newChannelHub() *channelHub {
 		picked: map[string]chan struct{}{}, result: map[string]chan string{},
 		active: map[string]map[string]bool{}, owner: map[string]string{},
 		guard: map[string]bool{}, proven: map[string]bool{}, channel: map[string]bool{},
+		reported: map[string]string{},
 	}
 }
 
@@ -169,7 +171,7 @@ func (h *channelHub) poll(session string) []ChannelDelivery {
 func (h *channelHub) report(requestID, text string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	r, ok := h.result[requestID]
+	_, ok := h.result[requestID]
 	if !ok {
 		return false
 	}
@@ -177,23 +179,27 @@ func (h *channelHub) report(requestID, text string) bool {
 	if _, active := h.active[session][requestID]; !active || strings.TrimSpace(text) == "" {
 		return false
 	}
+	if _, already := h.reported[requestID]; already {
+		return false
+	}
 	h.proven[session] = true
-	r <- text
-	h.forget(requestID)
+	h.reported[requestID] = text
 	return true
 }
 
-// turnEnded completes typed work without a report. Channel requests require
-// their own explicit report: this Stop could belong to the owner's turn.
+// turnEnded releases the guard only after the turn ends. A report may be sent
+// early in the turn and must not make subsequent tools unguarded. Channel
+// requests require their own explicit report before any Stop can complete them.
 func (h *channelHub) turnEnded(session string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id := range h.active[session] {
-		if h.channel[id] {
+		out, reported := h.reported[id]
+		if h.channel[id] && !reported {
 			continue // an unrelated owner turn is not this request's report
 		}
 		if r, ok := h.result[id]; ok {
-			r <- ""
+			r <- out
 		}
 		h.forget(id)
 	}
@@ -214,6 +220,7 @@ func (h *channelHub) guarded(session string) (active, strict bool) {
 // forget drops every record of a request. Callers hold h.mu.
 func (h *channelHub) forget(requestID string) {
 	delete(h.channel, requestID)
+	delete(h.reported, requestID)
 	if s, ok := h.owner[requestID]; ok {
 		delete(h.active[s], requestID)
 		if len(h.active[s]) == 0 {
