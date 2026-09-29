@@ -64,6 +64,18 @@ func TestParseClaudeScreen(t *testing.T) {
 	}
 }
 
+func TestClaudeStateIgnoresTranscriptWords(t *testing.T) {
+	for _, transcript := range []string{"Do you want to continue?", "The UI said esc to interrupt"} {
+		screen := transcript + "\nold answer\n────────────────────────\n❯\u00a0\n────────────────────────\n⏵⏵ auto mode on"
+		if !safeClaudeInput(screen) {
+			t.Fatalf("transcript %q made the idle input unsafe: %+v", transcript, parseClaudeScreen(screen))
+		}
+	}
+	if safeClaudeInput("old answer\n────────────────────────\n❯\u00a0\nesc to interrupt\n────────────────────────") {
+		t.Fatal("active busy status was ignored")
+	}
+}
+
 func TestPastedClaudeInput(t *testing.T) {
 	if !pastedClaudeInput("│ ❯ [Share2Us] request r1 │", "[Share2Us] request r1") {
 		t.Fatal("exact pasted text was not recognised")
@@ -76,6 +88,14 @@ func TestPastedClaudeInput(t *testing.T) {
 	}
 	if pastedClaudeInput("│ ❯ owner text [Pasted text +30 lines] │", "many\nlines") {
 		t.Fatal("mixed owner input was accepted")
+	}
+	unfolded := "────────────────────────\n❯ [Share2Us] from device d1, request r1:\n\n  fix\n────────────────────────\n⏵⏵ auto mode on"
+	if !pastedClaudeInput(unfolded, "[Share2Us] from device d1, request r1:\n\nfix") {
+		t.Fatalf("unfolded multiline paste was not recognised: %+v", parseClaudeScreen(unfolded))
+	}
+	mixed := "────────────────────────\n❯ [Share2Us] from device d1, request r1:\n\n  owner text fix\n────────────────────────"
+	if pastedClaudeInput(mixed, "[Share2Us] from device d1, request r1:\n\nfix") {
+		t.Fatal("owner text in an unfolded paste was accepted")
 	}
 }
 
@@ -132,5 +152,18 @@ func TestResolveZellijPaneRequiresOneExactLiveMatch(t *testing.T) {
 	wrongProcess := func(int) *ZellijPane { return &ZellijPane{Session: "another", Pane: "4"} }
 	if _, err := resolveZellijPaneWith(context.Background(), z, binding, session, wrongProcess); err == nil {
 		t.Fatal("a process that moved panes was accepted")
+	}
+}
+
+func TestResolveZellijPaneFailsClosedWhenAnySessionIsUnreadable(t *testing.T) {
+	dir := t.TempDir()
+	binding := Binding{SessionID: "session-1", Project: dir, Tool: "claude", Zellij: &ZellijPane{Session: "bound", Pane: "4"}}
+	session := DiscoveredSession{SessionID: "session-1", Project: dir, Tool: "claude", PID: 123, Live: true}
+	z := &fakeZellij{sessions: []string{"matching", "unreadable"}, panes: map[string][]zellijPaneInfo{
+		"matching": {{ID: 4, CWD: dir, Command: "claude --resume session-1"}},
+	}}
+	process := func(int) *ZellijPane { return &ZellijPane{Session: "bound", Pane: "4"} }
+	if _, err := resolveZellijPaneWith(context.Background(), z, binding, session, process); err == nil {
+		t.Fatal("a match was trusted while another listed session could not be inspected")
 	}
 }
