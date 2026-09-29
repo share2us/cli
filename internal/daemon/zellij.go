@@ -183,6 +183,14 @@ func resolveZellijPaneWith(ctx context.Context, z zellijDriver, binding Binding,
 }
 
 func isClaudePaneCommand(command string) bool {
+	wrapper := ""
+	if exe, err := os.Executable(); err == nil {
+		wrapper = strings.ToLower(filepath.Base(exe))
+	}
+	return isClaudePaneCommandFor(command, wrapper)
+}
+
+func isClaudePaneCommandFor(command, currentExecutable string) bool {
 	fields := strings.Fields(command)
 	if len(fields) == 0 {
 		return false
@@ -191,7 +199,8 @@ func isClaudePaneCommand(command string) bool {
 	if base == "claude" || base == "claude.exe" {
 		return true
 	}
-	return (base == "s2u" || base == "s2u.exe") && len(fields) > 1 && strings.Trim(fields[1], "'\"") == "claude"
+	knownWrapper := base == "s2u" || base == "s2u.exe" || base == "share2us" || base == "share2us.exe" || base == strings.ToLower(currentExecutable)
+	return knownWrapper && len(fields) > 1 && strings.Trim(fields[1], "'\"") == "claude"
 }
 
 var ansiSequence = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)

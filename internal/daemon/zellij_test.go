@@ -73,13 +73,13 @@ func TestPastedClaudeInput(t *testing.T) {
 }
 
 func TestClaudePaneCommand(t *testing.T) {
-	for _, command := range []string{"claude --resume id", "/usr/bin/claude", "s2u claude --resume id"} {
-		if !isClaudePaneCommand(command) {
+	for _, command := range []string{"claude --resume id", "/usr/bin/claude", "s2u claude --resume id", "share2us claude", "/tmp/s2u-zellij-live claude"} {
+		if !isClaudePaneCommandFor(command, "s2u-zellij-live") {
 			t.Errorf("rejected %q", command)
 		}
 	}
 	for _, command := range []string{"bash", "codex", "echo claude"} {
-		if isClaudePaneCommand(command) {
+		if isClaudePaneCommandFor(command, "s2u-zellij-live") {
 			t.Errorf("accepted %q", command)
 		}
 	}
