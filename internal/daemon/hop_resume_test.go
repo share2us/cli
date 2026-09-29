@@ -96,8 +96,8 @@ func TestHopWaitsForAnOpenWindowThenRunsInPlace(t *testing.T) {
 	if r.ran != 1 || r.ranSID != "win-1" {
 		t.Fatalf("after the window let go: ran %d in %q, want once in win-1", r.ran, r.ranSID)
 	}
-	if len(c.reports) != 2 || c.reports[1] != [2]string{"done", "ok"} {
-		t.Fatalf("reports = %v", c.reports)
+	if len(c.reports) != 3 || c.reports[0][0] != "waiting" || c.reports[1][0] != "running" || c.reports[2] != [2]string{"done", "ok"} {
+		t.Fatalf("reports = %v, want waiting, running, done", c.reports)
 	}
 	list, _ := LoadBindings()
 	if _, ok := BindingForSession(list, "win-1"); !ok {
@@ -128,8 +128,34 @@ func TestHeldHopGivesUp(t *testing.T) {
 	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if r.ran != 0 || len(c.reports) != 1 || c.reports[0][0] != "failed" {
-		t.Fatalf("ran %d, reports %v; want no run and one failure", r.ran, c.reports)
+	if r.ran != 0 || len(c.reports) != 2 || c.reports[0][0] != "waiting" || c.reports[1][0] != "failed" {
+		t.Fatalf("ran %d, reports %v; want no run, waiting then failed", r.ran, c.reports)
+	}
+}
+
+// The limit counts from when the hop was SENT: a hop handed back after a
+// restart does not get a fresh 24 hours.
+func TestHeldHopLimitCountsFromWhenItWasSent(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	poll := injectHoldPoll
+	injectHoldPoll = 5 * time.Millisecond
+	t.Cleanup(func() { injectHoldPoll = poll })
+	dir := t.TempDir()
+	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
+		t.Fatal(err)
+	}
+	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Live: true}}, heldFor: 1 << 30}
+	c := &fakeAgentClient{}
+	runtime := rt()
+	old := time.Now().Add(-injectHoldMax - time.Minute).UTC().Format(time.RFC3339)
+	runtime.handleInject(context.Background(), c, r, keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-4", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go", CreatedAt: old}))
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.ran != 0 || len(c.reports) != 2 || c.reports[1][0] != "failed" {
+		t.Fatalf("ran %d, reports %v; a hop sent over %s ago must fail at once", r.ran, c.reports, injectHoldMax)
 	}
 }
 
@@ -231,5 +257,16 @@ func TestOnlyBoundToolsAreDiscovered(t *testing.T) {
 	rt().agentRegisterLoop(ctx, &fakeAgentClient{}, []AgentRunner{claude, gemini, codex}, keyedDeps())
 	if claude.calls != 1 || gemini.calls != 0 || codex.calls != 0 {
 		t.Fatalf("discover calls: claude %d gemini %d codex %d, want 1 0 0", claude.calls, gemini.calls, codex.calls)
+	}
+}
+
+// A (re)started receive loop asks once for the hops it was holding back.
+func TestReceiveLoopAsksForWaitingHopsBackOnce(t *testing.T) {
+	c := &fakeAgentClient{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	rt().agentReceiveLoop(ctx, c, []AgentRunner{&sessionFake{}}, keyedDeps())
+	if c.requeued != 1 {
+		t.Fatalf("requeue calls = %d, want 1", c.requeued)
 	}
 }

@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **A prompt waiting for an open window says so.** `s2u agent status <id>` shows
+  `waiting` with the reason, instead of `delivered`. If the background service
+  restarts (a reboot or an update) while a prompt waits, the prompt comes back and
+  keeps waiting; the 24-hour limit still counts from when it was sent.
+
 ## [20260929105538] - 2026-09-29
 
 ### Changed

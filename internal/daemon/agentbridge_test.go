@@ -21,8 +21,14 @@ type fakeAgentClient struct {
 	deregd     []string
 	// remote is what the server already believes this device is running, used by
 	// the startup retire pass.
-	remote  []clicore.AgentSessionInfo
-	listErr error
+	remote   []clicore.AgentSessionInfo
+	listErr  error
+	requeued int
+}
+
+func (f *fakeAgentClient) AgentRequeueWaiting(context.Context) (int, error) {
+	f.requeued++
+	return 0, nil
 }
 
 func (f *fakeAgentClient) ListAgentSessions(_ context.Context) ([]clicore.AgentSessionInfo, error) {
