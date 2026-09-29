@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260929191259] - 2026-09-29
+
 ### Fixed
 
 - **`--json` for a sharenet post names only where it went.** A `--project` post no
