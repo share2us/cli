@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260929105538] - 2026-09-29
+
 ### Changed
 
 - **A prompt sent to an agent now always runs in its bound session.** It is never
