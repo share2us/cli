@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Open Claude sessions must successfully use the report tool before receiving
+  channel requests. Each channel request then requires its own report: an
+  unrelated owner turn can no longer falsely mark a dropped prompt as done.
+  Unconfirmed requests wait without repeated delivery; Zellij typing is unchanged.
+
 ## [20260929184034] - 2026-09-29
 
 ### Fixed
