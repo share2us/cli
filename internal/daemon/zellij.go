@@ -240,18 +240,40 @@ func parseClaudeScreen(screen string) claudeScreenState {
 
 func safeClaudeInput(screen string) bool {
 	s := parseClaudeScreen(screen)
-	return !s.Busy && !s.Dialog && s.InputEmpty
+	return claudeUIReady(screen) && !s.Busy && !s.Dialog && s.InputEmpty
 }
 
 func pastedClaudeInput(screen, prompt string) bool {
 	s := parseClaudeScreen(screen)
-	if s.Busy || s.Dialog || s.Input == "" {
+	if !claudeUIReady(screen) || s.Busy || s.Dialog || s.Input == "" {
 		return false
 	}
 	if withoutWhitespace(s.Input) == withoutWhitespace(prompt) {
 		return true
 	}
 	return foldedClaudePaste.MatchString(strings.TrimSpace(s.Input))
+}
+
+// A shell prompt can also use ❯. Require Claude's own input divider and
+// status/help chrome around the active input, not just a matching prompt glyph.
+func claudeUIReady(screen string) bool {
+	lines := strings.Split(ansiSequence.ReplaceAllString(screen, ""), "\n")
+	prompt := lastPromptIndex(lines)
+	if prompt < 0 {
+		return false
+	}
+	divider := false
+	for i := prompt - 1; i >= 0 && i >= prompt-12; i-- {
+		if claudeHorizontalRule(lines[i]) {
+			divider = true
+			break
+		}
+	}
+	if !divider {
+		return false
+	}
+	active := strings.ToLower(activeClaudeUI(screen))
+	return strings.Contains(active, "mode on") || strings.Contains(active, "? for shortcuts")
 }
 
 // activeClaudeUI excludes prior transcript from state detection. Claude draws a

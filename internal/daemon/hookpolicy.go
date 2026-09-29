@@ -4,6 +4,7 @@
 package daemon
 
 import (
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -26,6 +27,11 @@ var fileEditTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": tr
 var hookFreeTools = map[string]bool{
 	"Read": true, "Glob": true, "Grep": true, "LS": true, "NotebookRead": true,
 	"TodoWrite": true, "TodoRead": true, "ToolSearch": true, "Task": true, "Agent": true,
+}
+
+var readToolPathKey = map[string]string{
+	"Read": "file_path", "NotebookRead": "notebook_path",
+	"Grep": "path", "Glob": "path", "LS": "path",
 }
 
 // HookDecision says whether the policy for cwd refuses this tool call, and why.
@@ -67,10 +73,22 @@ func HookDecision(cwd, tool string, input map[string]any, forceRestricted bool) 
 			allowed = hopReadOnly
 		}
 		cmd, _ := input["command"].(string)
+		if unsafeReadShell(cmd) {
+			return true, "Share2Us: delivered prompts may run only plain read commands without shell expansion, substitution, backgrounding or redirection."
+		}
 		for _, part := range splitShell(cmd) {
-			if !anyRuleMatches(allowed, "Bash", map[string]any{"command": part}) {
+			if !anyRuleMatches(allowed, "Bash", map[string]any{"command": part}) || !readCommandInside(cwd, part) {
 				return true, "Share2Us: a delivered prompt may run only read-only commands (ls, cat, grep, git status and similar); `" + part + "` would need your approval. Run it yourself if you want it."
 			}
+		}
+		return false, ""
+	case readToolPathKey[tool] != "":
+		path, _ := input[readToolPathKey[tool]].(string)
+		if path == "" && tool != "Read" && tool != "NotebookRead" {
+			path = cwd
+		}
+		if strings.HasPrefix(path, "~") || strings.ContainsAny(path, "*?[]{}") || !insideDir(cwd, path) {
+			return true, "Share2Us: delivered prompts may read only inside this project (" + cwd + ")."
 		}
 		return false, ""
 	case hookFreeTools[tool]:
@@ -79,7 +97,9 @@ func HookDecision(cwd, tool string, input map[string]any, forceRestricted bool) 
 	return true, "Share2Us: a delivered prompt may not use " + tool + " without your approval. Use it yourself if you want it."
 }
 
-// insideDir reports whether path is dir or below it.
+// insideDir reports whether a path resolves to dir or below it. Resolve the
+// nearest existing parent too, so a new file below an escaping symlink is not
+// accepted as an in-project path.
 func insideDir(dir, path string) bool {
 	if dir == "" || path == "" {
 		return false
@@ -87,8 +107,44 @@ func insideDir(dir, path string) bool {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(dir, path)
 	}
-	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	base, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return false
+	}
+	resolved, err := resolvedOrParent(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(base, resolved)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func resolvedOrParent(path string) (string, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	current := path
+	for {
+		if _, err := os.Lstat(current); err == nil {
+			root, err := filepath.EvalSymlinks(current)
+			if err != nil {
+				return "", err
+			}
+			rel, err := filepath.Rel(current, path)
+			if err != nil {
+				return "", err
+			}
+			return filepath.Join(root, rel), nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", os.ErrNotExist
+		}
+		current = parent
+	}
 }
 
 func anyRuleMatches(rules []string, tool string, input map[string]any) bool {
@@ -151,15 +207,6 @@ func splitShell(cmd string) []string {
 	var out []string
 	for _, p := range shellSeparators.Split(cmd, -1) {
 		p = strings.TrimSpace(p)
-		// A leading env assignment or subshell paren does not hide the command.
-		p = strings.TrimLeft(p, "( ")
-		for {
-			f, rest, ok := strings.Cut(p, " ")
-			if !ok || !strings.Contains(f, "=") || strings.HasPrefix(f, "-") {
-				break
-			}
-			p = strings.TrimSpace(rest)
-		}
 		if p != "" {
 			out = append(out, p)
 		}

@@ -18,6 +18,11 @@ type fakeZellij struct {
 	screens  []string
 	pasted   []string
 	entered  int
+	onPaste  func()
+}
+
+func claudeFixture(input string) string {
+	return "────────────────────────\n" + input + "\n⏵⏵ auto mode on"
 }
 
 func (f *fakeZellij) Sessions(context.Context) ([]string, error) { return f.sessions, nil }
@@ -38,6 +43,9 @@ func (f *fakeZellij) Dump(context.Context, string, string) (string, error) {
 }
 func (f *fakeZellij) Paste(_ context.Context, _, _, text string) error {
 	f.pasted = append(f.pasted, text)
+	if f.onPaste != nil {
+		f.onPaste()
+	}
 	return nil
 }
 func (f *fakeZellij) Enter(context.Context, string, string) error { f.entered++; return nil }
@@ -48,15 +56,16 @@ func TestParseClaudeScreen(t *testing.T) {
 		in   string
 		safe bool
 	}{
-		{"empty", "╭─╮\n│ ❯  │\n╰─╯", true},
-		{"dim suggestion", "│ ❯ \x1b[2mTry \"fix typecheck errors\"\x1b[22m │", true},
-		{"owner text", "│ ❯ do not touch this │", false},
-		{"busy", "│ ❯  │\nesc to interrupt", false},
-		{"dialog", "Do you want to continue?\n  1. Yes\n  2. No\n│ ❯  │", false},
+		{"empty", claudeFixture("│ ❯  │"), true},
+		{"dim suggestion", claudeFixture("│ ❯ \x1b[2mTry \"fix typecheck errors\"\x1b[22m │"), true},
+		{"owner text", claudeFixture("│ ❯ do not touch this │"), false},
+		{"busy", claudeFixture("│ ❯  │\nesc to interrupt"), false},
+		{"dialog", claudeFixture("Do you want to continue?\n  1. Yes\n  2. No\n│ ❯  │"), false},
 		// Captured read-only from Claude Code 2.1.284 in the owner's scratch
 		// pane. Its empty input uses a non-breaking space and a bare ANSI reset,
 		// not the bordered form used by the synthetic fixtures above.
 		{"real idle ansi", "\x1b[38;5;244m────────────────\n\x1b[m❯\u00a0\n\x1b[38;5;220m⏵⏵ auto mode on\x1b[m", true},
+		{"shell prompt", "❯\n", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -80,24 +89,24 @@ func TestClaudeStateIgnoresTranscriptWords(t *testing.T) {
 }
 
 func TestPastedClaudeInput(t *testing.T) {
-	if !pastedClaudeInput("│ ❯ [Share2Us] request r1 │", "[Share2Us] request r1") {
+	if !pastedClaudeInput(claudeFixture("│ ❯ [Share2Us] request r1 │"), "[Share2Us] request r1") {
 		t.Fatal("exact pasted text was not recognised")
 	}
-	if !pastedClaudeInput("│ ❯ [Pasted text +30 lines] │", "many\nlines") {
+	if !pastedClaudeInput(claudeFixture("│ ❯ [Pasted text +30 lines] │"), "many\nlines") {
 		t.Fatal("folded paste was not recognised")
 	}
-	if !pastedClaudeInput("\x1b[m❯\u00a0[Pasted text #1 +3 lines]", "many\nlines") {
+	if !pastedClaudeInput(claudeFixture("\x1b[m❯\u00a0[Pasted text #1 +3 lines]"), "many\nlines") {
 		t.Fatal("real Claude 2.1.284 folded paste was not recognised")
 	}
-	if pastedClaudeInput("│ ❯ owner text [Pasted text +30 lines] │", "many\nlines") {
+	if pastedClaudeInput(claudeFixture("│ ❯ owner text [Pasted text +30 lines] │"), "many\nlines") {
 		t.Fatal("mixed owner input was accepted")
 	}
 	unfolded := "────────────────────────\n❯ [Share2Us] from device d1, request r1:\n\n  fix\n────────────────────────\n⏵⏵ auto mode on"
-	if !pastedClaudeInput(unfolded, "[Share2Us] from device d1, request r1:\n\nfix") {
+	if !pastedClaudeInput(claudeFixture(unfolded), "[Share2Us] from device d1, request r1:\n\nfix") {
 		t.Fatalf("unfolded multiline paste was not recognised: %+v", parseClaudeScreen(unfolded))
 	}
 	mixed := "────────────────────────\n❯ [Share2Us] from device d1, request r1:\n\n  owner text fix\n────────────────────────"
-	if pastedClaudeInput(mixed, "[Share2Us] from device d1, request r1:\n\nfix") {
+	if pastedClaudeInput(claudeFixture(mixed), "[Share2Us] from device d1, request r1:\n\nfix") {
 		t.Fatal("owner text in an unfolded paste was accepted")
 	}
 }

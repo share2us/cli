@@ -14,6 +14,30 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ### Fixed
 
+- Guarded live Claude hops now keep their tool restrictions until the turn ends,
+  even if the agent reports early. Zellij delivery rejects terminal escape text,
+  verifies Claude's UI and pane again before Enter, and keeps reads inside the
+  bound project. Shell substitutions, backgrounding and redirection cannot
+  bypass the read-only command gate.
+
+## [20260929192101] - 2026-09-29
+
+### Changed
+
+- **`s2u help` lists `--sharenet` and `--project`**, under "Sharenet files".
+
+## [20260929191259] - 2026-09-29
+
+### Fixed
+
+- **`--json` for a sharenet post names only where it went.** A `--project` post no
+  longer prints an empty `"sharenet_id": ""`, and a `--sharenet` post no longer
+  prints an empty `"project_id"`.
+
+## [20260929190112] - 2026-09-29
+
+### Fixed
+
 - Open Claude sessions must successfully use the report tool before receiving
   channel requests. Each channel request then requires its own report: an
   unrelated owner turn can no longer falsely mark a dropped prompt as done.

@@ -47,8 +47,20 @@ func TestChannelHubDeliverPollReport(t *testing.T) {
 	if active, strict := h.guarded("s1"); !active || !strict {
 		t.Fatalf("guarded = %v %v, want an in-progress strict hop", active, strict)
 	}
-	if !h.report("r1", "done it") || <-result != "done it" {
-		t.Fatal("report did not reach the waiting hop")
+	if !h.report("r1", "done it") {
+		t.Fatal("report was not accepted")
+	}
+	if active, _ := h.guarded("s1"); !active {
+		t.Fatal("an early report removed the guard before Stop")
+	}
+	select {
+	case <-result:
+		t.Fatal("an early report completed the hop before Stop")
+	default:
+	}
+	h.turnEnded("s1")
+	if <-result != "done it" {
+		t.Fatal("report did not reach the waiting hop after Stop")
 	}
 	if active, _ := h.guarded("s1"); active || h.report("r1", "again") {
 		t.Fatal("a reported hop is still in progress")
@@ -256,6 +268,7 @@ func TestLiveSessionWithAChannelGetsTheHopDelivered(t *testing.T) {
 		t.Fatalf("delivery = %+v", got)
 	}
 	runtime.hub().report("req-5", "finished")
+	runtime.hub().turnEnded("win-1")
 	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -454,6 +467,7 @@ func proveReportTool(t *testing.T, h *channelHub, session string) {
 	if !h.report("proof", "confirmed") {
 		t.Fatal("proof report")
 	}
+	h.turnEnded(session)
 }
 
 func TestUnreportedChannelExpiresWithoutCompletion(t *testing.T) {
