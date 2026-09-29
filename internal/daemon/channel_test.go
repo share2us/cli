@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -59,12 +60,15 @@ func TestChannelHubTurnEndedWithoutReport(t *testing.T) {
 	_, result, _ := h.deliver("s1", ChannelDelivery{RequestID: "r1"})
 	h.poll("s1")
 	h.turnEnded("s1")
-	if r := <-result; r != "" {
-		t.Fatalf("result = %q, want empty (no report)", r)
+	select {
+	case r := <-result:
+		t.Fatalf("Stop completed a channel request: %q", r)
+	default:
 	}
-	if active, _ := h.guarded("s1"); active {
-		t.Fatal("still guarded after the turn ended")
+	if active, _ := h.guarded("s1"); !active {
+		t.Fatal("channel guard was removed by an unrelated Stop")
 	}
+	h.withdraw("s1", "r1")
 }
 
 func TestChannelHubWithdraw(t *testing.T) {
@@ -239,6 +243,7 @@ func TestLiveSessionWithAChannelGetsTheHopDelivered(t *testing.T) {
 	runtime := rt()
 	runtime.hub().poll("win-1") // the channel is listening
 	runtime.hub().markGuardReady("win-1")
+	proveReportTool(t, runtime.hub(), "win-1")
 	runtime.handleInject(context.Background(), c, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-5", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
 	var got []ChannelDelivery
@@ -257,7 +262,7 @@ func TestLiveSessionWithAChannelGetsTheHopDelivered(t *testing.T) {
 	if r.ran != 0 {
 		t.Fatal("a delivered hop also ran headlessly")
 	}
-	if len(c.reports) != 2 || c.reports[0][0] != "running" || c.reports[1] != [2]string{"done", "finished"} {
+	if len(c.reports) != 3 || c.reports[0][0] != "waiting" || c.reports[1][0] != "running" || c.reports[2] != [2]string{"done", "finished"} {
 		t.Fatalf("reports = %v", c.reports)
 	}
 	hops, _ := LoadHops(0)
@@ -268,9 +273,9 @@ func TestLiveSessionWithAChannelGetsTheHopDelivered(t *testing.T) {
 
 func TestChannelPickupWithoutClaudeStartingFallsBackToWaiting(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	pickup, busyPoll, holdPoll := channelPickup, channelBusyPoll, injectHoldPoll
-	channelPickup, channelBusyPoll, injectHoldPoll = 30*time.Millisecond, 2*time.Millisecond, 5*time.Millisecond
-	t.Cleanup(func() { channelPickup, channelBusyPoll, injectHoldPoll = pickup, busyPoll, holdPoll })
+	pickup, holdPoll := channelPickup, injectHoldPoll
+	channelPickup, injectHoldPoll = 30*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { channelPickup, injectHoldPoll = pickup, holdPoll })
 	dir := t.TempDir()
 	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
 		t.Fatal(err)
@@ -280,6 +285,7 @@ func TestChannelPickupWithoutClaudeStartingFallsBackToWaiting(t *testing.T) {
 	runtime := rt()
 	runtime.hub().poll("win-1")
 	runtime.hub().markGuardReady("win-1")
+	proveReportTool(t, runtime.hub(), "win-1")
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime.handleInject(ctx, c, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-dropped", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
@@ -327,6 +333,7 @@ func TestBusySessionCannotConfirmDroppedChannelDelivery(t *testing.T) {
 	runtime := rt()
 	runtime.hub().poll("win-1")
 	runtime.hub().markGuardReady("win-1")
+	proveReportTool(t, runtime.hub(), "win-1")
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime.handleInject(ctx, c, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-owner-busy", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
@@ -352,9 +359,9 @@ func TestBusySessionCannotConfirmDroppedChannelDelivery(t *testing.T) {
 
 func TestStopBeforeBusyTransitionCannotCompleteChannelHop(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	pickup, busyPoll := channelPickup, channelBusyPoll
-	channelPickup, channelBusyPoll = time.Second, 2*time.Millisecond
-	t.Cleanup(func() { channelPickup, channelBusyPoll = pickup, busyPoll })
+	pickup := channelPickup
+	channelPickup = 30 * time.Millisecond
+	t.Cleanup(func() { channelPickup = pickup })
 	dir := t.TempDir()
 	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
 		t.Fatal(err)
@@ -364,6 +371,7 @@ func TestStopBeforeBusyTransitionCannotCompleteChannelHop(t *testing.T) {
 	runtime := rt()
 	runtime.hub().poll("win-1")
 	runtime.hub().markGuardReady("win-1")
+	proveReportTool(t, runtime.hub(), "win-1")
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime.handleInject(ctx, c, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-early-stop", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
@@ -389,43 +397,121 @@ func TestStopBeforeBusyTransitionCannotCompleteChannelHop(t *testing.T) {
 	}
 }
 
-func TestBusyTransitionConfirmsChannelHop(t *testing.T) {
+// Even after readiness was established, a dropped event plus the owner's own
+// turn must never complete the request. Before readiness it must not be queued.
+func TestOwnerTurnCannotCompleteUnreportedChannelHop(t *testing.T) {
+	for _, proven := range []bool{false, true} {
+		t.Run(fmt.Sprint(proven), func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			pickup, poll := channelPickup, injectHoldPoll
+			channelPickup, injectHoldPoll = 30*time.Millisecond, 5*time.Millisecond
+			t.Cleanup(func() { channelPickup, injectHoldPoll = pickup, poll })
+			dir := t.TempDir()
+			if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
+				t.Fatal(err)
+			}
+			r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Live: true}}, statuses: []string{"available", "available", "busy"}, heldFor: 1 << 30}
+			c := &fakeAgentClient{}
+			runtime := rt()
+			runtime.hub().poll("win-1")
+			runtime.hub().markGuardReady("win-1")
+			if proven {
+				proveReportTool(t, runtime.hub(), "win-1")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			runtime.handleInject(ctx, c, r, keyedDeps(), signedReq(t, clicore.AgentRequest{ID: "dropped", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
+			deliveries := 0
+			until := time.Now().Add(100 * time.Millisecond)
+			for time.Now().Before(until) {
+				deliveries += len(runtime.hub().poll("win-1"))
+				runtime.hub().turnEnded("win-1")
+				time.Sleep(time.Millisecond)
+			}
+			cancel()
+			deadline := time.Now().Add(time.Second)
+			for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			if runtime.holding.Load() != 0 {
+				t.Fatal("worker did not stop")
+			}
+			if (!proven && deliveries != 0) || (proven && deliveries != 1) {
+				t.Fatalf("proven=%v deliveries=%d", proven, deliveries)
+			}
+			if len(c.reports) != 1 || c.reports[0][0] != "waiting" || r.ran != 0 {
+				t.Fatalf("reports=%v ran=%d", c.reports, r.ran)
+			}
+		})
+	}
+}
+
+func proveReportTool(t *testing.T, h *channelHub, session string) {
+	t.Helper()
+	if _, ok := h.beginTyped(session, ChannelDelivery{RequestID: "proof"}); !ok {
+		t.Fatal("proof setup")
+	}
+	if !h.report("proof", "confirmed") {
+		t.Fatal("proof report")
+	}
+}
+
+func TestUnreportedChannelExpiresWithoutCompletion(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	pickup, busyPoll := channelPickup, channelBusyPoll
-	channelPickup, channelBusyPoll = time.Second, 2*time.Millisecond
-	t.Cleanup(func() { channelPickup, channelBusyPoll = pickup, busyPoll })
 	dir := t.TempDir()
 	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
 		t.Fatal(err)
 	}
-	r := &sessionFake{
-		discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Live: true}},
-		statuses:   []string{"available", "available", "busy"}, heldFor: 1 << 30,
-	}
-	c := &fakeAgentClient{reportNotify: make(chan struct{}, 2)}
+	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "available", Live: true}}, heldFor: 1 << 30}
+	c := &fakeAgentClient{}
 	runtime := rt()
 	runtime.hub().poll("win-1")
 	runtime.hub().markGuardReady("win-1")
-	runtime.handleInject(context.Background(), c, r, keyedDeps(),
-		signedReq(t, clicore.AgentRequest{ID: "req-transition", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
+	proveReportTool(t, runtime.hub(), "win-1")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	runtime.handleInject(ctx, c, r, keyedDeps(), signedReq(t, clicore.AgentRequest{ID: "expired", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go", CreatedAt: time.Now().Add(-injectHoldMax - time.Second).UTC().Format(time.RFC3339)}))
+	runtime.hub().poll("win-1")
 	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if got := runtime.hub().poll("win-1"); len(got) == 1 {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	select {
-	case <-c.reportNotify: // running: the observed transition confirmed this hop
-	case <-time.After(time.Second):
-		t.Fatal("available -> busy transition did not confirm the channel hop")
-	}
-	runtime.hub().turnEnded("win-1")
 	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if len(c.reports) != 2 || c.reports[0][0] != "running" || c.reports[1][0] != "done" {
-		t.Fatalf("reports=%v, want running then done", c.reports)
+	if runtime.holding.Load() != 0 {
+		t.Fatal("expiry did not finish")
+	}
+	if len(c.reports) != 2 || c.reports[0][0] != "waiting" || c.reports[1][0] != "failed" {
+		t.Fatalf("reports=%v", c.reports)
+	}
+	if active, _ := runtime.hub().guarded("win-1"); active {
+		t.Fatal("expired request still guarded")
+	}
+}
+
+func TestChannelReadinessRequiresReportAndResetsOnStart(t *testing.T) {
+	h := newChannelHub()
+	h.poll("s1")
+	h.markGuardReady("s1")
+	if h.channelReady("s1") {
+		t.Fatal("poll and guard incorrectly prove channel readiness")
+	}
+	if h.report("unknown", "forged") || h.channelReady("s1") {
+		t.Fatal("unknown report proved readiness")
+	}
+	_, _ = h.beginTyped("s1", ChannelDelivery{RequestID: "typed"})
+	if h.report("typed", "  ") {
+		t.Fatal("blank report proved readiness")
+	}
+	h.turnEnded("s1")
+	if h.channelReady("s1") {
+		t.Fatal("Stop proved readiness")
+	}
+	proveReportTool(t, h, "s1")
+	if !h.channelReady("s1") || h.channelReady("s2") {
+		t.Fatal("readiness is not session-specific")
+	}
+	h.markGuardReady("s1")
+	if h.channelReady("s1") {
+		t.Fatal("restart retained readiness")
 	}
 }
 
