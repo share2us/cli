@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260929190112] - 2026-09-29
+
 ### Fixed
 
 - Open Claude sessions must successfully use the report tool before receiving
