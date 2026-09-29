@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--json` for a sharenet post names only where it went.** A `--project` post no
+  longer prints an empty `"sharenet_id": ""`, and a `--sharenet` post no longer
+  prints an empty `"project_id"`.
+
 ## [20260929190112] - 2026-09-29
 
 ### Fixed

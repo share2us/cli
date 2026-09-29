@@ -2129,7 +2129,15 @@ func (a app) upload(ctx context.Context, args []string) int {
 	if opts.sharenet != "" || opts.project != "" {
 		// No link: members find it in the sharenet (or project) in the portal.
 		if opts.json {
-			writeJSON(a.stdout, map[string]any{"status": completed.Status, "file_name": fileName, "sharenet_id": opts.sharenet, "project_id": opts.project})
+			out := map[string]any{"status": completed.Status, "file_name": fileName}
+			// Only the id that was posted to: a project post has no sharenet id here.
+			if opts.sharenet != "" {
+				out["sharenet_id"] = opts.sharenet
+			}
+			if opts.project != "" {
+				out["project_id"] = opts.project
+			}
+			writeJSON(a.stdout, out)
 			return 0
 		}
 		where := "the sharenet"
