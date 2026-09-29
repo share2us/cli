@@ -50,7 +50,7 @@ func TestAllowAndDenyStayDisjoint(t *testing.T) {
 }
 
 func TestHopArgsCarryReadsAndTheUnattendedNote(t *testing.T) {
-	args := buildClaudeInjectArgs("s1", "the prompt", CompileRules(nil, PrivilegeStandard), "acceptEdits", false)
+	args := buildClaudeInjectArgs("s1", "the prompt", CompileRules(nil, PrivilegeStandard), "acceptEdits")
 	joined := strings.Join(args, "\x00")
 	if !strings.Contains(joined, "--allowedTools\x00Bash(ls:*)") {
 		t.Fatalf("no allowlist in %q", args)

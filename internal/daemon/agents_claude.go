@@ -6,6 +6,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os/exec"
 	"strings"
 	"time"
@@ -19,7 +20,7 @@ type DiscoveredSession struct {
 	Project   string // cwd
 	Status    string // available | busy | unknown
 	// Live: a running tool process holds the session (Claude lists it in
-	// `claude agents`), so a hop cannot resume it in place and must fork it.
+	// `claude agents`), so a hop waits until it lets the session go.
 	Live bool
 }
 
@@ -135,7 +136,7 @@ func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string, forceRe
 	policy := CompileRules(LoadRules(cwd), priv)
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "claude", buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv), true)...)
+	cmd := exec.CommandContext(cctx, "claude", buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv))...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -143,32 +144,34 @@ func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string, forceRe
 	return string(out), err
 }
 
-// RunClaudeInjectSession runs a hop in sessionID and reports the session the
-// agent is in afterwards, read from Claude's JSON result: a new id when it forked
-// (fork, or Claude refused to resume in place), the same id when it resumed.
-func RunClaudeInjectSession(ctx context.Context, sessionID, cwd, prompt string, forceRestricted, fork bool) (string, string, error) {
+// ErrSessionHeld: Claude will not run a prompt headlessly in a session that a
+// running process (an open window) holds. The hop waits instead of forking.
+var ErrSessionHeld = errors.New("the session is open in a window")
+
+// RunClaudeInjectSession runs a hop IN sessionID and reports the session the
+// agent is in afterwards, read from Claude's JSON result. It never forks: if a
+// window holds the session, Claude refuses and this returns ErrSessionHeld.
+func RunClaudeInjectSession(ctx context.Context, sessionID, cwd, prompt string, forceRestricted bool) (string, string, error) {
 	priv := AgentPolicy(cwd, forceRestricted)
 	policy := CompileRules(LoadRules(cwd), priv)
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	run := func(fork bool) ([]byte, error) {
-		args := append(buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv), fork), "--output-format", "json")
-		cmd := exec.CommandContext(cctx, "claude", args...)
-		if cwd != "" {
-			cmd.Dir = cwd
-		}
-		return cmd.CombinedOutput()
+	args := append(buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv)), "--output-format", "json")
+	cmd := exec.CommandContext(cctx, "claude", args...)
+	if cwd != "" {
+		cmd.Dir = cwd
 	}
-	raw, err := run(fork)
-	if !fork && err != nil && claudeWantsFork(raw) {
-		raw, err = run(true) // it was live after all: branch a copy instead
+	raw, err := cmd.CombinedOutput()
+	if err != nil && claudeRefusedHeld(raw) {
+		return "", "", ErrSessionHeld
 	}
 	out, after := parseClaudeResult(raw)
 	return out, after, err
 }
 
-// claudeWantsFork recognises Claude refusing to resume a live session in place.
-func claudeWantsFork(out []byte) bool {
+// claudeRefusedHeld recognises Claude refusing a session a running process
+// holds ("... add --fork-session to branch off a copy", verified 2026-09-07).
+func claudeRefusedHeld(out []byte) bool {
 	return strings.Contains(string(out), "--fork-session")
 }
 
@@ -200,17 +203,11 @@ const hopNote = "This prompt reached you through Share2Us while nobody is at the
 // buildClaudeInjectArgs assembles the `claude` args for a guarded injected run.
 // --disallowedTools is variadic, so it is placed immediately before -p (a flag)
 // which bounds it.
-func buildClaudeInjectArgs(sessionID, prompt string, policy Policy, mode string, fork bool) []string {
-	// A live session (interactive OR background) cannot be resumed in place
-	// headlessly — Claude refuses with "running as a background session ... add
-	// --fork-session to branch off a copy" (verified 2026-09-07 on a real run).
-	// So a live session is forked: same project + history, new session id. One no
-	// process holds (a fork from an earlier hop) is resumed in place, which keeps
-	// its id and its history in one place (verified 2026-09-27).
+func buildClaudeInjectArgs(sessionID, prompt string, policy Policy, mode string) []string {
+	// Always in place: the hop goes into the bound session, never a fork (owner,
+	// 2026-09-29). A session a running process holds cannot be resumed
+	// headlessly, so the daemon waits for it rather than calling this.
 	args := []string{"--resume", sessionID}
-	if fork {
-		args = append(args, "--fork-session")
-	}
 	args = append(args, "--permission-mode", mode)
 	args = append(args, "--append-system-prompt", hopNote+policy.AppendSystemPrompt())
 	if len(policy.AllowedTools) > 0 {
@@ -248,8 +245,8 @@ func (ClaudeRunner) Tool() string { return "claude" }
 func (ClaudeRunner) Discover(ctx context.Context) ([]DiscoveredSession, error) {
 	return DiscoverClaude(ctx)
 }
-func (r ClaudeRunner) RunSession(ctx context.Context, sessionID, cwd, prompt string, live bool) (string, string, error) {
-	return RunClaudeInjectSession(ctx, sessionID, cwd, prompt, r.Strict, live)
+func (r ClaudeRunner) RunSession(ctx context.Context, sessionID, cwd, prompt string) (string, string, error) {
+	return RunClaudeInjectSession(ctx, sessionID, cwd, prompt, r.Strict)
 }
 
 func (r ClaudeRunner) Run(ctx context.Context, sessionID, cwd, prompt string) (string, error) {

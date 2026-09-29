@@ -95,6 +95,12 @@ type Runtime struct {
 	// hopRunning is set while a hop's agent run is in progress, so `s2u update`
 	// can leave the daemon alone rather than kill the run by restarting it.
 	hopRunning atomic.Bool
+	// holding counts hops waiting for a window to let their session go; they
+	// live only in memory, so a restart would drop them.
+	holding atomic.Int32
+	// hopMu runs one hop at a time: two waiting hops for one session must not
+	// start side by side when it frees up.
+	hopMu sync.Mutex
 }
 
 func (d Deps) logf(format string, args ...any) {
@@ -190,8 +196,9 @@ func (rt *Runtime) control() func(daemonctl.Request) daemonctl.Response {
 			// manager), so an update may restart it the same way.
 			return daemonctl.Response{OK: os.Getenv("S2U_DAEMON_DETACHED") == "1"}
 		case "busy":
-			// OK means a hop is running right now (restarting would kill it).
-			return daemonctl.Response{OK: rt.hopRunning.Load()}
+			// OK means a hop is running or waiting right now (restarting would
+			// kill the run, or drop the waiting hop).
+			return daemonctl.Response{OK: rt.hopRunning.Load() || rt.holding.Load() > 0}
 		case "stop":
 			if rt.stop != nil {
 				rt.stop()

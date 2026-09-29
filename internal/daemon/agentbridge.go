@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -94,14 +95,21 @@ func coveringBinding(list []Binding, s DiscoveredSession) (Binding, bool) {
 	return Binding{}, false
 }
 
-// forkingRunner is a runner whose hops create a new session (Claude forks on
-// every headless resume) and can say which.
-// sessionRunner is a runner that can resume a session in place and reports the
-// session the agent is in after the hop (Claude): live says a running process
-// holds the session, so it must be forked rather than resumed.
+// sessionRunner is a runner that resumes a session in place and reports the
+// session the agent is in after the hop (Claude). A hop never forks (owner,
+// 2026-09-29): the prompt goes into the bound session, where its owner reads it
+// and what the agent did, or it waits (see holdInject).
 type sessionRunner interface {
-	RunSession(ctx context.Context, sessionID, cwd, prompt string, live bool) (output, sessionAfter string, err error)
+	RunSession(ctx context.Context, sessionID, cwd, prompt string) (output, sessionAfter string, err error)
 }
+
+// Holding a hop for a session a window has open: Claude cannot run a prompt
+// headlessly in a session a running process holds, and forking it is not
+// allowed, so the hop waits until the window lets the session go.
+var (
+	injectHoldPoll = 20 * time.Second
+	injectHoldMax  = 24 * time.Hour
+)
 
 // bridgeRefused reports a server answer that retrying soon cannot change: the
 // plan does not include agents, or the bridge is off on this server. The daemon
@@ -167,7 +175,7 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 			sessions = append(sessions, found...)
 		}
 		// A single-session binding is advertised even when discovery does not
-		// list its session (a fork made by a hop often is not listed): the
+		// list its session (one no window has open is often not listed): the
 		// binding knows where it lives.
 		for _, b := range bindings {
 			if b.SessionID == "" {
@@ -191,7 +199,7 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 			}
 			seen[s.SessionID] = true
 			// The binding's agent id rides with every registration, so the server
-			// can tell that a forked or recreated session is still the same agent.
+			// can tell that a recreated session is still the same agent.
 			if err := client.RegisterAgentSession(ctx, clicore.AgentRegisterInput{
 				AgentID: b.AgentID, SessionID: s.SessionID, Tool: s.Tool, Name: s.Name, Project: s.Project, Status: s.Status,
 			}); err != nil {
@@ -340,7 +348,7 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	prompt := env.Prompt
 	cwd := ""
 	// The binding knows where its session lives even when discovery does not list
-	// it (a fork from an earlier hop).
+	// it (one no window has open).
 	if list, lerr := LoadBindings(); lerr == nil {
 		if b, ok := BindingForSession(list, req.TargetSessionID); ok {
 			cwd = b.Project
@@ -378,6 +386,66 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 		}
 		prompt = prompt + "\n\n(A file for this task was placed at " + path + ".)"
 	}
+	if live {
+		rt.holdInject(ctx, client, runner, deps, req, env.Prompt, prompt, cwd)
+		return
+	}
+	rt.runInject(ctx, client, runner, deps, req, env.Prompt, prompt, cwd, 0)
+}
+
+// holdInject waits, off the receive loop, until nothing holds the session, then
+// runs the hop in it. The server already handed the hop over (it stays
+// "delivered"), so it lives here until then. It gives up after injectHoldMax.
+func (rt *Runtime) holdInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, cwd string) {
+	deps.logf("agent-bridge: inject %s waits: session %s is open in a window", req.ID, req.TargetSessionID)
+	rt.notify("Share2Us", "A prompt is waiting for your "+req.Tool+" session. It runs in that session once you exit "+req.Tool+" there.")
+	rt.holding.Add(1)
+	go func() {
+		defer rt.holding.Add(-1)
+		began := time.Now()
+		t := time.NewTicker(injectHoldPoll)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			if !sessionHeld(ctx, runner, req.TargetSessionID) {
+				rt.runInject(ctx, client, runner, deps, req, shown, prompt, cwd, time.Since(began))
+				return
+			}
+			if time.Since(began) > injectHoldMax {
+				deps.logf("agent-bridge: inject %s gave up: session %s stayed open", req.ID, req.TargetSessionID)
+				_ = AppendHop(HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
+					Target: req.TargetSessionID, Mode: "expired", Status: "failed", Prompt: shown, Waited: time.Since(began).Round(time.Second).String()})
+				_ = client.AgentReportResult(ctx, req.ID, "failed", "the session stayed open in a window for "+injectHoldMax.String()+", so the prompt did not run")
+				return
+			}
+		}
+	}()
+}
+
+// sessionHeld reports whether a running process (an open window) holds the
+// session. A failed discovery counts as held: running beside a window that has
+// the session open is the thing to avoid.
+func sessionHeld(ctx context.Context, runner AgentRunner, sessionID string) bool {
+	sessions, err := runner.Discover(ctx)
+	if err != nil {
+		return true
+	}
+	for _, s := range sessions {
+		if s.SessionID == sessionID {
+			return s.Live
+		}
+	}
+	return false
+}
+
+// runInject runs the hop in the target session itself and reports the result.
+func (rt *Runtime) runInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, cwd string, waited time.Duration) {
+	rt.hopMu.Lock()
+	defer rt.hopMu.Unlock()
 	rt.notify("Share2Us", "Running a prompt in your "+req.Tool+" session")
 	deps.logf("agent-bridge: running inject %s in session %s (cwd %s)", req.ID, req.TargetSessionID, cwd)
 	_ = client.AgentReportResult(ctx, req.ID, "running", "")
@@ -386,20 +454,25 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	rt.hopRunning.Store(true)
 	defer rt.hopRunning.Store(false)
 	hop := HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
-		Target: req.TargetSessionID, RanIn: req.TargetSessionID, Mode: "ran", Prompt: env.Prompt}
+		Target: req.TargetSessionID, RanIn: req.TargetSessionID, Mode: "ran", Prompt: shown}
+	if waited > 0 {
+		hop.Waited = waited.Round(time.Second).String()
+	}
 	if sr, ok := runner.(sessionRunner); ok {
 		var after string
-		out, after, err = sr.RunSession(ctx, req.TargetSessionID, cwd, prompt, live)
+		out, after, err = sr.RunSession(ctx, req.TargetSessionID, cwd, prompt)
+		if errors.Is(err, ErrSessionHeld) {
+			// A window opened the session since the check: wait again.
+			rt.hopRunning.Store(false)
+			rt.holdInject(ctx, client, runner, deps, req, shown, prompt, cwd)
+			return
+		}
 		hop.Mode = "resumed"
-		if after != "" && after != req.TargetSessionID {
-			hop.Mode, hop.RanIn = "forked", after
-			// The agent now IS the fork: move its binding, so the next hop
-			// continues this conversation and only the fork is advertised.
-			if moved, merr := MoveSession(req.TargetSessionID, after); merr != nil {
-				deps.logf("agent-bridge: could not move the binding to session %s: %v", after, merr)
-			} else if moved {
-				deps.logf("agent-bridge: agent continues in forked session %s (see `share2us agent hops`)", after)
-			}
+		if err == nil && after != "" && after != req.TargetSessionID {
+			// Never followed: the agent is the bound session and nothing else.
+			deps.logf("agent-bridge: inject %s ran in session %s, not the bound %s", req.ID, after, req.TargetSessionID)
+			hop.RanIn = after
+			err = fmt.Errorf("the agent tool ran the prompt in another session (%s) instead of the bound one", after)
 		}
 	} else {
 		out, err = runner.Run(ctx, req.TargetSessionID, cwd, prompt)
@@ -416,6 +489,9 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	}
 	if err != nil {
 		deps.logf("agent-bridge: inject %s failed: %v", req.ID, err)
+		if out == "" {
+			out = err.Error()
+		}
 		_ = client.AgentReportResult(ctx, req.ID, "failed", out)
 		return
 	}

@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **A prompt sent to an agent now always runs in its bound session.** It is never
+  forked into a copy you cannot see. If you have that Claude session open in a
+  window, the prompt waits and you get a notice; it runs in that session once you
+  exit Claude there, and `s2u agent hops` says how long it waited. A prompt that
+  waits 24 hours fails with a reason instead of running. `s2u update` does not
+  restart the background service while a prompt is waiting.
+
 ## [20260929070247] - 2026-09-29
 
 ### Added
