@@ -518,8 +518,7 @@ func (a app) offlineNoteFor(ctx context.Context, client *clicore.Client, project
 }
 
 // agentHops shows the hops this machine ran, newest first, with the session each
-// ran in: a hop into a session whose window was open ran in a fork, and this is
-// where to find it.
+// ran in (always the bound one) and how long it waited for an open window.
 func (a app) agentHops() int {
 	hops, err := daemon.LoadHops(30)
 	if err != nil {
@@ -532,6 +531,9 @@ func (a app) agentHops() int {
 	for i := len(hops) - 1; i >= 0; i-- {
 		h := hops[i]
 		where := h.Mode
+		if h.Waited != "" {
+			where += " after waiting " + h.Waited
+		}
 		if h.Tool == "claude" && h.RanIn != "" {
 			where += "  claude --resume " + h.RanIn
 		} else if h.RanIn != "" {

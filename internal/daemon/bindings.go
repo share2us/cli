@@ -29,8 +29,8 @@ import (
 // project lives (privilege.go). One object, three jobs, per ADR-041.
 type Binding struct {
 	// AgentID is this agent's stable identity (ADR-041 §1a): created once when the
-	// binding is made and NEVER changed afterwards. Session ids rotate — a fork per
-	// injected prompt, a new id on recreation — so anything that must outlive a
+	// binding is made and NEVER changed afterwards. A session id can change on
+	// recreation (a new bind), so anything that must outlive a
 	// single prompt, above all an invitation into another owner's project, is keyed
 	// to this. It lives here, outside the project, because the agent can edit its
 	// own project and an identity it could rewrite is not an identity.
@@ -47,10 +47,9 @@ type Binding struct {
 	BoundAt time.Time `json:"bound_at"`
 	// SessionID is the ONE session this agent currently is (owner, 2026-09-27:
 	// bind a single session, not every session in the folder). Set by
-	// `agent join` / `agent bind <session>`; moved to the fork each time the
-	// daemon runs a Claude hop (a hop always forks), so the agent keeps its id and
-	// its conversation while only this session is advertised. Empty in a binding
-	// made before this existed: that one still covers every session of its tool
+	// `agent join` / `agent bind <session>` and never moved by a hop: hops run
+	// in this session or wait for it, they never fork (owner, 2026-09-29).
+	// Empty in a binding made before this existed: that one still covers every session of its tool
 	// in the folder until it is bound again.
 	SessionID string `json:"session_id,omitempty"`
 }
@@ -71,25 +70,6 @@ func BindSession(project, tool, label, sessionID string) (Binding, bool, error) 
 		return b, created, err
 	}
 	return setSession(b.Project, b.Tool, sessionID, created)
-}
-
-// MoveSession points the binding that is currently fromSession at toSession:
-// the fork a hop created. It reports whether a binding moved.
-func MoveSession(fromSession, toSession string) (bool, error) {
-	if fromSession == "" || toSession == "" || fromSession == toSession {
-		return false, nil
-	}
-	list, err := LoadBindings()
-	if err != nil {
-		return false, err
-	}
-	for i := range list {
-		if list[i].SessionID == fromSession {
-			list[i].SessionID = toSession
-			return true, saveBindings(list)
-		}
-	}
-	return false, nil
 }
 
 // BindingForSession returns the binding whose current session is sessionID.

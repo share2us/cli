@@ -12,8 +12,8 @@ import (
 )
 
 // The hop log: what each hop that reached this machine asked, and which session
-// it ran in. A hop into a session whose window is open runs in a fork the window
-// never shows; this is how its owner finds it (`claude --resume <ran_in>`). It
+// it ran in. Hops run in the bound session itself (or wait until a window
+// lets it go), so the owner reads the prompt and the work there. It
 // holds prompts in the clear, so it lives beside the bindings, 0600, and only
 // the newest hopLogKeep records are kept.
 
@@ -30,9 +30,11 @@ type HopRecord struct {
 	From      string    `json:"from_device"`
 	Target    string    `json:"target_session"`
 	RanIn     string    `json:"ran_in,omitempty"`
-	Mode      string    `json:"mode"`   // "resumed" (same session), "forked" (new session) or "ran"
+	Mode      string    `json:"mode"`   // "resumed" (same session), "ran", or "expired" (waited too long)
 	Status    string    `json:"status"` // "done" or "failed"
-	Prompt    string    `json:"prompt"`
+	// Waited is how long the hop waited for an open window to let the session go.
+	Waited string `json:"waited,omitempty"`
+	Prompt string `json:"prompt"`
 }
 
 func hopLogPath() (string, error) {

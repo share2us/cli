@@ -37,23 +37,6 @@ func TestSingleSessionBindingCoversOnlyThatSession(t *testing.T) {
 	}
 }
 
-func TestMoveSessionFollowsTheFork(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	b, _, _ := BindSession(t.TempDir(), "claude", "", "sess-A")
-	moved, err := MoveSession("sess-A", "sess-A-fork")
-	if err != nil || !moved {
-		t.Fatalf("move = %v, %v", moved, err)
-	}
-	list, _ := LoadBindings()
-	got, ok := BindingForSession(list, "sess-A-fork")
-	if !ok || got.AgentID != b.AgentID {
-		t.Fatalf("after the move the fork is not the same agent: %+v", got)
-	}
-	if moved, _ := MoveSession("not-bound", "x"); moved {
-		t.Fatal("moved a binding that did not point at the source session")
-	}
-}
-
 func TestParseClaudeResult(t *testing.T) {
 	out, sid := parseClaudeResult([]byte(`{"type":"result","is_error":false,"result":"done it","session_id":"fork-1"}`))
 	if out != "done it" || sid != "fork-1" {
@@ -69,31 +52,32 @@ func TestParseClaudeResult(t *testing.T) {
 	}
 }
 
-type forkRunner struct{ fakeRunner }
+type switchingRunner struct{ fakeRunner }
 
-func (f *forkRunner) RunSession(_ context.Context, sessionID, _, prompt string, _ bool) (string, string, error) {
+func (f *switchingRunner) RunSession(_ context.Context, sessionID, _, prompt string) (string, string, error) {
 	f.ranSID, f.ranPrompt = sessionID, prompt
-	return "forked ok", sessionID + "-fork", nil
+	return "ran elsewhere", sessionID + "-other", nil
 }
 
-// After a hop, the agent IS the fork: the binding moves, the result is reported.
-func TestHopMovesTheBindingToTheFork(t *testing.T) {
+// A hop that ends up in another session is a failure, and the binding stays: the
+// agent is the bound session and nothing else (owner, 2026-09-29).
+func TestHopInAnotherSessionFailsAndTheBindingStays(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	if _, _, err := BindSession(t.TempDir(), "claude", "", "s1"); err != nil {
 		t.Fatal(err)
 	}
 	c := &fakeAgentClient{}
-	r := &forkRunner{}
+	r := &switchingRunner{}
 	rt().handleInject(context.Background(), c, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "s1", SealedPrompt: "go"}))
 	if r.ranSID != "s1" {
 		t.Fatalf("ran session %q", r.ranSID)
 	}
-	if len(c.reports) != 2 || c.reports[1] != [2]string{"done", "forked ok"} {
-		t.Fatalf("reports = %v", c.reports)
+	if len(c.reports) != 2 || c.reports[1][0] != "failed" {
+		t.Fatalf("reports = %v, want running then failed", c.reports)
 	}
 	list, _ := LoadBindings()
-	if _, ok := BindingForSession(list, "s1-fork"); !ok {
-		t.Fatalf("binding did not move to the fork: %+v", list)
+	if _, ok := BindingForSession(list, "s1"); !ok {
+		t.Fatalf("the binding moved: %+v", list)
 	}
 }

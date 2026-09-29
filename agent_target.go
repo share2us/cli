@@ -15,7 +15,7 @@ import (
 // Resolving `agent send`'s target (owner, 2026-09-27): whatever `agent list` or
 // `agent project` prints must work when pasted into `send`, and a sender should
 // not have to look an id up anywhere else. An agent id is the stable address: a
-// Claude agent's session id changes when a hop has to fork its session.
+// session id changes when the agent is bound to a new session.
 
 // agentTarget is one reachable session, from either directory.
 type agentTarget struct {
@@ -74,7 +74,7 @@ func pickTarget(targets []agentTarget, q targetQuery) (agentTarget, error) {
 		return hits[0], nil
 	case 0:
 		if q.Agent == "" && q.Session != "" {
-			return agentTarget{}, fmt.Errorf("%w. A Claude agent's session id changes when a hop has to fork its session, so address it by agent id instead: --agent AGENT-ID", errNoTarget)
+			return agentTarget{}, fmt.Errorf("%w. A session id changes when the agent is bound to a new session, so address it by agent id instead: --agent AGENT-ID", errNoTarget)
 		}
 		return agentTarget{}, errNoTarget
 	}

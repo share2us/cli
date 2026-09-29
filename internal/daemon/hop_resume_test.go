@@ -8,26 +8,37 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	clicore "github.com/share2us/cli-core"
 )
 
-// sessionFake is a Claude-like runner: it reports which session a hop ended in.
+// sessionFake is a Claude-like runner. heldFor is how many discoveries report
+// the target as open in a window before it lets the session go.
 type sessionFake struct {
 	discovered []DiscoveredSession
-	gotLive    *bool
+	heldFor    int
+	discovers  int
+	ran        int
+	ranSID     string
 	after      string // "" = same session
 }
 
 func (f *sessionFake) Tool() string { return "claude" }
 func (f *sessionFake) Discover(context.Context) ([]DiscoveredSession, error) {
-	return f.discovered, nil
+	f.discovers++
+	out := append([]DiscoveredSession(nil), f.discovered...)
+	for i := range out {
+		out[i].Live = out[i].Live && f.discovers <= f.heldFor
+	}
+	return out, nil
 }
 func (f *sessionFake) Run(context.Context, string, string, string) (string, error) {
 	panic("a session runner must be driven through RunSession")
 }
-func (f *sessionFake) RunSession(_ context.Context, sessionID, _, _ string, live bool) (string, string, error) {
-	f.gotLive = &live
+func (f *sessionFake) RunSession(_ context.Context, sessionID, _, _ string) (string, string, error) {
+	f.ran++
+	f.ranSID = sessionID
 	if f.after == "" {
 		return "ok", sessionID, nil
 	}
@@ -44,8 +55,8 @@ func TestHopResumesAnUnheldSessionInPlace(t *testing.T) {
 	r := &sessionFake{} // discovery does not list fork-1
 	rt().handleInject(context.Background(), &fakeAgentClient{}, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-1", Tool: "claude", TargetSessionID: "fork-1", SealedPrompt: "go"}))
-	if r.gotLive == nil || *r.gotLive {
-		t.Fatalf("an unlisted session must be resumed in place (live=false), got %v", r.gotLive)
+	if r.ran != 1 || r.ranSID != "fork-1" {
+		t.Fatalf("an unlisted session must be resumed in place at once: ran %d in %q", r.ran, r.ranSID)
 	}
 	list, _ := LoadBindings()
 	if _, ok := BindingForSession(list, "fork-1"); !ok {
@@ -57,27 +68,68 @@ func TestHopResumesAnUnheldSessionInPlace(t *testing.T) {
 	}
 }
 
-// A session its window holds is forked, the binding follows, and the hop log says
-// where the work went (the window never shows it).
-func TestHopForksALiveSessionAndLogsWhere(t *testing.T) {
+// A session its window holds is never forked: the hop waits until the window
+// lets the session go, then runs IN it, and the binding does not move.
+func TestHopWaitsForAnOpenWindowThenRunsInPlace(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	poll := injectHoldPoll
+	injectHoldPoll = 5 * time.Millisecond
+	t.Cleanup(func() { injectHoldPoll = poll })
 	dir := t.TempDir()
 	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
 		t.Fatal(err)
 	}
-	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "busy", Live: true}}, after: "fork-9"}
-	rt().handleInject(context.Background(), &fakeAgentClient{}, r, keyedDeps(),
+	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "busy", Live: true}}, heldFor: 3}
+	c := &fakeAgentClient{}
+	runtime := rt()
+	runtime.handleInject(context.Background(), c, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-2", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
-	if r.gotLive == nil || !*r.gotLive {
-		t.Fatal("a session Claude lists must be forked (live=true)")
+	// The run counter belongs to the waiting goroutine now; the hold count is
+	// the safe thing to look at.
+	if runtime.holding.Load() != 1 {
+		t.Fatalf("a held session must wait, not run: holding %d", runtime.holding.Load())
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.ran != 1 || r.ranSID != "win-1" {
+		t.Fatalf("after the window let go: ran %d in %q, want once in win-1", r.ran, r.ranSID)
+	}
+	if len(c.reports) != 2 || c.reports[1] != [2]string{"done", "ok"} {
+		t.Fatalf("reports = %v", c.reports)
 	}
 	list, _ := LoadBindings()
-	if _, ok := BindingForSession(list, "fork-9"); !ok {
-		t.Fatalf("binding did not follow the fork: %+v", list)
+	if _, ok := BindingForSession(list, "win-1"); !ok {
+		t.Fatalf("the binding moved: %+v", list)
 	}
 	hops, _ := LoadHops(0)
-	if len(hops) != 1 || hops[0].Mode != "forked" || hops[0].Target != "win-1" || hops[0].RanIn != "fork-9" {
+	if len(hops) != 1 || hops[0].Mode != "resumed" || hops[0].RanIn != "win-1" || hops[0].Waited == "" {
 		t.Fatalf("hop log = %+v", hops)
+	}
+}
+
+// A hop that waited too long fails with a reason, and never runs.
+func TestHeldHopGivesUp(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	poll, max := injectHoldPoll, injectHoldMax
+	injectHoldPoll, injectHoldMax = 5*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { injectHoldPoll, injectHoldMax = poll, max })
+	dir := t.TempDir()
+	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
+		t.Fatal(err)
+	}
+	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Live: true}}, heldFor: 1 << 30}
+	c := &fakeAgentClient{}
+	runtime := rt()
+	runtime.handleInject(context.Background(), c, r, keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-3", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.ran != 0 || len(c.reports) != 1 || c.reports[0][0] != "failed" {
+		t.Fatalf("ran %d, reports %v; want no run and one failure", r.ran, c.reports)
 	}
 }
 
@@ -121,15 +173,12 @@ func TestClaudeDuplicateEntriesBusyWins(t *testing.T) {
 	}
 }
 
-func TestClaudeArgsForkOnlyWhenAsked(t *testing.T) {
-	inPlace := strings.Join(buildClaudeInjectArgs("s1", "p", Policy{}, "acceptEdits", false), " ")
-	if strings.Contains(inPlace, "--fork-session") || !strings.Contains(inPlace, "--resume s1") {
-		t.Fatalf("in-place args: %s", inPlace)
+func TestClaudeArgsNeverFork(t *testing.T) {
+	args := strings.Join(buildClaudeInjectArgs("s1", "p", Policy{}, "acceptEdits"), " ")
+	if strings.Contains(args, "--fork-session") || !strings.Contains(args, "--resume s1") {
+		t.Fatalf("args: %s", args)
 	}
-	if forked := strings.Join(buildClaudeInjectArgs("s1", "p", Policy{}, "acceptEdits", true), " "); !strings.Contains(forked, "--resume s1 --fork-session") {
-		t.Fatalf("fork args: %s", forked)
-	}
-	if !claudeWantsFork([]byte("Error: session is running as a background session; add --fork-session to branch off a copy")) || claudeWantsFork([]byte(`{"result":"ok"}`)) {
+	if !claudeRefusedHeld([]byte("Error: session is running as a background session; add --fork-session to branch off a copy")) || claudeRefusedHeld([]byte(`{"result":"ok"}`)) {
 		t.Fatal("refusal detection")
 	}
 }

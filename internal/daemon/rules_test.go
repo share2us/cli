@@ -71,7 +71,7 @@ func TestAppendSystemPrompt(t *testing.T) {
 
 func TestBuildClaudeInjectArgs(t *testing.T) {
 	p := Policy{DisallowedTools: []string{"Bash(git push:*)", "Bash(rm:*)"}, Advisory: []string{"be careful"}}
-	args := buildClaudeInjectArgs("sess-1", "do the thing", p, claudeMode(PrivilegeStandard), true)
+	args := buildClaudeInjectArgs("sess-1", "do the thing", p, claudeMode(PrivilegeStandard))
 	joined := strings.Join(args, " ")
 	// resume + restricted mode, never bypass.
 	if !strings.Contains(joined, "--resume sess-1") || !strings.Contains(joined, "--permission-mode acceptEdits") {
@@ -80,8 +80,8 @@ func TestBuildClaudeInjectArgs(t *testing.T) {
 	if strings.Contains(joined, "bypassPermissions") || strings.Contains(joined, "dangerously") {
 		t.Fatalf("must never bypass permissions: %v", args)
 	}
-	if !strings.Contains(joined, "--fork-session") {
-		t.Fatalf("a live session can only be injected via a fork: %v", args)
+	if strings.Contains(joined, "--fork-session") {
+		t.Fatalf("a hop must never fork the bound session: %v", args)
 	}
 	if !strings.Contains(joined, "--disallowedTools Bash(git push:*) Bash(rm:*)") {
 		t.Fatalf("disallowedTools not passed as a bounded variadic: %v", args)
