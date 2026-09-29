@@ -19,6 +19,10 @@ type DiscoveredSession struct {
 	Name      string
 	Project   string // cwd
 	Status    string // available | busy | unknown
+	// PID is the process currently holding the interactive session, when the
+	// adapter can identify it. It is used only for local identity checks (for
+	// example, proving which zellij pane owns a bound session).
+	PID int
 	// Live: a running tool process holds the session (Claude lists it in
 	// `claude agents`), so a hop waits until it lets the session go.
 	Live bool
@@ -72,12 +76,16 @@ func parseClaudeAgents(out []byte) ([]DiscoveredSession, error) {
 			Name:      e.Name,
 			Project:   e.CWD,
 			Status:    claudeStatus(e),
+			PID:       e.PID,
 			Live:      true,
 		}
 		// One session can be listed twice (its window and a background entry).
 		// The busier report wins, so every path shows the same presence.
-		if prev, ok := byID[s.SessionID]; ok && presenceRank(prev.Status) >= presenceRank(s.Status) {
-			continue
+		if prev, ok := byID[s.SessionID]; ok {
+			prevRank, nextRank := presenceRank(prev.Status), presenceRank(s.Status)
+			if prevRank > nextRank || (prevRank == nextRank && (prev.PID > 0 || s.PID <= 0)) {
+				continue
+			}
 		}
 		byID[s.SessionID] = s
 	}

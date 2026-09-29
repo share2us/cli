@@ -81,7 +81,7 @@ func claudeSessionsByPID(out []byte) (map[int]DiscoveredSession, error) {
 			continue
 		}
 		m[e.PID] = DiscoveredSession{
-			SessionID: e.SessionID, Tool: "claude", Name: e.Name, Project: e.CWD, Status: claudeStatus(e),
+			SessionID: e.SessionID, Tool: "claude", Name: e.Name, Project: e.CWD, Status: claudeStatus(e), PID: e.PID,
 		}
 	}
 	return m, nil

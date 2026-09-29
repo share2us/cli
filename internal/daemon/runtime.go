@@ -101,6 +101,36 @@ type Runtime struct {
 	// hopMu runs one hop at a time: two waiting hops for one session must not
 	// start side by side when it frees up.
 	hopMu sync.Mutex
+	// channels is the daemon side of the Share2Us channel (channelhub.go).
+	channels     *channelHub
+	channelsOnce sync.Once
+	// zellij is the terminal driver for guarded live delivery. Tests install a
+	// fake before first use; production constructs the system driver lazily.
+	zellij      zellijDriver
+	zellijOnce  sync.Once
+	processPane func(int) *ZellijPane
+}
+
+func (rt *Runtime) processZellijPane(pid int) *ZellijPane {
+	if rt.processPane != nil {
+		return rt.processPane(pid)
+	}
+	return ProcessZellijPane(pid)
+}
+
+// hub returns the channel hub, made on first use.
+func (rt *Runtime) hub() *channelHub {
+	rt.channelsOnce.Do(func() { rt.channels = newChannelHub() })
+	return rt.channels
+}
+
+func (rt *Runtime) paneDriver() zellijDriver {
+	rt.zellijOnce.Do(func() {
+		if rt.zellij == nil {
+			rt.zellij = newSystemZellij()
+		}
+	})
+	return rt.zellij
 }
 
 func (d Deps) logf(format string, args ...any) {
@@ -180,6 +210,9 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 // control returns the handler backing the control endpoint.
 func (rt *Runtime) control() func(daemonctl.Request) daemonctl.Response {
 	return func(req daemonctl.Request) daemonctl.Response {
+		if resp, ok := rt.hub().channelControl(req); ok {
+			return resp
+		}
 		switch req.Op {
 		case "ping":
 			return daemonctl.Response{OK: true}

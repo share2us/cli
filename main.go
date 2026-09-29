@@ -252,6 +252,8 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 		return a.daemon(ctx, args[1:])
 	case "agent":
 		return a.agent(ctx, args[1:])
+	case "claude":
+		return a.claude(ctx, args[1:])
 	case "setup":
 		return a.setup(args[1:])
 	default:
