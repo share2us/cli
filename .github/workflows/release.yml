@@ -14,27 +14,10 @@ name: release
 #                     updater resolve "latest", a beta is invisible to existing
 #                     users by construction. This is the staging channel.
 #   channel=stable -> published with --latest. Users get it.
-# A merge to `main` publishes a STABLE release. That is safe now in a way it was
-# not before: `main` is reached only through a reviewed PR from a release branch,
-# after the work has been exercised on local `staging`, so a merge IS the decision
-# to ship. Before, `main` doubled as the working branch, which is how three
-# releases went out in 41 minutes with no notes.
-#
-# The changelog gate still applies — a stable release FAILS when
-# CHANGELOG.md's [Unreleased] section is empty, so a merge cannot ship silence.
-#
-# workflow_dispatch stays for BETA: a pre-release cannot be produced by a merge,
-# because a push carries no channel choice.
+# Merging a PR does not publish. An operator dispatches beta, installs it, then
+# dispatches stable from main after deciding to ship. Both channels are explicit.
+# A stable dispatch fails when CHANGELOG.md's [Unreleased] section is empty.
 on:
-  push:
-    branches: [main]
-    paths:
-      - "**.go"
-      - "go.mod"
-      - "go.sum"
-      # NOTE: packaging/** (nfpm, winget generator) is deliberately NOT a trigger —
-      # a manifest/generator edit must not cut a release; it applies at the next
-      # code release, which regenerates apt + winget from the current packaging/.
   workflow_dispatch:
     inputs:
       channel:
@@ -216,19 +199,10 @@ jobs:
           else
             if [ "${{ inputs.channel || 'stable' }}" != stable ]; then
               echo "Beta build from ${GITHUB_SHA}. Not served to stable users." > "$NOTES_FILE"
-            elif [ "${{ github.event_name }}" = workflow_dispatch ]; then
-              # A person asked for this release by hand and there is nothing to
-              # tell anyone about it. Refusing loudly is right.
+            else
+              # A stable dispatch with no user-facing notes must fail.
               echo "::error::CHANGELOG.md [Unreleased] is empty - a stable release needs release notes."
               exit 1
-            else
-              # Reached by a merge to main. An empty [Unreleased] is the author
-              # saying this changed nothing a user sees - a refactor, a test, a CI
-              # tweak - so nothing ships. This used to fail the run, which painted
-              # the build red for doing the right thing; a red build nobody can act
-              # on is one everybody learns to ignore. Matches the gui.
-              echo "::notice::[Unreleased] is empty - nothing user-facing to ship, so no release was cut for ${GITHUB_SHA}."
-              exit 0
             fi
           fi
           printf '\n\nInstall: `curl -fsSL https://share2.us/install.sh | sh`\n' >> "$NOTES_FILE"
@@ -240,6 +214,7 @@ jobs:
           fi
           # shellcheck disable=SC2086
           gh release create "v${VERSION}" dist/*.tar.gz dist/*.zip dist/*.deb dist/*.crc32 dist/*.sha256 dist/manifest.json \
+            --target "$GITHUB_SHA" \
             --title "Share2Us CLI ${VERSION}" \
             --notes-file "$NOTES_FILE" \
             $LATEST_FLAGS
@@ -251,12 +226,8 @@ jobs:
           # had shipped in earlier releases. The gui automated this first; same
           # script, same reasoning.
           #
-          # It runs for a stable release from EITHER trigger. It used to run only
-          # on a push, on the reasoning that a hand-run release should not rewrite
-          # the file under the operator - which reads well and was wrong. What
-          # decides whether the notes have shipped is the CHANNEL, not the button:
-          # a dispatched stable publishes [Unreleased] to every user just as a
-          # merge does. 20260910063046 was dispatched, so its notes were still
+          # It runs for a stable release. A dispatched stable publishes
+          # [Unreleased] to every user. 20260910063046 was dispatched, so its notes were still
           # sitting in [Unreleased] afterwards, queued to ship a second time, and
           # had to be filed by hand. A beta is exempt because its notes are
           # generated and it reaches nobody who did not opt in.
@@ -298,7 +269,7 @@ jobs:
       # Publish the apt repository: a signed static tree on the gh-pages branch of
       # THIS repo (served by GitHub Pages at https://apt.share2.us). Same-repo push,
       # so the workflow token suffices — no deploy key. Suite follows the channel:
-      # stable (merge to main) or beta (dispatch); each suite carries its latest
+      # stable or beta (both dispatched); each suite carries its latest
       # build only, older ones stay on GitHub Releases. Skips cleanly when the
       # signing key secret is not set.
       - name: Publish apt repository
