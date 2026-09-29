@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260929175441] - 2026-09-29
+
 ### Added
 
 - **`s2u claude`: prompts appear in your open Claude window.** Start Claude with
