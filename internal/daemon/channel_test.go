@@ -160,7 +160,12 @@ func TestHookDecisionEnforcesTheRules(t *testing.T) {
 		{"Bash", bash("git push origin main"), true},
 		{"Bash", bash("go test ./... && git push"), true},
 		{"Bash", bash("FOO=1 rm -rf build"), true},
-		{"Bash", bash("go test ./..."), false},
+		{"Bash", bash("go test ./..."), true}, // not a read: a headless hop could not either
+		{"Bash", bash("git status && ls"), false},
+		{"WebFetch", map[string]any{"url": "https://example.com"}, true},
+		{"mcp__share2us__report", map[string]any{"request_id": "r", "result": "x"}, false},
+		{"Grep", map[string]any{"pattern": "x"}, false},
+		{"Edit", map[string]any{"file_path": "/etc/hosts"}, true},
 		{"Edit", map[string]any{"file_path": filepath.Join(dir, ".s2u.rules")}, true},
 		{"Write", map[string]any{"file_path": filepath.Join(dir, ".claude", "settings.json")}, true},
 		{"Edit", map[string]any{"file_path": filepath.Join(dir, "main.go")}, false},

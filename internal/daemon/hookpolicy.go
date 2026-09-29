@@ -4,6 +4,7 @@
 package daemon
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -19,7 +20,22 @@ import (
 // fileEditTools are the tools Claude's Edit(...) rules cover.
 var fileEditTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true}
 
+// hookFreeTools are what a headless hop could use without an approval: Claude
+// asks for none of these (reads, search, planning, subagents, whose own tool
+// calls pass through this hook too).
+var hookFreeTools = map[string]bool{
+	"Read": true, "Glob": true, "Grep": true, "LS": true, "NotebookRead": true,
+	"TodoWrite": true, "TodoRead": true, "ToolSearch": true, "Task": true, "Agent": true,
+}
+
 // HookDecision says whether the policy for cwd refuses this tool call, and why.
+//
+// Parity with a headless hop, whatever the window's mode (owner, 2026-09-29): a
+// headless hop ran in acceptEdits (plan when restricted), so it could edit
+// inside the project and run only the allowlisted reads, and anything else
+// needed an approval nobody was there to give. A prompt delivered into an
+// auto-mode window would otherwise run any command; this keeps it to what the
+// headless hop could do.
 func HookDecision(cwd, tool string, input map[string]any, forceRestricted bool) (deny bool, reason string) {
 	priv := AgentPolicy(cwd, forceRestricted)
 	policy := CompileRules(LoadRules(cwd), priv)
@@ -28,23 +44,51 @@ func HookDecision(cwd, tool string, input map[string]any, forceRestricted bool) 
 			return true, "Share2Us: this project's rules for delivered prompts do not allow " + describeRule(rule) + "."
 		}
 	}
-	if priv == PrivilegeRestricted {
-		if fileEditTools[tool] {
+	switch {
+	case strings.HasPrefix(tool, "mcp__"+ChannelServerName+"__"):
+		return false, "" // the report tool
+	case fileEditTools[tool]:
+		if priv == PrivilegeRestricted {
 			return true, "Share2Us: this agent is read-only for delivered prompts, so it may not edit files."
 		}
-		if tool == "Bash" {
-			cmd, _ := input["command"].(string)
-			for _, part := range splitShell(cmd) {
-				// Plan mode is what makes a headless restricted hop read-only, so
-				// the compiled policy lists no reads for it; here the read list
-				// itself is the gate (denies were checked above).
-				if !anyRuleMatches(hopReadOnly, "Bash", map[string]any{"command": part}) {
-					return true, "Share2Us: this agent is read-only for delivered prompts; `" + part + "` is not a read-only command it may run."
-				}
+		path, _ := input["file_path"].(string)
+		if path == "" {
+			path, _ = input["notebook_path"].(string)
+		}
+		if !insideDir(cwd, path) {
+			return true, "Share2Us: a delivered prompt may edit files only inside this project (" + cwd + ")."
+		}
+		return false, ""
+	case tool == "Bash":
+		allowed := policy.AllowedTools
+		if priv == PrivilegeRestricted {
+			// Plan mode made a headless restricted hop read-only, so the compiled
+			// policy lists no reads for it; here the read list is the gate.
+			allowed = hopReadOnly
+		}
+		cmd, _ := input["command"].(string)
+		for _, part := range splitShell(cmd) {
+			if !anyRuleMatches(allowed, "Bash", map[string]any{"command": part}) {
+				return true, "Share2Us: a delivered prompt may run only read-only commands (ls, cat, grep, git status and similar); `" + part + "` would need your approval. Run it yourself if you want it."
 			}
 		}
+		return false, ""
+	case hookFreeTools[tool]:
+		return false, ""
 	}
-	return false, ""
+	return true, "Share2Us: a delivered prompt may not use " + tool + " without your approval. Use it yourself if you want it."
+}
+
+// insideDir reports whether path is dir or below it.
+func insideDir(dir, path string) bool {
+	if dir == "" || path == "" {
+		return false
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(dir, path)
+	}
+	rel, err := filepath.Rel(filepath.Clean(dir), filepath.Clean(path))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func anyRuleMatches(rules []string, tool string, input map[string]any) bool {
