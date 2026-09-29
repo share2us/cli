@@ -17,6 +17,7 @@ import (
 // the target as open in a window before it lets the session go.
 type sessionFake struct {
 	discovered []DiscoveredSession
+	statuses   []string
 	heldFor    int
 	discovers  int
 	ran        int
@@ -30,6 +31,13 @@ func (f *sessionFake) Discover(context.Context) ([]DiscoveredSession, error) {
 	out := append([]DiscoveredSession(nil), f.discovered...)
 	for i := range out {
 		out[i].Live = out[i].Live && f.discovers <= f.heldFor
+		if len(f.statuses) > 0 {
+			at := f.discovers - 1
+			if at >= len(f.statuses) {
+				at = len(f.statuses) - 1
+			}
+			out[i].Status = f.statuses[at]
+		}
 	}
 	return out, nil
 }

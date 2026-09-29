@@ -454,9 +454,15 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		fmt.Fprintln(a.stderr, "target device has no encryption key; cannot inject (end-to-end encryption required)")
 		return 1
 	}
+	credential, cerr := clicore.LoadCredential()
+	if cerr != nil {
+		return a.fail("load login", cerr)
+	}
 	// A file rides along end-to-end: a fresh content key encrypts it, the ciphertext
 	// goes to R2 (object_key), and the content key is sealed to the target device.
-	env := daemon.InjectEnvelope{Prompt: prompt}
+	// The display name stays inside that encrypted, signed envelope. The relay
+	// server cannot rewrite it after sealing, and older receivers ignore it.
+	env := daemon.InjectEnvelope{Prompt: prompt, SenderDeviceName: currentDeviceName(ctx, client, credential.DeviceSessionID)}
 	var objectKey, sealedFileKey string
 	if file != "" {
 		data, rerr := os.ReadFile(file)
@@ -501,10 +507,6 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	// Sign the hop (ADR-041 §5), so the server can refuse a forgery and — the part
 	// that matters — the receiving machine can check it came from this device even
 	// if the server lies.
-	credential, cerr := clicore.LoadCredential()
-	if cerr != nil {
-		return a.fail("load login", cerr)
-	}
 	if credential, cerr = ensureSigningKey(ctx, client, credential); cerr != nil {
 		return a.fail("signing key", cerr)
 	}
@@ -525,6 +527,23 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		fmt.Fprintf(a.stdout, "Sent (%s), queued for delivery. Track: %s agent status %s\n", res.ID, commandName, res.ID)
 	}
 	return 0
+}
+
+func currentDeviceName(ctx context.Context, client *clicore.Client, deviceID string) string {
+	devices, err := client.ListDevices(ctx)
+	if err != nil {
+		return ""
+	}
+	return deviceNameForID(devices.Sessions, deviceID)
+}
+
+func deviceNameForID(devices []clicore.DeviceSession, deviceID string) string {
+	for _, device := range devices {
+		if (deviceID != "" && device.ID == deviceID) || (deviceID == "" && device.Current) {
+			return strings.TrimSpace(device.DeviceName)
+		}
+	}
+	return ""
 }
 
 // sessionLine is one `agent list` row: agent id first, then the full --device

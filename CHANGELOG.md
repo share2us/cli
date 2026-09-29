@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Live `s2u claude` delivery now fails closed without getting stuck.** A
+  dropped channel event cannot be mistaken for the owner's current turn or be
+  retried every 20 seconds; unreadable Zellij sessions prevent typing; short
+  unfolded prompts are submitted; and old transcript text such as “do you
+  want” no longer makes an idle input look busy. Typed prompts show the sending
+  device's name alongside its verified id.
+
 ## [20260929175441] - 2026-09-29
 
 ### Added

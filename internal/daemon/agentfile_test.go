@@ -13,8 +13,8 @@ import (
 )
 
 func TestParseEnvelope(t *testing.T) {
-	e := ParseEnvelope(`{"prompt":"do it","file_name":"shot.png"}`)
-	if e.Prompt != "do it" || e.FileName != "shot.png" {
+	e := ParseEnvelope(`{"prompt":"do it","file_name":"shot.png","sender_device_name":"jarvis"}`)
+	if e.Prompt != "do it" || e.FileName != "shot.png" || e.SenderDeviceName != "jarvis" {
 		t.Fatalf("envelope = %+v", e)
 	}
 	// bare prompt (P4a raw string) falls back to a prompt-only envelope.
