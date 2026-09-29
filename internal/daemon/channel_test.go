@@ -234,7 +234,7 @@ func TestLiveSessionWithAChannelGetsTheHopDelivered(t *testing.T) {
 	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
 		t.Fatal(err)
 	}
-	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Live: true}}, heldFor: 1 << 30}
+	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "available", Live: true}}, heldFor: 1 << 30}
 	c := &fakeAgentClient{reportNotify: make(chan struct{}, 1)}
 	runtime := rt()
 	runtime.hub().poll("win-1") // the channel is listening
@@ -268,9 +268,9 @@ func TestLiveSessionWithAChannelGetsTheHopDelivered(t *testing.T) {
 
 func TestChannelPickupWithoutClaudeStartingFallsBackToWaiting(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	pickup, poll := channelPickup, channelBusyPoll
-	channelPickup, channelBusyPoll = 30*time.Millisecond, 2*time.Millisecond
-	t.Cleanup(func() { channelPickup, channelBusyPoll = pickup, poll })
+	pickup, busyPoll, holdPoll := channelPickup, channelBusyPoll, injectHoldPoll
+	channelPickup, channelBusyPoll, injectHoldPoll = 30*time.Millisecond, 2*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { channelPickup, channelBusyPoll, injectHoldPoll = pickup, busyPoll, holdPoll })
 	dir := t.TempDir()
 	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
 		t.Fatal(err)
@@ -284,9 +284,11 @@ func TestChannelPickupWithoutClaudeStartingFallsBackToWaiting(t *testing.T) {
 	runtime.handleInject(ctx, c, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-dropped", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
 	deadline := time.Now().Add(time.Second)
+	deliveries := 0
 	for time.Now().Before(deadline) {
 		if got := runtime.hub().poll("win-1"); len(got) != 0 {
-			break // MCP picked it up, but Claude intentionally never becomes busy
+			deliveries += len(got) // MCP picks it up, but Claude never becomes busy
+			break
 		}
 		time.Sleep(time.Millisecond)
 	}
@@ -295,12 +297,135 @@ func TestChannelPickupWithoutClaudeStartingFallsBackToWaiting(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("channel fallback did not report waiting")
 	}
+	// Keep the guarded channel visibly alive for several hold polls. This hop
+	// must not be queued into it a second time.
+	until := time.Now().Add(6 * injectHoldPoll)
+	for time.Now().Before(until) {
+		deliveries += len(runtime.hub().poll("win-1"))
+		time.Sleep(time.Millisecond)
+	}
 	cancel()
 	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if len(c.reports) == 0 || c.reports[0][0] != "waiting" || r.ran != 0 {
-		t.Fatalf("reports=%v ran=%d; a silently dropped channel event must wait", c.reports, r.ran)
+	if deliveries != 1 || len(c.reports) != 1 || c.reports[0][0] != "waiting" || r.ran != 0 {
+		t.Fatalf("deliveries=%d reports=%v ran=%d; a silently dropped channel event must wait once", deliveries, c.reports, r.ran)
+	}
+}
+
+func TestBusySessionCannotConfirmDroppedChannelDelivery(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	holdPoll := injectHoldPoll
+	injectHoldPoll = time.Hour
+	t.Cleanup(func() { injectHoldPoll = holdPoll })
+	dir := t.TempDir()
+	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
+		t.Fatal(err)
+	}
+	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "busy", Live: true}}, heldFor: 1 << 30}
+	c := &fakeAgentClient{reportNotify: make(chan struct{}, 1)}
+	runtime := rt()
+	runtime.hub().poll("win-1")
+	runtime.hub().markGuardReady("win-1")
+	ctx, cancel := context.WithCancel(context.Background())
+	runtime.handleInject(ctx, c, r, keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-owner-busy", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
+	select {
+	case <-c.reportNotify:
+	case <-time.After(time.Second):
+		t.Fatal("busy session did not report the hop waiting")
+	}
+	if got := runtime.hub().poll("win-1"); len(got) != 0 {
+		t.Fatalf("queued into an already-busy session: %+v", got)
+	}
+	runtime.hub().turnEnded("win-1") // the owner's turn, not this hop
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	deadline := time.Now().Add(time.Second)
+	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(c.reports) != 1 || c.reports[0][0] != "waiting" {
+		t.Fatalf("reports=%v; the owner's Stop falsely completed the hop", c.reports)
+	}
+}
+
+func TestStopBeforeBusyTransitionCannotCompleteChannelHop(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	pickup, busyPoll := channelPickup, channelBusyPoll
+	channelPickup, channelBusyPoll = time.Second, 2*time.Millisecond
+	t.Cleanup(func() { channelPickup, channelBusyPoll = pickup, busyPoll })
+	dir := t.TempDir()
+	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
+		t.Fatal(err)
+	}
+	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "available", Live: true}}, heldFor: 1 << 30}
+	c := &fakeAgentClient{reportNotify: make(chan struct{}, 2)}
+	runtime := rt()
+	runtime.hub().poll("win-1")
+	runtime.hub().markGuardReady("win-1")
+	ctx, cancel := context.WithCancel(context.Background())
+	runtime.handleInject(ctx, c, r, keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-early-stop", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got := runtime.hub().poll("win-1"); len(got) == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	runtime.hub().turnEnded("win-1") // no available-to-busy transition occurred
+	select {
+	case <-c.reportNotify:
+	case <-time.After(time.Second):
+		t.Fatal("early Stop did not move the hop to waiting")
+	}
+	cancel()
+	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(c.reports) != 1 || c.reports[0][0] != "waiting" {
+		t.Fatalf("reports=%v; Stop before busy transition falsely completed the hop", c.reports)
+	}
+}
+
+func TestBusyTransitionConfirmsChannelHop(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	pickup, busyPoll := channelPickup, channelBusyPoll
+	channelPickup, channelBusyPoll = time.Second, 2*time.Millisecond
+	t.Cleanup(func() { channelPickup, channelBusyPoll = pickup, busyPoll })
+	dir := t.TempDir()
+	if _, _, err := BindSession(dir, "claude", "", "win-1"); err != nil {
+		t.Fatal(err)
+	}
+	r := &sessionFake{
+		discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Live: true}},
+		statuses:   []string{"available", "available", "busy"}, heldFor: 1 << 30,
+	}
+	c := &fakeAgentClient{reportNotify: make(chan struct{}, 2)}
+	runtime := rt()
+	runtime.hub().poll("win-1")
+	runtime.hub().markGuardReady("win-1")
+	runtime.handleInject(context.Background(), c, r, keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-transition", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if got := runtime.hub().poll("win-1"); len(got) == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-c.reportNotify: // running: the observed transition confirmed this hop
+	case <-time.After(time.Second):
+		t.Fatal("available -> busy transition did not confirm the channel hop")
+	}
+	runtime.hub().turnEnded("win-1")
+	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(c.reports) != 2 || c.reports[0][0] != "running" || c.reports[1][0] != "done" {
+		t.Fatalf("reports=%v, want running then done", c.reports)
 	}
 }
 
