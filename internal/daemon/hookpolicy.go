@@ -57,12 +57,17 @@ func HookDecision(cwd, tool string, input map[string]any, forceRestricted bool) 
 		if priv == PrivilegeRestricted {
 			return true, "Share2Us: this agent is read-only for delivered prompts, so it may not edit files."
 		}
-		path, _ := input["file_path"].(string)
-		if path == "" {
-			path, _ = input["notebook_path"].(string)
+		paths := editPaths(input)
+		if len(paths) == 0 {
+			return true, "Share2Us: a delivered prompt must identify the file it edits."
 		}
-		if !insideDir(cwd, path) {
-			return true, "Share2Us: a delivered prompt may edit files only inside this project (" + cwd + ")."
+		for _, path := range paths {
+			if !insideDir(cwd, path) {
+				return true, "Share2Us: a delivered prompt may edit files only inside this project (" + cwd + ")."
+			}
+			if insideGitMetadata(cwd, path) {
+				return true, "Share2Us: a delivered prompt may not edit Git metadata, which can change what allowed Git commands execute."
+			}
 		}
 		return false, ""
 	case tool == "Bash":
@@ -117,6 +122,150 @@ func insideDir(dir, path string) bool {
 	}
 	rel, err := filepath.Rel(base, resolved)
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// insideGitMetadata checks the resolved target, not just the spelling of the
+// requested path. An in-project symlink to .git must not bypass self-protection.
+func insideGitMetadata(dir, path string) bool {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(dir, path)
+	}
+	base, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return true
+	}
+	resolved, err := resolvedOrParent(path)
+	if err != nil {
+		return true
+	}
+	rel, err := filepath.Rel(base, resolved)
+	if err != nil {
+		return true
+	}
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if gitMetadataSegment(part) {
+			return true
+		}
+	}
+	gitDirs, err := projectGitDirs(base)
+	if err != nil {
+		return true // malformed Git metadata fails closed for edit calls
+	}
+	for _, gitDir := range gitDirs {
+		if pathWithin(gitDir, resolved) {
+			return true
+		}
+	}
+	return false
+}
+
+func gitMetadataSegment(part string) bool {
+	part = strings.ToLower(strings.TrimRight(part, ". "))
+	if part == ".git" {
+		return true
+	}
+	// Windows may expose .git through an 8.3 alias. Denying GIT~N is
+	// conservative on other platforms too and avoids depending on FS settings.
+	if strings.HasPrefix(part, "git~") && len(part) > len("git~") {
+		for _, r := range part[len("git~"):] {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
+func editPaths(input map[string]any) []string {
+	var paths []string
+	for _, key := range []string{"file_path", "notebook_path"} {
+		if raw, present := input[key]; present {
+			path, ok := raw.(string)
+			if !ok || path == "" {
+				return nil
+			}
+			paths = append(paths, path)
+		}
+	}
+	return paths
+}
+
+func pathWithin(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// projectGitDirs includes a linked worktree's actual gitdir and common dir.
+// Parsing the .git pointer ourselves avoids invoking Git on mutable config.
+func projectGitDirs(project string) ([]string, error) {
+	marker := filepath.Join(project, ".git")
+	info, err := os.Stat(marker)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	gitDir := marker
+	if !info.IsDir() {
+		raw, err := smallGitPointer(marker, "gitdir:")
+		if err != nil {
+			return nil, err
+		}
+		gitDir = raw
+		if !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(project, gitDir)
+		}
+	}
+	gitDir, err = resolvedOrParent(gitDir)
+	if err != nil {
+		return nil, err
+	}
+	dirs := []string{gitDir}
+	common := filepath.Join(gitDir, "commondir")
+	if _, err := os.Stat(common); os.IsNotExist(err) {
+		return dirs, nil
+	} else if err != nil {
+		return nil, err
+	}
+	commonDir, err := smallGitPointer(common, "")
+	if err != nil {
+		return nil, err
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(gitDir, commonDir)
+	}
+	commonDir, err = resolvedOrParent(commonDir)
+	if err != nil {
+		return nil, err
+	}
+	return append(dirs, commonDir), nil
+}
+
+func smallGitPointer(path, prefix string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.Size() > 4096 || info.IsDir() {
+		return "", os.ErrInvalid
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(string(raw))
+	if prefix != "" {
+		if !strings.HasPrefix(value, prefix) {
+			return "", os.ErrInvalid
+		}
+		value = strings.TrimSpace(strings.TrimPrefix(value, prefix))
+	}
+	if value == "" || strings.ContainsAny(value, "\x00\r\n") {
+		return "", os.ErrInvalid
+	}
+	return value, nil
 }
 
 func resolvedOrParent(path string) (string, error) {
@@ -180,11 +329,12 @@ func ruleMatches(rule, tool string, input map[string]any) bool {
 		if !hasSpec {
 			return true
 		}
-		path, _ := input["file_path"].(string)
-		if path == "" {
-			path, _ = input["notebook_path"].(string)
+		for _, path := range editPaths(input) {
+			if globMatch(spec, path) {
+				return true
+			}
 		}
-		return path != "" && globMatch(spec, path)
+		return false
 	case !hasSpec:
 		return name == tool
 	}

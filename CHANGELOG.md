@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Guarded agent hops cannot edit `.git` metadata, including through a symlink.
+  This closes a path where a delivered prompt could change Git configuration
+  and make an otherwise allowed `git status` execute a command.
+
 ## [20260929202224] - 2026-09-29
 
 ### Fixed
