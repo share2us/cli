@@ -84,6 +84,20 @@ func TestBindIsIdempotentAndUpdatesTheLabel(t *testing.T) {
 	}
 }
 
+func TestBindSessionRefreshesAndClearsZellijPane(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	project := t.TempDir()
+	want := &ZellijPane{Session: "old-name", Pane: "7"}
+	b, _, err := BindSessionInPane(project, "claude", "", "session-1", want)
+	if err != nil || b.Zellij == nil || *b.Zellij != *want {
+		t.Fatalf("bound pane = %+v, %v", b.Zellij, err)
+	}
+	b, _, err = BindSession(project, "claude", "", "session-1")
+	if err != nil || b.Zellij != nil {
+		t.Fatalf("rebind outside zellij retained stale pane %+v, %v", b.Zellij, err)
+	}
+}
+
 func TestUnbind(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	project := t.TempDir()

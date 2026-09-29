@@ -53,4 +53,7 @@ func TestParseClaudeAgents(t *testing.T) {
 	if byID["live-idle"].Tool != "claude" || byID["live-idle"].Project != "/p/b" || byID["live-idle"].Name != "one" {
 		t.Errorf("field mapping wrong: %+v", byID["live-idle"])
 	}
+	if byID["live-idle"].PID != 1 || byID["dup-1"].PID != 3 {
+		t.Errorf("interactive process ids were lost: %+v", byID)
+	}
 }
