@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260929202224] - 2026-09-29
+
 ### Fixed
 
 - Guarded live Claude hops now keep their tool restrictions until the turn ends,
