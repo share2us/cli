@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260929070247] - 2026-09-29
+
 ### Added
 
 - **Post a file into a sharenet or project.** `s2u <file> --sharenet <id>` or
