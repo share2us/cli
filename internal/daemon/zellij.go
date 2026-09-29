@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // zellijDriver is the narrow terminal-control surface used by live delivery.
@@ -29,13 +31,14 @@ type zellijDriver interface {
 }
 
 type zellijPaneInfo struct {
-	ID      int    `json:"id"`
-	Plugin  bool   `json:"is_plugin"`
-	TabName string `json:"tab_name"`
-	Title   string `json:"title"`
-	Command string `json:"pane_command"`
-	CWD     string `json:"pane_cwd"`
-	Exited  bool   `json:"exited"`
+	ID                int    `json:"id"`
+	Plugin            bool   `json:"is_plugin"`
+	TabName           string `json:"tab_name"`
+	Title             string `json:"title"`
+	Command           string `json:"pane_command"`
+	CWD               string `json:"pane_cwd"`
+	Exited            bool   `json:"exited"`
+	CursorCoordinates []int  `json:"cursor_coordinates_in_pane"`
 }
 
 func (p zellijPaneInfo) paneID() string { return strconv.Itoa(p.ID) }
@@ -167,7 +170,9 @@ func resolveZellijPaneWith(ctx context.Context, z zellijDriver, binding Binding,
 	for _, zsession := range sessions {
 		panes, err := z.Panes(ctx, zsession)
 		if err != nil {
-			continue // a session can exit between list and inspection
+			// Fail closed. If even one listed session cannot be inspected, it
+			// could contain another pane with the same id/project identity.
+			return resolvedZellijPane{}, fmt.Errorf("inspect zellij session %q: %w", zsession, err)
 		}
 		for _, pane := range panes {
 			if pane.Plugin || pane.Exited || pane.paneID() != binding.Zellij.Pane || !SameProject(pane.CWD, binding.Project) || !isClaudePaneCommand(pane.Command) {
@@ -203,7 +208,10 @@ func isClaudePaneCommandFor(command, currentExecutable string) bool {
 	return knownWrapper && len(fields) > 1 && strings.Trim(fields[1], "'\"") == "claude"
 }
 
-var ansiSequence = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+var (
+	ansiSequence      = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
+	foldedClaudePaste = regexp.MustCompile(`^\[Pasted text[^]]*\]$`)
+)
 
 type claudeScreenState struct {
 	Busy       bool
@@ -214,14 +222,17 @@ type claudeScreenState struct {
 }
 
 func parseClaudeScreen(screen string) claudeScreenState {
-	plain := strings.ToLower(ansiSequence.ReplaceAllString(screen, ""))
+	active := strings.ToLower(activeClaudeUI(screen))
 	state := claudeScreenState{
-		Busy: strings.Contains(plain, "esc to interrupt"),
-		Dialog: strings.Contains(plain, "do you want") || strings.Contains(plain, "enter to confirm") ||
-			strings.Contains(plain, "press enter to confirm") || strings.Contains(plain, "esc to cancel"),
+		Busy: strings.Contains(active, "esc to interrupt"),
+		Dialog: strings.Contains(active, "do you want") || strings.Contains(active, "enter to confirm") ||
+			strings.Contains(active, "press enter to confirm") || strings.Contains(active, "esc to cancel"),
 	}
 	if line, ok := lastPromptLine(screen); ok {
 		state.Input, state.InputDim = promptInput(line)
+		if !state.InputDim {
+			state.Input = claudeInputText(screen, state.Input)
+		}
 		state.InputEmpty = state.Input == "" || state.InputDim
 	}
 	return state
@@ -237,10 +248,89 @@ func pastedClaudeInput(screen, prompt string) bool {
 	if s.Busy || s.Dialog || s.Input == "" {
 		return false
 	}
-	if strings.TrimSpace(s.Input) == strings.TrimSpace(prompt) {
+	if withoutWhitespace(s.Input) == withoutWhitespace(prompt) {
 		return true
 	}
-	return regexp.MustCompile(`^\[Pasted text[^]]*\]$`).MatchString(strings.TrimSpace(s.Input))
+	return foldedClaudePaste.MatchString(strings.TrimSpace(s.Input))
+}
+
+// activeClaudeUI excludes prior transcript from state detection. Claude draws a
+// horizontal rule immediately before its current input/status area; words such
+// as "do you want" or "esc to interrupt" above it are merely conversation.
+func activeClaudeUI(screen string) string {
+	lines := strings.Split(ansiSequence.ReplaceAllString(screen, ""), "\n")
+	prompt := lastPromptIndex(lines)
+	if prompt < 0 {
+		// A permission dialog can replace the prompt. Keep a small tail rather
+		// than treating the entire transcript as live UI.
+		start := len(lines) - 12
+		if start < 0 {
+			start = 0
+		}
+		return strings.Join(lines[start:], "\n")
+	}
+	start := prompt - 12
+	if start < 0 {
+		start = 0
+	}
+	for i := prompt - 1; i >= 0; i-- {
+		if claudeHorizontalRule(lines[i]) {
+			start = i + 1
+			break
+		}
+	}
+	return strings.Join(lines[start:], "\n")
+}
+
+// claudeInputText reconstructs an unfolded multiline paste. A normal Claude
+// input is bounded below by a horizontal rule. Without that boundary (as in
+// partial dumps and simple fixtures), only the prompt line is trusted.
+func claudeInputText(screen, first string) string {
+	lines := strings.Split(ansiSequence.ReplaceAllString(screen, ""), "\n")
+	prompt := lastPromptIndex(lines)
+	if prompt < 0 {
+		return first
+	}
+	end := -1
+	for i := prompt + 1; i < len(lines); i++ {
+		if claudeHorizontalRule(lines[i]) {
+			end = i
+			break
+		}
+	}
+	if end < 0 {
+		return first
+	}
+	parts := []string{first}
+	for _, line := range lines[prompt+1 : end] {
+		line = strings.TrimSpace(strings.TrimRight(line, "│"))
+		if line != "" {
+			parts = append(parts, line)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func lastPromptIndex(lines []string) int {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if strings.Contains(lines[i], "❯") {
+			return i
+		}
+	}
+	return -1
+}
+
+func claudeHorizontalRule(line string) bool {
+	return strings.Count(line, "─") >= 5
+}
+
+func withoutWhitespace(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 func lastPromptLine(screen string) (string, bool) {
@@ -289,7 +379,7 @@ func promptInput(line string) (string, bool) {
 			rest = rest[loc[1]:]
 			continue
 		}
-		r, n := []rune(rest)[0], len(string([]rune(rest)[0]))
+		r, n := utf8.DecodeRuneInString(rest)
 		rest = rest[n:]
 		if !strings.ContainsRune(" \t│", r) {
 			saw = true

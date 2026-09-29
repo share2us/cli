@@ -17,8 +17,9 @@ import (
 // (the server sees neither). A P4a raw-string prompt (no envelope) is handled by
 // ParseEnvelope's fallback.
 type InjectEnvelope struct {
-	Prompt   string `json:"prompt"`
-	FileName string `json:"file_name,omitempty"`
+	Prompt           string `json:"prompt"`
+	FileName         string `json:"file_name,omitempty"`
+	SenderDeviceName string `json:"sender_device_name,omitempty"`
 }
 
 // ParseEnvelope reads a decrypted inject payload. If it isn't a JSON envelope it

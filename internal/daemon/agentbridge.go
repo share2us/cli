@@ -402,26 +402,36 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 		prompt = prompt + "\n\n(A file for this task was placed at " + path + ".)"
 	}
 	if live {
-		if bound && rt.tryTypedInject(ctx, client, runner, deps, req, binding, discovered, env.Prompt, prompt, cwd, 0) {
+		if bound && rt.tryTypedInject(ctx, client, runner, deps, req, binding, discovered, env.Prompt, prompt, env.SenderDeviceName, cwd, 0) {
 			return
 		}
-		if rt.hub().guardedAlive(req.TargetSessionID) {
-			rt.deliverViaChannel(ctx, client, runner, deps, req, env.Prompt, prompt, cwd, 0)
+		if discovered.Status == "available" && rt.hub().guardedAlive(req.TargetSessionID) {
+			rt.deliverViaChannel(ctx, client, runner, deps, req, env.Prompt, prompt, env.SenderDeviceName, cwd, 0, false)
 			return
 		}
-		rt.holdInject(ctx, client, runner, deps, req, env.Prompt, prompt, cwd)
+		rt.holdInject(ctx, client, runner, deps, req, env.Prompt, prompt, env.SenderDeviceName, cwd)
 		return
 	}
-	rt.runInject(ctx, client, runner, deps, req, env.Prompt, prompt, cwd, 0)
+	rt.runInject(ctx, client, runner, deps, req, env.Prompt, prompt, env.SenderDeviceName, cwd, 0)
 }
 
 // holdInject waits, off the receive loop, until nothing holds the session, then
 // runs the hop in it. The server already handed the hop over (it stays
 // "delivered"), so it lives here until then. It gives up after injectHoldMax.
-func (rt *Runtime) holdInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, cwd string) {
-	deps.logf("agent-bridge: inject %s waits: session %s is open in a window", req.ID, req.TargetSessionID)
-	rt.notify("Share2Us", "A prompt is waiting for your "+req.Tool+" session. It runs in that session once you exit "+req.Tool+" there.")
-	_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: the "+req.Tool+" session is open in a window. The prompt runs in that session once "+req.Tool+" is exited there.")
+func (rt *Runtime) holdInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string) {
+	rt.holdInjectState(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, true, false)
+}
+
+// holdInjectState carries two facts across channel fallback: whether this hop
+// may still try the channel, and whether its waiting status was already sent.
+// Once a channel picked up a hop but did not start it, that hop never enters the
+// same channel again; doing so every poll can duplicate the prompt and notices.
+func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, allowChannel, waitingReported bool) {
+	if !waitingReported {
+		deps.logf("agent-bridge: inject %s waits: session %s is open in a window", req.ID, req.TargetSessionID)
+		rt.notify("Share2Us", "A prompt is waiting for your "+req.Tool+" session. It runs in that session once you exit "+req.Tool+" there.")
+		_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: the "+req.Tool+" session is open in a window. The prompt runs in that session once "+req.Tool+" is exited there.")
+	}
 	rt.holding.Add(1)
 	// The limit counts from when the hop was sent, so a restart does not reset it.
 	began := time.Now()
@@ -444,7 +454,7 @@ func (rt *Runtime) holdInject(ctx context.Context, client AgentClient, runner Ag
 				if binding, ok := BindingForSession(list, req.TargetSessionID); ok {
 					if sessions, err := runner.Discover(ctx); err == nil {
 						for _, session := range sessions {
-							if session.SessionID == req.TargetSessionID && session.Live && rt.tryTypedInject(ctx, client, runner, deps, req, binding, session, shown, prompt, cwd, time.Since(began)) {
+							if session.SessionID == req.TargetSessionID && session.Live && rt.tryTypedInject(ctx, client, runner, deps, req, binding, session, shown, prompt, senderName, cwd, time.Since(began)) {
 								return
 							}
 						}
@@ -453,12 +463,12 @@ func (rt *Runtime) holdInject(ctx context.Context, client AgentClient, runner Ag
 			}
 			// A channel for the session came up (the window was restarted with
 			// `s2u claude`): deliver into it now when no safe pane was available.
-			if rt.hub().guardedAlive(req.TargetSessionID) {
-				rt.deliverViaChannel(ctx, client, runner, deps, req, shown, prompt, cwd, time.Since(began))
+			if allowChannel && rt.hub().guardedAlive(req.TargetSessionID) && sessionAvailable(ctx, runner, req.TargetSessionID) {
+				rt.deliverViaChannel(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, time.Since(began), true)
 				return
 			}
 			if !sessionHeld(ctx, runner, req.TargetSessionID) {
-				rt.runInject(ctx, client, runner, deps, req, shown, prompt, cwd, time.Since(began))
+				rt.runInject(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, time.Since(began))
 				return
 			}
 			if time.Since(began) > injectHoldMax {
@@ -486,7 +496,14 @@ var channelBusyPoll = 200 * time.Millisecond
 // with the hop's guardrails enforced by the s2u PreToolUse hook. The result is
 // what the agent reports with the channel's report tool, or empty when its turn
 // ends without one. It runs off the receive loop.
-func (rt *Runtime) deliverViaChannel(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, cwd string, waited time.Duration) {
+func (rt *Runtime) deliverViaChannel(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, waited time.Duration, waitingReported bool) {
+	// The status observed by handleInject may already be stale. Recheck directly
+	// before queueing so "busy" can only confirm a transition that began after
+	// this delivery.
+	if !sessionAvailable(ctx, runner, req.TargetSessionID) {
+		rt.holdInjectState(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, true, waitingReported)
+		return
+	}
 	rt.holding.Add(1) // busy until the agent reports: a restart would lose the result
 	strict := false
 	if cr, ok := runner.(ClaudeRunner); ok {
@@ -495,7 +512,7 @@ func (rt *Runtime) deliverViaChannel(ctx context.Context, client AgentClient, ru
 	picked, result, accepted := rt.hub().deliver(req.TargetSessionID, ChannelDelivery{RequestID: req.ID, Prompt: prompt, From: req.SenderDeviceID, Strict: strict})
 	if !accepted {
 		rt.holding.Add(-1)
-		rt.holdInject(ctx, client, runner, deps, req, shown, prompt, cwd)
+		rt.holdInjectState(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, true, waitingReported)
 		return
 	}
 	go func() {
@@ -506,7 +523,7 @@ func (rt *Runtime) deliverViaChannel(ctx context.Context, client AgentClient, ru
 			// The channel went away between the check and the pickup.
 			rt.hub().withdraw(req.TargetSessionID, req.ID)
 			deps.logf("agent-bridge: the channel of session %s did not take inject %s; waiting for the window instead", req.TargetSessionID, req.ID)
-			rt.holdInject(ctx, client, runner, deps, req, shown, prompt, cwd)
+			rt.holdInjectState(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, false, waitingReported)
 			return
 		case <-ctx.Done():
 			return
@@ -518,6 +535,20 @@ func (rt *Runtime) deliverViaChannel(ctx context.Context, client AgentClient, ru
 		for !confirmed {
 			select {
 			case out := <-result:
+				if strings.TrimSpace(out) == "" {
+					// A Stop before the idle -> busy transition belongs to some
+					// other turn (or to a dropped event), never to this hop.
+					confirmTicker.Stop()
+					if !confirmTimer.Stop() {
+						select {
+						case <-confirmTimer.C:
+						default:
+						}
+					}
+					deps.logf("agent-bridge: channel stopped before inject %s started; waiting instead", req.ID)
+					rt.holdInjectState(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, false, waitingReported)
+					return
+				}
 				earlyResult = &out
 				confirmed = true
 			case <-confirmTicker.C:
@@ -526,7 +557,7 @@ func (rt *Runtime) deliverViaChannel(ctx context.Context, client AgentClient, ru
 				confirmTicker.Stop()
 				rt.hub().withdraw(req.TargetSessionID, req.ID)
 				deps.logf("agent-bridge: channel picked up inject %s but Claude never started it; waiting instead", req.ID)
-				rt.holdInject(ctx, client, runner, deps, req, shown, prompt, cwd)
+				rt.holdInjectState(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, false, waitingReported)
 				return
 			case <-ctx.Done():
 				confirmTicker.Stop()
@@ -594,6 +625,19 @@ func sessionBusy(ctx context.Context, runner AgentRunner, sessionID string) bool
 	return false
 }
 
+func sessionAvailable(ctx context.Context, runner AgentRunner, sessionID string) bool {
+	sessions, err := runner.Discover(ctx)
+	if err != nil {
+		return false
+	}
+	for _, session := range sessions {
+		if session.SessionID == sessionID {
+			return session.Status == "available"
+		}
+	}
+	return false
+}
+
 // sessionHeld reports whether a running process (an open window) holds the
 // session. A failed discovery counts as held: running beside a window that has
 // the session open is the thing to avoid.
@@ -611,7 +655,7 @@ func sessionHeld(ctx context.Context, runner AgentRunner, sessionID string) bool
 }
 
 // runInject runs the hop in the target session itself and reports the result.
-func (rt *Runtime) runInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, cwd string, waited time.Duration) {
+func (rt *Runtime) runInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, waited time.Duration) {
 	rt.hopMu.Lock()
 	defer rt.hopMu.Unlock()
 	rt.notify("Share2Us", "Running a prompt in your "+req.Tool+" session")
@@ -632,7 +676,7 @@ func (rt *Runtime) runInject(ctx context.Context, client AgentClient, runner Age
 		if errors.Is(err, ErrSessionHeld) {
 			// A window opened the session since the check: wait again.
 			rt.hopRunning.Store(false)
-			rt.holdInject(ctx, client, runner, deps, req, shown, prompt, cwd)
+			rt.holdInject(ctx, client, runner, deps, req, shown, prompt, senderName, cwd)
 			return
 		}
 		hop.Mode = "resumed"
