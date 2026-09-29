@@ -154,3 +154,19 @@ func TestOfflineEntriesAreNeverTargets(t *testing.T) {
 		t.Fatalf("an unrelated query got an offline note: %q", note)
 	}
 }
+
+func TestDeviceNameForIDUsesTheSendingDevice(t *testing.T) {
+	devices := []clicore.DeviceSession{
+		{ID: "dev-other", DeviceName: "other"},
+		{ID: "dev-sender", DeviceName: "  jarvis  ", Current: true},
+	}
+	if got := deviceNameForID(devices, "dev-sender"); got != "jarvis" {
+		t.Fatalf("name = %q, want jarvis", got)
+	}
+	if got := deviceNameForID(devices, "missing"); got != "" {
+		t.Fatalf("unknown device name = %q", got)
+	}
+	if got := deviceNameForID(devices, ""); got != "jarvis" {
+		t.Fatalf("current device fallback = %q, want jarvis", got)
+	}
+}

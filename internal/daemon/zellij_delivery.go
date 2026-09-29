@@ -20,7 +20,7 @@ const (
 // tryTypedInject attempts guarded delivery into an idle Claude input box. It
 // returns true once it has taken ownership of the hop. False means it typed
 // nothing and the caller may use the normal channel/wait path.
-func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, binding Binding, session DiscoveredSession, shown, prompt, cwd string, waited time.Duration) bool {
+func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, binding Binding, session DiscoveredSession, shown, prompt, senderName, cwd string, waited time.Duration) bool {
 	// A recent channel poll is proof this is an `s2u claude` process with the
 	// guardrail and Stop hooks loaded. Plain Claude must never be typed into.
 	if binding.Zellij == nil || !rt.hub().guardedAlive(req.TargetSessionID) {
@@ -44,7 +44,11 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	if !accepted {
 		return false
 	}
-	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s", req.SenderDeviceID, req.ID, prompt)
+	sender := req.SenderDeviceID
+	if name := strings.TrimSpace(senderName); name != "" {
+		sender = fmt.Sprintf("%q (%s)", name, req.SenderDeviceID)
+	}
+	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s", sender, req.ID, prompt)
 	if err := z.Paste(ctx, pane.Session, pane.Pane, visible); err != nil {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
 		return false
@@ -53,14 +57,14 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		// Something changed after the empty-input check. Never press Enter and
 		// keep the guard active: the pasted remote text may still be submitted
 		// manually, and it must not run with the window's unrestricted policy.
-		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, cwd, pane, result, waited)
+		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, waited)
 		return true
 	}
 	if err := z.Enter(ctx, pane.Session, pane.Pane); err != nil {
 		// send-keys may have reached zellij even when its client reports an
 		// error. Retrying could run the same hop twice, so enter the same guarded
 		// uncertain state and never paste this request again.
-		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, cwd, pane, result, waited)
+		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, waited)
 		return true
 	}
 	rt.finishTypedInject(ctx, client, deps, req, shown, result, waited)
@@ -142,7 +146,7 @@ func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, de
 // could not be proved. It never presses Enter and never pastes again. The hook
 // remains active until the owner clears the input, submits it, or the request
 // expires.
-func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, cwd string, pane resolvedZellijPane, result <-chan string, waited time.Duration) {
+func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, pane resolvedZellijPane, result <-chan string, waited time.Duration) {
 	rt.holding.Add(1)
 	_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: text reached the Claude input, but Share2Us did not press Enter because the input changed. Review or clear it in that window.")
 	go func() {
@@ -173,7 +177,7 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 						// The owner cleared the unsubmitted text. Release the guard
 						// and return to the ordinary wait/retry path.
 						rt.hub().withdraw(req.TargetSessionID, req.ID)
-						rt.holdInject(ctx, client, runner, deps, req, shown, prompt, cwd)
+						rt.holdInject(ctx, client, runner, deps, req, shown, prompt, senderName, cwd)
 						return
 					}
 				}

@@ -53,8 +53,8 @@ func TestLiveS2UClaudeHopIsTypedAndReported(t *testing.T) {
 	deps.OpenContentKey = func(string) ([]byte, error) { return key, nil }
 	runtime.handleInject(context.Background(), c, r, deps,
 		signedReq(t, clicore.AgentRequest{ID: "req-typed", Tool: "claude", TargetSessionID: "win-1",
-			SealedPrompt: `{"prompt":"inspect the file","file_name":"note.txt"}`, SealedFileKey: "sealed-key", HasFile: true}))
-	if len(z.pasted) != 1 || !strings.Contains(z.pasted[0], "[Share2Us] from device "+bridgeSender.id+", request req-typed:") || !strings.Contains(z.pasted[0], "inspect the file") {
+			SealedPrompt: `{"prompt":"inspect the file","file_name":"note.txt","sender_device_name":"jarvis"}`, SealedFileKey: "sealed-key", HasFile: true}))
+	if len(z.pasted) != 1 || !strings.Contains(z.pasted[0], `[Share2Us] from device "jarvis" (`+bridgeSender.id+`), request req-typed:`) || !strings.Contains(z.pasted[0], "inspect the file") {
 		t.Fatalf("pasted = %q", z.pasted)
 	}
 	if z.entered != 1 || r.ran != 0 {
