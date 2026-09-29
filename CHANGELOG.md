@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **Post a file into a sharenet or project.** `s2u <file> --sharenet <id>` or
+  `s2u <file> --project <id>`. The file goes to the members, not to a link: they
+  find it under Files in the portal. It counts toward the sharenet owner's
+  storage and stays until someone deletes it. Link options such as `--password`,
+  `--one-time` or `--to` are refused with these flags, and your standing
+  defaults for encryption, view limits and domains are not applied.
+
 ## [20260928211925] - 2026-09-28
 
 ### Added

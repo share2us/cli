@@ -3964,3 +3964,22 @@ func mustMarshal(t *testing.T, v any) []byte {
 	}
 	return raw
 }
+
+func TestParseUploadArgsSharenetPost(t *testing.T) {
+	opts, err := parseUploadArgs([]string{"notes.txt", "--sharenet", "net-1"})
+	if err != nil || opts.sharenet != "net-1" || opts.project != "" {
+		t.Fatalf("--sharenet: %+v %v", opts, err)
+	}
+	opts, err = parseUploadArgs([]string{"notes.txt", "--project=proj-1"})
+	if err != nil || opts.project != "proj-1" || opts.encrypt || opts.maxViews != 0 {
+		t.Fatalf("--project=: %+v %v", opts, err)
+	}
+	if _, err := parseUploadArgs([]string{"notes.txt", "--sharenet"}); err == nil {
+		t.Fatal("--sharenet without an id was accepted")
+	}
+	for _, flag := range []string{"--password", "--one-time", "--private", "--max-views=3", "-l"} {
+		if _, err := parseUploadArgs([]string{"notes.txt", "--sharenet", "net-1", flag}); err == nil || !strings.Contains(err.Error(), "sharenet") {
+			t.Fatalf("%s with --sharenet: %v, want a refusal", flag, err)
+		}
+	}
+}

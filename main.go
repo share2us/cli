@@ -2061,8 +2061,14 @@ func (a app) upload(ctx context.Context, args []string) int {
 		Targets:        teammateTargets,
 		AllowReshare:   resolveAllowReshare(opts),
 		Note:           strings.TrimSpace(opts.note),
+		SharenetID:     opts.sharenet,
+		ProjectID:      opts.project,
 	})
 	if err != nil {
+		if (opts.sharenet != "" || opts.project != "") && strings.Contains(err.Error(), "sharenet_not_found") {
+			fmt.Fprintln(a.stderr, "no such sharenet or project, or you are not a member of it")
+			return 1
+		}
 		if opts.teammate != "" && a.printTeammateAPIError(err, opts.teammate) {
 			return 1
 		}
@@ -2117,6 +2123,19 @@ func (a app) upload(ctx context.Context, args []string) int {
 	publicID := completed.PublicID
 	if publicID == "" {
 		publicID = created.Share.PublicID
+	}
+	if opts.sharenet != "" || opts.project != "" {
+		// No link: members find it in the sharenet (or project) in the portal.
+		if opts.json {
+			writeJSON(a.stdout, map[string]any{"status": completed.Status, "file_name": fileName, "sharenet_id": opts.sharenet, "project_id": opts.project})
+			return 0
+		}
+		where := "the sharenet"
+		if opts.project != "" {
+			where = "the project"
+		}
+		fmt.Fprintf(a.stdout, "Posted %s to %s. Its members see it under Files in the portal; it is kept until deleted.\n", fileName, where)
+		return 0
 	}
 	// Option B in-flight re-seal: retain the content key for device/contact E2E sends so we
 	// can re-seal it to the recipient's new device key if they re-key before receiving. Only
@@ -2251,6 +2270,11 @@ type uploadOptions struct {
 	unrestrict     bool
 	private        bool
 	fromStdin      bool
+	// Post into a sharenet, or one of its projects (server decisions-summary 9.23
+	// #8): stored under the sharenet owner's account, members only, kept until
+	// deleted.
+	sharenet string
+	project  string
 }
 
 func parseUploadArgs(args []string) (uploadOptions, error) {
@@ -2398,6 +2422,20 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 			opts.qrLink = true
 		case arg == "--private":
 			opts.private = true
+		case arg == "--sharenet" || arg == "--project":
+			i++
+			if i >= len(args) || strings.TrimSpace(args[i]) == "" {
+				return uploadOptions{}, fmt.Errorf("%s requires an id", arg)
+			}
+			if arg == "--sharenet" {
+				opts.sharenet = strings.TrimSpace(args[i])
+			} else {
+				opts.project = strings.TrimSpace(args[i])
+			}
+		case strings.HasPrefix(arg, "--sharenet="):
+			opts.sharenet = strings.TrimSpace(strings.TrimPrefix(arg, "--sharenet="))
+		case strings.HasPrefix(arg, "--project="):
+			opts.project = strings.TrimSpace(strings.TrimPrefix(arg, "--project="))
 		case arg == "--unrestrict":
 			opts.unrestrict = true
 		case arg == "--restrict":
@@ -2419,7 +2457,30 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 	if opts.restrict && opts.unrestrict {
 		return uploadOptions{}, errors.New("--restrict and --unrestrict cannot be combined")
 	}
+	if opts.sharenet != "" || opts.project != "" {
+		if err := sharenetPostConflicts(args); err != nil {
+			return uploadOptions{}, err
+		}
+		// Standing defaults that describe a link share do not apply to a sharenet
+		// file: it is members only, stored in the clear on the server, kept until
+		// deleted. Dropped rather than refused, since nobody typed them.
+		opts.encrypt, opts.maxViews, opts.allowedDomains, opts.deniedDomains = false, 0, nil, nil
+	}
 	return opts, nil
+}
+
+// sharenetPostConflicts refuses flags that cannot apply to a sharenet file.
+func sharenetPostConflicts(args []string) error {
+	bad := []string{"--password", "--one-time", "--encrypt", "--to", "--email", "--device", "--contact",
+		"--live", "-l", "--watch", "-w", "--private", "--restrict", "--unrestrict", "--allow-domain", "--deny-domain", "--max-views"}
+	for _, a := range args {
+		for _, b := range bad {
+			if a == b || strings.HasPrefix(a, b+"=") {
+				return fmt.Errorf("%s does not apply to a sharenet file: it is shared with the sharenet's members only", b)
+			}
+		}
+	}
+	return nil
 }
 
 // visibilityForUpload maps --private to the API's visibility field. A private
