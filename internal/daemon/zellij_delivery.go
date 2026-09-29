@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	clicore "github.com/share2us/cli-core"
 )
@@ -21,6 +22,16 @@ const (
 // returns true once it has taken ownership of the hop. False means it typed
 // nothing and the caller may use the normal channel/wait path.
 func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, binding Binding, session DiscoveredSession, shown, prompt, senderName, cwd string, waited time.Duration) bool {
+	// Terminal controls in sender-controlled text must never reach Zellij.
+	// ESC is especially dangerous: it can end bracketed paste before our
+	// post-paste screen check runs. Let the ordinary waiting path handle it.
+	var safe bool
+	if prompt, safe = safeTerminalText(prompt); !safe {
+		return false
+	}
+	if senderName, safe = safeTerminalText(senderName); !safe {
+		return false
+	}
 	// A recent channel poll is proof this is an `s2u claude` process with the
 	// guardrail and Stop hooks loaded. Plain Claude must never be typed into.
 	if binding.Zellij == nil || !rt.hub().guardedAlive(req.TargetSessionID) {
@@ -49,6 +60,10 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		sender = fmt.Sprintf("%q (%s)", name, req.SenderDeviceID)
 	}
 	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s", sender, req.ID, prompt)
+	if visible, safe = safeTerminalText(visible); !safe {
+		rt.hub().withdraw(req.TargetSessionID, req.ID)
+		return false
+	}
 	if err := z.Paste(ctx, pane.Session, pane.Pane, visible); err != nil {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
 		return false
@@ -57,6 +72,14 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		// Something changed after the empty-input check. Never press Enter and
 		// keep the guard active: the pasted remote text may still be submitted
 		// manually, and it must not run with the window's unrestricted policy.
+		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, waited)
+		return true
+	}
+	// The owner may exit Claude between the initial pane check and Enter. A
+	// shell can display the same prompt marker, so revalidate both process and
+	// pane identity immediately before sending the key.
+	current, err := resolveZellijPaneWith(ctx, z, binding, session, rt.processZellijPane)
+	if err != nil || current != pane {
 		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, waited)
 		return true
 	}
@@ -69,6 +92,21 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	}
 	rt.finishTypedInject(ctx, client, deps, req, shown, result, waited)
 	return true
+}
+
+func safeTerminalText(s string) (string, bool) {
+	if strings.ContainsRune(s, '\x1b') {
+		return "", false
+	}
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) {
+			return -1
+		}
+		return r
+	}, s), true
 }
 
 // Claude renders a bracketed multiline paste asynchronously: immediately after

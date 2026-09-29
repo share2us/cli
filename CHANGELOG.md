@@ -12,6 +12,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Guarded live Claude hops now keep their tool restrictions until the turn ends,
+  even if the agent reports early. Zellij delivery rejects terminal escape text,
+  verifies Claude's UI and pane again before Enter, and keeps reads inside the
+  bound project. Shell substitutions, backgrounding and redirection cannot
+  bypass the read-only command gate.
+- CLI releases require an explicit beta or stable dispatch; merging a PR no
+  longer publishes automatically. Release tags now point to the exact build
+  commit, including betas built from release branches.
+
 ## [20260929192101] - 2026-09-29
 
 ### Changed
