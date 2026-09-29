@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260929112713] - 2026-09-29
+
 ### Changed
 
 - **A prompt waiting for an open window says so.** `s2u agent status <id>` shows
