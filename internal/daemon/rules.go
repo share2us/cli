@@ -45,6 +45,8 @@ var selfProtection = []string{
 	"Edit(**/.s2u.rules)",
 	"Edit(**/.claude/settings.json)",
 	"Edit(**/.claude/settings.local.json)",
+	"Edit(**/.git)",
+	"Edit(**/.git/**)",
 }
 
 // hopReadOnly is what an unattended hop may run without approval (owner,
