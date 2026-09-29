@@ -12,6 +12,10 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **`s2u help` lists `--sharenet` and `--project`**, under "Sharenet files".
+
 ## [20260929191259] - 2026-09-29
 
 ### Fixed
