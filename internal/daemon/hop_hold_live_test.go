@@ -46,8 +46,8 @@ func TestLiveHoldThenRunInPlace(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 	t.Logf("%s released: reports %v", time.Now().Format(time.TimeOnly), c.reports)
-	if len(c.reports) != 2 || c.reports[1][0] != "done" {
-		t.Fatalf("reports = %v, want running then done", c.reports)
+	if len(c.reports) != 3 || c.reports[0][0] != "waiting" || c.reports[2][0] != "done" {
+		t.Fatalf("reports = %v, want waiting, running, done", c.reports)
 	}
 	hops, _ := LoadHops(0)
 	if len(hops) != 1 || hops[0].RanIn != sid || hops[0].Mode != "resumed" || hops[0].Waited == "" {

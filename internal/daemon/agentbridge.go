@@ -23,6 +23,9 @@ type AgentClient interface {
 	DeregisterAgentSession(ctx context.Context, sessionID string) error
 	AgentLongPoll(ctx context.Context, waitSeconds int) ([]clicore.AgentRequest, error)
 	AgentReportResult(ctx context.Context, id, status, result string) error
+	// AgentRequeueWaiting gets back, once at startup, the hops this device was
+	// holding for an open window when it last stopped.
+	AgentRequeueWaiting(ctx context.Context) (int, error)
 }
 
 // AgentRunner discovers this machine's sessions for one tool and runs an injected
@@ -267,6 +270,13 @@ func (rt *Runtime) agentReceiveLoop(ctx context.Context, client AgentClient, run
 	for _, r := range runners {
 		byTool[r.Tool()] = r
 	}
+	// Hops held for an open window live only in memory: a restart asks the
+	// server for them back. An older server does not know the call; that is fine.
+	if n, err := client.AgentRequeueWaiting(ctx); err != nil {
+		deps.logf("agent-bridge: could not ask for waiting hops back: %v", err)
+	} else if n > 0 {
+		deps.logf("agent-bridge: %d waiting hop(s) came back after a restart", n)
+	}
 	for {
 		if ctx.Err() != nil {
 			return
@@ -399,10 +409,15 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 func (rt *Runtime) holdInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, cwd string) {
 	deps.logf("agent-bridge: inject %s waits: session %s is open in a window", req.ID, req.TargetSessionID)
 	rt.notify("Share2Us", "A prompt is waiting for your "+req.Tool+" session. It runs in that session once you exit "+req.Tool+" there.")
+	_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: the "+req.Tool+" session is open in a window. The prompt runs in that session once "+req.Tool+" is exited there.")
 	rt.holding.Add(1)
+	// The limit counts from when the hop was sent, so a restart does not reset it.
+	began := time.Now()
+	if t, err := time.Parse(time.RFC3339, req.CreatedAt); err == nil && t.Before(began) {
+		began = t
+	}
 	go func() {
 		defer rt.holding.Add(-1)
-		began := time.Now()
 		t := time.NewTicker(injectHoldPoll)
 		defer t.Stop()
 		for {
