@@ -71,6 +71,9 @@ func TestPastedClaudeInput(t *testing.T) {
 	if !pastedClaudeInput("│ ❯ [Pasted text +30 lines] │", "many\nlines") {
 		t.Fatal("folded paste was not recognised")
 	}
+	if !pastedClaudeInput("\x1b[m❯\u00a0[Pasted text #1 +3 lines]", "many\nlines") {
+		t.Fatal("real Claude 2.1.284 folded paste was not recognised")
+	}
 	if pastedClaudeInput("│ ❯ owner text [Pasted text +30 lines] │", "many\nlines") {
 		t.Fatal("mixed owner input was accepted")
 	}

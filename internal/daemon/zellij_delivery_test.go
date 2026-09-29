@@ -39,7 +39,9 @@ func typedRunner(dir string) *sessionFake {
 
 func TestLiveS2UClaudeHopIsTypedAndReported(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	runtime, z, dir := typedRuntime(t, "│ ❯  │", "│ ❯ [Pasted text +3 lines] │")
+	// The first post-paste snapshot can still be Claude's old empty input;
+	// delivery must wait for its asynchronous folded-paste marker before Enter.
+	runtime, z, dir := typedRuntime(t, "│ ❯  │", "│ ❯  │", "│ ❯ [Pasted text #1 +3 lines] │")
 	c, r := &fakeAgentClient{}, typedRunner(dir)
 	key, _ := clicore.NewContentKey()
 	var encrypted bytes.Buffer

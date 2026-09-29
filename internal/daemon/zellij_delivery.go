@@ -12,6 +12,11 @@ import (
 	clicore "github.com/share2us/cli-core"
 )
 
+const (
+	pasteVerifyWindow = time.Second
+	pasteVerifyPoll   = 25 * time.Millisecond
+)
+
 // tryTypedInject attempts guarded delivery into an idle Claude input box. It
 // returns true once it has taken ownership of the hop. False means it typed
 // nothing and the caller may use the normal channel/wait path.
@@ -44,8 +49,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
 		return false
 	}
-	after, err := z.Dump(ctx, pane.Session, pane.Pane)
-	if err != nil || !pastedClaudeInput(after, visible) {
+	if !waitForPastedClaudeInput(ctx, z, pane, visible) {
 		// Something changed after the empty-input check. Never press Enter and
 		// keep the guard active: the pasted remote text may still be submitted
 		// manually, and it must not run with the window's unrestricted policy.
@@ -61,6 +65,40 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	}
 	rt.finishTypedInject(ctx, client, deps, req, shown, result, waited)
 	return true
+}
+
+// Claude renders a bracketed multiline paste asynchronously: immediately after
+// zellij reports success, dump-screen can still show the old dim suggestion or
+// only the first visible prefix, before Claude folds it into one [Pasted text]
+// marker. Give that render transition a short bound. Any unrelated owner text,
+// dialog, busy state, dump failure, or timeout still fails closed without Enter.
+func waitForPastedClaudeInput(ctx context.Context, z zellijDriver, pane resolvedZellijPane, visible string) bool {
+	deadline := time.Now().Add(pasteVerifyWindow)
+	want := strings.TrimSpace(visible)
+	for {
+		after, err := z.Dump(ctx, pane.Session, pane.Pane)
+		if err != nil {
+			return false
+		}
+		if pastedClaudeInput(after, visible) {
+			return true
+		}
+		state := parseClaudeScreen(after)
+		got := strings.TrimSpace(state.Input)
+		transitioning := state.InputEmpty || (got != "" && strings.HasPrefix(want, got))
+		if state.Busy || state.Dialog || !transitioning || !time.Now().Before(deadline) {
+			return false
+		}
+		timer := time.NewTimer(pasteVerifyPoll)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return false
+		}
+	}
 }
 
 func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, deps Deps, req clicore.AgentRequest, shown string, result <-chan string, waited time.Duration) {
