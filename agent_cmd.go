@@ -62,6 +62,10 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentHops()
 	case "join":
 		return a.agentJoin(ctx, args[1:])
+	case "channel":
+		return a.agentChannel(ctx)
+	case "hook":
+		return a.agentHook(args[1:])
 	case "invites", "withdraw":
 		// Sharenet membership (inviting, accepting, removing) is managed in the
 		// portal; the CLI binds sessions and sends between agents.
@@ -693,6 +697,7 @@ func (a app) agentJoin(ctx context.Context, args []string) int {
 	}
 	// The agent can only receive work while the daemon runs: make sure it does.
 	a.ensureAgentReachable()
+	a.channelHint(sess)
 	return 0
 }
 
