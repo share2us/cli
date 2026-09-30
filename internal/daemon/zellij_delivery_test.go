@@ -31,8 +31,12 @@ func typedRuntime(t *testing.T, screens ...string) (*Runtime, *fakeZellij, strin
 	runtime := rt()
 	runtime.zellij = z
 	runtime.processPane = func(int) *ZellijPane { return &ZellijPane{Session: "stale-name", Pane: "4"} }
-	runtime.hub().poll("win-1") // proves s2u claude's hook/channel process is alive
-	runtime.hub().markGuardReady("win-1")
+	if err := ProveTerminalHook("win-1", 123, pane); err != nil {
+		t.Fatal(err)
+	}
+	if err := ProveTerminalPromptHook("win-1", 123, pane); err != nil {
+		t.Fatal(err)
+	}
 	return runtime, z, dir
 }
 
@@ -70,6 +74,9 @@ func TestLiveS2UClaudeHopIsTypedAndReported(t *testing.T) {
 	if active, _ := runtime.hub().guarded("win-1"); !active {
 		t.Fatal("hook guard was not active after submission")
 	}
+	if got := TypedGuardRequest("win-1"); got != "req-typed" {
+		t.Fatalf("persistent guard marker = %q", got)
+	}
 	runtime.hub().report("req-typed", "finished safely")
 	if active, _ := runtime.hub().guarded("win-1"); !active {
 		t.Fatal("report dropped the guard before Stop")
@@ -86,20 +93,108 @@ func TestLiveS2UClaudeHopIsTypedAndReported(t *testing.T) {
 	if len(hops) != 1 || hops[0].Mode != "typed" || hops[0].RanIn != "win-1" {
 		t.Fatalf("hops = %+v", hops)
 	}
+	if got := TypedGuardRequest("win-1"); got != "" {
+		t.Fatalf("completed hop retained marker %q", got)
+	}
+}
+
+func TestDaemonShutdownDuringTypedHopKeepsFailClosedMarker(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, _, dir := typedRuntime(t, "│ ❯  │", "│ ❯ [Pasted text +3 lines] │")
+	ctx, cancel := context.WithCancel(context.Background())
+	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-shutdown", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
+	cancel()
+	deadline := time.Now().Add(time.Second)
+	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := TypedGuardRequest("win-1"); got != "req-shutdown" {
+		t.Fatalf("daemon shutdown lost fail-closed marker: %q", got)
+	}
+}
+
+func TestInterruptedTypedHopReportsFailureNotCompletion(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, _, dir := typedRuntime(t, "│ ❯  │", "│ ❯ [Pasted text +3 lines] │")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := &fakeAgentClient{}
+	runtime.handleInject(ctx, client, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-interrupted", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
+	if !runtime.hub().abandonTyped("win-1", "req-interrupted") {
+		t.Fatal("could not abandon typed turn")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if runtime.holding.Load() != 0 || len(client.reports) != 2 || client.reports[1][0] != "failed" {
+		t.Fatalf("abandoned turn was not reported failed: holding=%d reports=%v", runtime.holding.Load(), client.reports)
+	}
+	hops, _ := LoadHops(0)
+	if len(hops) != 1 || hops[0].Status != "failed" || hops[0].Mode != "typed" {
+		t.Fatalf("abandoned hop history = %+v", hops)
+	}
 }
 
 func TestPlainClaudeIsNeverTypedInto(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	runtime, z, dir := typedRuntime(t, "│ ❯  │", "│ ❯ [Pasted text +3 lines] │")
-	// Expire the proof that s2u claude is running; the bound pane alone grants
-	// no permission to type into a plain Claude process.
-	runtime.hub().seen["win-1"] = time.Now().Add(-channelAlive - time.Second)
+	// A plain Claude process cannot inherit an earlier wrapper's hook proof.
+	r := typedRunner(dir)
+	r.discovered[0].PID = 456
 	ctx, cancel := context.WithCancel(context.Background())
-	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
+	runtime.handleInject(ctx, &fakeAgentClient{}, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-plain", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "do it"}))
 	cancel()
 	if len(z.pasted) != 0 || z.entered != 0 {
 		t.Fatalf("plain Claude received paste=%q enter=%d", z.pasted, z.entered)
+	}
+}
+
+func TestOldWrapperWithoutPromptSubmitHookTypesNothing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, z, dir := typedRuntime(t, "│ ❯  │")
+	EndTerminalSession("win-1")
+	if err := ProveTerminalHook("win-1", 123, &ZellijPane{Session: "stale-name", Pane: "4"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-old-wrapper", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
+	if len(z.pasted) != 0 || z.entered != 0 {
+		t.Fatalf("old wrapper received paste=%q enter=%d", z.pasted, z.entered)
+	}
+}
+
+func TestZellijFallbackUsesHookPaneWhenServiceCannotReadProcessEnvironment(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, z, dir := typedRuntime(t, "│ ❯  │", "│ ❯ [Pasted text +3 lines] │")
+	runtime.processPane = func(int) *ZellijPane { return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-hook-pane", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
+	if len(z.pasted) != 1 || z.entered != 1 {
+		t.Fatalf("hook-proven pane: paste=%q enter=%d", z.pasted, z.entered)
+	}
+}
+
+func TestZellijFallbackRejectsWrongHookPaneWhenServiceCannotReadProcessEnvironment(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, z, dir := typedRuntime(t, "│ ❯  │")
+	runtime.processPane = func(int) *ZellijPane { return nil }
+	if err := ProveTerminalHook("win-1", 123, &ZellijPane{Session: "stale-name", Pane: "9"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-wrong-hook-pane", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
+	if len(z.pasted) != 0 || z.entered != 0 {
+		t.Fatalf("wrong hook pane received paste=%q enter=%d", z.pasted, z.entered)
 	}
 }
 

@@ -402,11 +402,11 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 		prompt = prompt + "\n\n(A file for this task was placed at " + path + ".)"
 	}
 	if live {
-		if bound && rt.tryTypedInject(ctx, client, runner, deps, req, binding, discovered, env.Prompt, prompt, env.SenderDeviceName, cwd, 0) {
-			return
-		}
 		if discovered.Status == "available" && rt.hub().channelReady(req.TargetSessionID) {
 			rt.deliverViaChannel(ctx, client, runner, deps, req, env.Prompt, prompt, env.SenderDeviceName, cwd, 0, false)
+			return
+		}
+		if bound && rt.tryTypedInject(ctx, client, runner, deps, req, binding, discovered, env.Prompt, prompt, env.SenderDeviceName, cwd, 0) {
 			return
 		}
 		rt.holdInject(ctx, client, runner, deps, req, env.Prompt, prompt, env.SenderDeviceName, cwd)
@@ -448,8 +448,12 @@ func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runn
 				return
 			case <-t.C:
 			}
-			// Prefer guarded typing when the bound s2u-claude session owns a safe
-			// zellij pane. Binding and process identity are re-read every time.
+			// Prefer a proven channel; if the organisation blocks it, a verified
+			// Zellij pane and hook proof provide the local fallback.
+			if allowChannel && rt.hub().channelReady(req.TargetSessionID) && sessionAvailable(ctx, runner, req.TargetSessionID) {
+				rt.deliverViaChannel(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, time.Since(began), true)
+				return
+			}
 			if list, err := LoadBindings(); err == nil {
 				if binding, ok := BindingForSession(list, req.TargetSessionID); ok {
 					if sessions, err := runner.Discover(ctx); err == nil {
@@ -460,12 +464,6 @@ func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runn
 						}
 					}
 				}
-			}
-			// A channel for the session came up (the window was restarted with
-			// `s2u claude`): deliver into it now when no safe pane was available.
-			if allowChannel && rt.hub().channelReady(req.TargetSessionID) && sessionAvailable(ctx, runner, req.TargetSessionID) {
-				rt.deliverViaChannel(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, time.Since(began), true)
-				return
 			}
 			if !sessionHeld(ctx, runner, req.TargetSessionID) {
 				rt.runInject(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, time.Since(began))

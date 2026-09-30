@@ -38,10 +38,11 @@ type channelHub struct {
 	queue    map[string][]ChannelDelivery // session -> not yet picked up
 	picked   map[string]chan struct{}     // request -> closed when picked up
 	result   map[string]chan string       // request -> the result, once
+	aborted  map[string]chan struct{}     // typed request -> closed if owner abandons the turn
 	active   map[string]map[string]bool   // session -> requests in progress
 	owner    map[string]string            // request -> session
 	guard    map[string]bool              // session -> SessionStart hook proved loaded
-	proven   map[string]bool              // session -> a live request was answered via report
+	proven   map[string]bool              // session -> a channel-delivered request was answered via report
 	channel  map[string]bool              // request -> requires an explicit report, never Stop
 	reported map[string]string            // request -> result, held until the guarded turn ends
 }
@@ -49,7 +50,7 @@ type channelHub struct {
 func newChannelHub() *channelHub {
 	return &channelHub{
 		seen: map[string]time.Time{}, queue: map[string][]ChannelDelivery{},
-		picked: map[string]chan struct{}{}, result: map[string]chan string{},
+		picked: map[string]chan struct{}{}, result: map[string]chan string{}, aborted: map[string]chan struct{}{},
 		active: map[string]map[string]bool{}, owner: map[string]string{},
 		guard: map[string]bool{}, proven: map[string]bool{}, channel: map[string]bool{},
 		reported: map[string]string{},
@@ -66,9 +67,9 @@ func (h *channelHub) markGuardReady(session string) {
 }
 
 // channelReady is separate from guardedAlive: polling and hooks do not prove
-// Claude can report a request. A successful report establishes readiness, even
-// from a typed request. This does not prove notifications are enabled, so each
-// subsequent channel request still needs its own report to finish.
+// Claude can receive notifications. A typed request's report proves only the
+// report tool, not channel delivery; only a channel-delivered request can
+// establish readiness. Each channel request still needs its own report.
 func (h *channelHub) channelReady(session string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -112,19 +113,39 @@ func (h *channelHub) deliver(session string, d ChannelDelivery) (picked <-chan s
 // PreToolUse hook enforce its guardrails even if the owner submits the text in
 // the small interval before the daemon's post-paste check. One session accepts
 // exactly one queued or active hop.
-func (h *channelHub) beginTyped(session string, d ChannelDelivery) (<-chan string, bool) {
+func (h *channelHub) beginTyped(session string, d ChannelDelivery) (<-chan string, <-chan struct{}, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.occupied(session) {
-		return nil, false
+		return nil, nil, false
 	}
 	r := make(chan string, 1)
+	abort := make(chan struct{})
 	if h.active[session] == nil {
 		h.active[session] = map[string]bool{}
 	}
 	h.active[session][d.RequestID] = d.Strict
 	h.result[d.RequestID], h.owner[d.RequestID] = r, session
-	return r, true
+	h.aborted[d.RequestID] = abort
+	return r, abort, true
+}
+
+// abandonTyped ends only the typed request whose prompt is no longer the last
+// human turn. It never reports success and cannot alter a channel delivery.
+func (h *channelHub) abandonTyped(session, requestID string) bool {
+	if session == "" || requestID == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.owner[requestID] != session || h.channel[requestID] {
+		return true // idempotent after daemon restart or an earlier abandonment
+	}
+	if abort, ok := h.aborted[requestID]; ok {
+		close(abort)
+	}
+	h.forget(requestID)
+	return true
 }
 
 // occupied is called with h.mu held.
@@ -182,7 +203,9 @@ func (h *channelHub) report(requestID, text string) bool {
 	if _, already := h.reported[requestID]; already {
 		return false
 	}
-	h.proven[session] = true
+	if h.channel[requestID] {
+		h.proven[session] = true
+	}
 	h.reported[requestID] = text
 	return true
 }
@@ -191,9 +214,19 @@ func (h *channelHub) report(requestID, text string) bool {
 // early in the turn and must not make subsequent tools unguarded. Channel
 // requests require their own explicit report before any Stop can complete them.
 func (h *channelHub) turnEnded(session string) {
+	h.turnEndedForHook(session, "", false)
+}
+
+// turnEndedForHook requires the last human transcript prompt to match a typed
+// request before that request can complete. Channel requests still require an
+// explicit report, independently of Stop.
+func (h *channelHub) turnEndedForHook(session, requestID string, verifyTyped bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id := range h.active[session] {
+		if verifyTyped && !h.channel[id] && id != requestID {
+			continue
+		}
 		out, reported := h.reported[id]
 		if h.channel[id] && !reported {
 			continue // an unrelated owner turn is not this request's report
@@ -220,6 +253,7 @@ func (h *channelHub) guarded(session string) (active, strict bool) {
 // forget drops every record of a request. Callers hold h.mu.
 func (h *channelHub) forget(requestID string) {
 	delete(h.channel, requestID)
+	delete(h.aborted, requestID)
 	delete(h.reported, requestID)
 	if s, ok := h.owner[requestID]; ok {
 		delete(h.active[s], requestID)
@@ -247,10 +281,14 @@ func (h *channelHub) channelControl(req daemonctl.Request) (daemonctl.Response, 
 	case "channel-report":
 		return daemonctl.Response{OK: h.report(req.Args["request_id"], req.Args["result"])}, true
 	case "channel-turn-ended":
-		h.turnEnded(req.Args["session"])
+		h.turnEndedForHook(req.Args["session"], req.Args["request_id"], true)
 		return daemonctl.Response{OK: true}, true
+	case "channel-abandon-typed":
+		return daemonctl.Response{OK: h.abandonTyped(req.Args["session"], req.Args["request_id"])}, true
 	case "channel-alive":
 		return daemonctl.Response{OK: h.guardedAlive(req.Args["session"])}, true
+	case "channel-ready":
+		return daemonctl.Response{OK: h.channelReady(req.Args["session"])}, true
 	case "channel-guard-ready":
 		h.markGuardReady(req.Args["session"])
 		return daemonctl.Response{OK: req.Args["session"] != ""}, true

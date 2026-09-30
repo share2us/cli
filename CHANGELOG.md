@@ -12,6 +12,21 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- `s2u claude` can deliver guarded prompts into its verified Zellij pane when
+  an organisation blocks Claude development channels. It no longer requires
+  an MCP channel poll for terminal delivery; a channel remains preferred when
+  it is proven available. An active typed turn fails closed if the daemon stops.
+  If that turn is interrupted, a later owner turn no longer stays locked by
+  the old guard marker. Turn identity is bound by Claude's prompt ID, so
+  compaction and queued messages cannot release the guard mid-turn; older
+  `s2u claude` windows need to restart and run one local prompt before receiving
+  typed hops.
+- A typed hop's report no longer marks an MCP channel as deliverable. This
+  prevents the next hop from waiting on a development channel that the
+  organisation silently blocks.
+
 ## [20260929205703] - 2026-09-29
 
 ### Fixed

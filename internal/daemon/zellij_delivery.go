@@ -32,13 +32,20 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	if senderName, safe = safeTerminalText(senderName); !safe {
 		return false
 	}
-	// A recent channel poll is proof this is an `s2u claude` process with the
-	// guardrail and Stop hooks loaded. Plain Claude must never be typed into.
-	if binding.Zellij == nil || !rt.hub().guardedAlive(req.TargetSessionID) {
+	// Claude channels are optional. A hook proof tied to this exact process is
+	// sufficient for guarded terminal delivery when the organisation disables
+	// development channels. Plain Claude never writes that proof.
+	if binding.Zellij == nil || !TerminalTypedReady(req.TargetSessionID, session.PID) {
 		return false
 	}
 	z := rt.paneDriver()
-	pane, err := resolveZellijPaneWith(ctx, z, binding, session, rt.processZellijPane)
+	processPane := func(pid int) *ZellijPane {
+		if current := rt.processZellijPane(pid); current != nil {
+			return current
+		}
+		return TerminalHookPane(req.TargetSessionID, pid)
+	}
+	pane, err := resolveZellijPaneWith(ctx, z, binding, session, processPane)
 	if err != nil {
 		deps.logf("agent-bridge: zellij pane unavailable for %s: %v", req.ID, err)
 		return false
@@ -51,9 +58,13 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	if cr, ok := runner.(ClaudeRunner); ok {
 		strict = cr.Strict
 	}
-	result, accepted := rt.hub().beginTyped(req.TargetSessionID, ChannelDelivery{RequestID: req.ID, From: req.SenderDeviceID, Strict: strict})
+	result, aborted, accepted := rt.hub().beginTyped(req.TargetSessionID, ChannelDelivery{RequestID: req.ID, From: req.SenderDeviceID, Strict: strict})
 	if !accepted {
 		return false
+	}
+	if err := BeginTypedGuard(req.TargetSessionID, req.ID); err != nil {
+		rt.hub().withdraw(req.TargetSessionID, req.ID)
+		return false // no persistent fail-closed marker: type nothing
 	}
 	sender := req.SenderDeviceID
 	if name := strings.TrimSpace(senderName); name != "" {
@@ -62,35 +73,37 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s", sender, req.ID, prompt)
 	if visible, safe = safeTerminalText(visible); !safe {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
+		_ = EndTypedGuard(req.TargetSessionID, req.ID)
 		return false
 	}
 	if err := z.Paste(ctx, pane.Session, pane.Pane, visible); err != nil {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
+		_ = EndTypedGuard(req.TargetSessionID, req.ID)
 		return false
 	}
 	if !waitForPastedClaudeInput(ctx, z, pane, visible) {
 		// Something changed after the empty-input check. Never press Enter and
 		// keep the guard active: the pasted remote text may still be submitted
 		// manually, and it must not run with the window's unrestricted policy.
-		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, waited)
+		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, aborted, waited)
 		return true
 	}
 	// The owner may exit Claude between the initial pane check and Enter. A
 	// shell can display the same prompt marker, so revalidate both process and
 	// pane identity immediately before sending the key.
-	current, err := resolveZellijPaneWith(ctx, z, binding, session, rt.processZellijPane)
+	current, err := resolveZellijPaneWith(ctx, z, binding, session, processPane)
 	if err != nil || current != pane {
-		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, waited)
+		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, aborted, waited)
 		return true
 	}
 	if err := z.Enter(ctx, pane.Session, pane.Pane); err != nil {
 		// send-keys may have reached zellij even when its client reports an
 		// error. Retrying could run the same hop twice, so enter the same guarded
 		// uncertain state and never paste this request again.
-		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, waited)
+		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, aborted, waited)
 		return true
 	}
-	rt.finishTypedInject(ctx, client, deps, req, shown, result, waited)
+	rt.finishTypedInject(ctx, client, deps, req, shown, result, aborted, waited)
 	return true
 }
 
@@ -143,7 +156,7 @@ func waitForPastedClaudeInput(ctx context.Context, z zellijDriver, pane resolved
 	}
 }
 
-func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, deps Deps, req clicore.AgentRequest, shown string, result <-chan string, waited time.Duration) {
+func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, deps Deps, req clicore.AgentRequest, shown string, result <-chan string, aborted <-chan struct{}, waited time.Duration) {
 	rt.holding.Add(1)
 	go func() {
 		defer rt.holding.Add(-1)
@@ -159,6 +172,11 @@ func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, de
 		var out string
 		select {
 		case out = <-result:
+		case <-aborted:
+			hop.Status = "failed"
+			_ = AppendHop(hop)
+			_ = client.AgentReportResult(ctx, req.ID, "failed", "The typed turn was interrupted by a later owner turn.")
+			return
 		case <-time.After(time.Until(deadline)):
 			rt.hub().withdraw(req.TargetSessionID, req.ID)
 			hop.Status = "failed"
@@ -177,6 +195,7 @@ func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, de
 			out = out[:maxReportedResult]
 		}
 		_ = client.AgentReportResult(ctx, req.ID, "done", out)
+		_ = EndTypedGuard(req.TargetSessionID, req.ID)
 	}()
 }
 
@@ -184,7 +203,7 @@ func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, de
 // could not be proved. It never presses Enter and never pastes again. The hook
 // remains active until the owner clears the input, submits it, or the request
 // expires.
-func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, pane resolvedZellijPane, result <-chan string, waited time.Duration) {
+func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, pane resolvedZellijPane, result <-chan string, aborted <-chan struct{}, waited time.Duration) {
 	rt.holding.Add(1)
 	_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: text reached the Claude input, but Share2Us did not press Enter because the input changed. Review or clear it in that window.")
 	go func() {
@@ -194,6 +213,11 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 		deadline := requestDeadline(req)
 		for {
 			select {
+			case <-aborted:
+				_ = AppendHop(HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
+					Target: req.TargetSessionID, Mode: "typed", Status: "failed", Prompt: shown})
+				_ = client.AgentReportResult(ctx, req.ID, "failed", "The typed turn was interrupted by a later owner turn.")
+				return
 			case out := <-result:
 				// The owner submitted it and the guarded turn ended.
 				hop := HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
@@ -206,6 +230,7 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 					out = "The guarded agent turn finished in the session."
 				}
 				_ = client.AgentReportResult(ctx, req.ID, "done", out)
+				_ = EndTypedGuard(req.TargetSessionID, req.ID)
 				return
 			case <-ticker.C:
 				screen, err := rt.paneDriver().Dump(ctx, pane.Session, pane.Pane)
@@ -215,6 +240,7 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 						// The owner cleared the unsubmitted text. Release the guard
 						// and return to the ordinary wait/retry path.
 						rt.hub().withdraw(req.TargetSessionID, req.ID)
+						_ = EndTypedGuard(req.TargetSessionID, req.ID)
 						rt.holdInject(ctx, client, runner, deps, req, shown, prompt, senderName, cwd)
 						return
 					}

@@ -42,20 +42,23 @@ func (a app) agentChannel(ctx context.Context) int {
 
 // hookInput is the part of a Claude hook's stdin the guardrail uses.
 type hookInput struct {
-	SessionID string         `json:"session_id"`
-	CWD       string         `json:"cwd"`
-	ToolName  string         `json:"tool_name"`
-	ToolInput map[string]any `json:"tool_input"`
+	SessionID      string         `json:"session_id"`
+	PromptID       string         `json:"prompt_id"`
+	Prompt         string         `json:"prompt"`
+	TranscriptPath string         `json:"transcript_path"`
+	CWD            string         `json:"cwd"`
+	ToolName       string         `json:"tool_name"`
+	ToolUseID      string         `json:"tool_use_id"`
+	ToolInput      map[string]any `json:"tool_input"`
 }
 
 // agentHook is `s2u agent hook <event>`, run by Claude in an `s2u claude`
-// session. session-start proves the guard settings loaded; pre-tool-use applies
-// a delivered hop's guardrails while one is in progress; stop tells the daemon
-// the agent's turn ended. It
-// never fails a turn the user started: anything unexpected allows the call.
+// session. SessionStart proves the guard settings loaded; PreToolUse applies a
+// delivered hop's guardrails; Stop verifies the request before ending the hop.
+// A daemon failure during a typed hop fails closed using its on-disk marker.
 func (a app) agentHook(args []string) int {
 	if len(args) != 1 {
-		fmt.Fprintf(a.stderr, "usage: %s agent hook <session-start|pre-tool-use|stop>\n", commandName)
+		fmt.Fprintf(a.stderr, "usage: %s agent hook <session-start|user-prompt-submit|pre-tool-use|stop|session-end>\n", commandName)
 		return 2
 	}
 	var in hookInput
@@ -64,28 +67,103 @@ func (a app) agentHook(args []string) int {
 	}
 	switch args[0] {
 	case "session-start":
+		a.proveTerminalHook(in.SessionID)
 		daemonctl.Call(daemonctl.Request{Op: "channel-guard-ready", Args: map[string]string{"session": in.SessionID}})
+	case "user-prompt-submit":
+		if in.PromptID != "" {
+			a.proveTerminalPromptHook(in.SessionID)
+		}
+		_ = daemon.BindTypedPromptID(in.SessionID, in.Prompt, in.PromptID)
 	case "pre-tool-use":
+		activeRequest := daemon.TypedGuardRequest(in.SessionID)
+		if activeRequest != "" {
+			bound := daemon.TypedGuardPromptID(in.SessionID)
+			if bound != "" && in.PromptID == "" {
+				fmt.Fprintln(a.stdout, hookDeny("Share2Us: the guarded turn has no prompt identity; tool use is blocked."))
+				return 0
+			}
+			if bound != "" && in.PromptID != bound &&
+				daemon.TranscriptToolIsLaterOwnerTurn(in.TranscriptPath, activeRequest, in.ToolUseID) {
+				a.abandonTypedTurn(in.SessionID, activeRequest)
+				activeRequest = "" // a different turn; still check for an active channel hop
+			}
+		}
 		resp, ok := daemonctl.Call(daemonctl.Request{Op: "channel-guarded", Args: map[string]string{"session": in.SessionID}})
 		if !ok || !resp.OK {
-			return 0 // no delivered hop in progress: the user's own turn
+			if activeRequest != "" {
+				fmt.Fprintln(a.stdout, hookDeny("Share2Us: the guarded delivered turn cannot verify its policy; tool use is blocked until the turn ends."))
+			}
+			return 0
 		}
 		var g struct {
 			Strict bool `json:"strict"`
 		}
 		_ = json.Unmarshal(resp.Data, &g)
 		if deny, reason := daemon.HookDecision(in.CWD, in.ToolName, in.ToolInput, g.Strict); deny {
-			out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{
-				"hookEventName":            "PreToolUse",
-				"permissionDecision":       "deny",
-				"permissionDecisionReason": reason,
-			}})
-			fmt.Fprintln(a.stdout, string(out))
+			fmt.Fprintln(a.stdout, hookDeny(reason))
 		}
 	case "stop":
-		daemonctl.Call(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": in.SessionID}})
+		a.proveTerminalHook(in.SessionID)
+		request := daemon.TypedGuardRequest(in.SessionID)
+		if request != "" {
+			if bound := daemon.TypedGuardPromptID(in.SessionID); bound != "" {
+				if in.PromptID != bound {
+					if in.PromptID != "" {
+						a.abandonTypedTurn(in.SessionID, request)
+					}
+					request = ""
+				}
+			} else {
+				matches, known := daemon.TranscriptRequestState(in.TranscriptPath, request)
+				if known && !matches {
+					a.abandonTypedTurn(in.SessionID, request)
+				}
+				if !matches {
+					request = ""
+				}
+			}
+		}
+		daemonctl.Call(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": in.SessionID, "request_id": request}})
+		if request != "" {
+			_ = daemon.EndTypedGuard(in.SessionID, request)
+		}
+	case "session-end":
+		daemon.EndTerminalSession(in.SessionID)
 	}
 	return 0
+}
+
+// A distinct Claude prompt_id means the typed turn is no longer the turn
+// executing tools. Only an acknowledged daemon cancellation clears the marker;
+// without the daemon, the later turn bypasses that stale marker by prompt id.
+func (a app) abandonTypedTurn(session, request string) {
+	resp, ok := daemonctl.Call(daemonctl.Request{Op: "channel-abandon-typed", Args: map[string]string{
+		"session": session, "request_id": request,
+	}})
+	if ok && resp.OK {
+		_ = daemon.EndTypedGuard(session, request)
+	}
+}
+
+func (a app) proveTerminalHook(sessionID string) {
+	s, err := daemon.FindOwnSession(context.Background())
+	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
+		_ = daemon.ProveTerminalHook(sessionID, s.PID, daemon.CurrentZellijPane())
+	}
+}
+
+func (a app) proveTerminalPromptHook(sessionID string) {
+	s, err := daemon.FindOwnSession(context.Background())
+	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
+		_ = daemon.ProveTerminalPromptHook(sessionID, s.PID, daemon.CurrentZellijPane())
+	}
+}
+
+func hookDeny(reason string) string {
+	out, _ := json.Marshal(map[string]any{"hookSpecificOutput": map[string]any{
+		"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason,
+	}})
+	return string(out)
 }
 
 // claude is `s2u claude [claude args...]`: start Claude Code with the share2us
@@ -118,14 +196,27 @@ func (a app) claude(ctx context.Context, args []string) int {
 	return 0
 }
 
-// channelHint is what `agent join` prints for a Claude session that has no
-// share2us channel: prompts then wait until the window closes.
+// channelHint reports the available delivery path. A verified Zellij pane can
+// receive guarded prompts even when this organisation disables Claude channels.
 func (a app) channelHint(sess daemon.DiscoveredSession) {
 	if sess.Tool != "claude" {
 		return
 	}
-	if resp, ok := daemonctl.Call(daemonctl.Request{Op: "channel-alive", Args: map[string]string{"session": sess.SessionID}}); ok && resp.OK {
-		fmt.Fprintln(a.stdout, "Prompts sent to this agent appear in this window.")
+	if resp, ok := daemonctl.Call(daemonctl.Request{Op: "channel-ready", Args: map[string]string{"session": sess.SessionID}}); ok && resp.OK {
+		fmt.Fprintln(a.stdout, "Prompts sent to this agent can appear in this window through the Share2Us channel.")
+		return
+	}
+	if bindings, err := daemon.LoadBindings(); err == nil {
+		if binding, ok := daemon.BindingForSession(bindings, sess.SessionID); ok &&
+			daemon.TerminalTypedReady(sess.SessionID, sess.PID) {
+			if pane, ok := daemon.FindZellijLocation(context.Background(), binding, sess); ok {
+				fmt.Fprintf(a.stdout, "Prompts sent to this agent appear in this window through guarded Zellij delivery (tab %q, pane terminal_%s).\n", pane.TabName, pane.Pane)
+				return
+			}
+		}
+	}
+	if sess.PID <= 1 {
+		fmt.Fprintln(a.stdout, "Prompts wait until this session is live and its hooks are verified.")
 		return
 	}
 	fmt.Fprintln(a.stdout, "Prompts sent to this agent wait while this window is open, and run in this session once you exit Claude.")
