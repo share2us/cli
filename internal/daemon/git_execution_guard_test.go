@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,14 +24,35 @@ func gitForGuardTest(t *testing.T, dir string, args ...string) {
 	}
 }
 
-func installFSMonitorMarker(t *testing.T, project string) string {
+func installFSMonitorMarker(t *testing.T, project string) (marker, command string) {
 	t.Helper()
-	marker := filepath.Join(project, "fsmonitor-ran")
-	script := fmt.Sprintf("#!/bin/sh\n: > %q\nexit 0\n", filepath.ToSlash(marker))
-	if err := os.WriteFile(filepath.Join(project, "hook.sh"), []byte(script), 0o700); err != nil {
+	marker = filepath.Join(project, "fsmonitor-ran")
+	t.Setenv("S2U_TEST_FSMONITOR_MARKER", marker)
+	source, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
-	return marker
+	name := "hook"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	from, err := os.Open(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer from.Close()
+	to, err := os.OpenFile(filepath.Join(project, name), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o700)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(to, from); err != nil {
+		to.Close()
+		t.Fatal(err)
+	}
+	if err := to.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return marker, "./" + name
 }
 
 // The second half deliberately runs real Git without the guard. It proves the
@@ -38,9 +60,6 @@ func installFSMonitorMarker(t *testing.T, project string) string {
 // while Git still writes the marker for include.path, includeIf and a direct
 // relative core.fsmonitor path.
 func TestDeliveredGitReadCanExecuteConfiguredPrograms(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("marker hook requires a POSIX shell")
-	}
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	for _, mode := range []string{"include.path", "includeIf", "relative-fsmonitor"} {
@@ -52,7 +71,7 @@ func TestDeliveredGitReadCanExecuteConfiguredPrograms(t *testing.T) {
 			}
 			gitForGuardTest(t, project, "add", "sample.txt")
 			gitForGuardTest(t, project, "-c", "user.name=S12 Test", "-c", "user.email=s12@example.invalid", "commit", "-qm", "seed")
-			marker := installFSMonitorMarker(t, project)
+			marker, hook := installFSMonitorMarker(t, project)
 			config := filepath.Join(project, ".git", "config")
 			var addition string
 			switch mode {
@@ -61,7 +80,7 @@ func TestDeliveredGitReadCanExecuteConfiguredPrograms(t *testing.T) {
 			case "includeIf":
 				addition = fmt.Sprintf("\n[includeIf %q]\n path = ../gitconfig.local\n", "gitdir:"+filepath.ToSlash(filepath.Join(project, ".git")))
 			case "relative-fsmonitor":
-				addition = "\n[core]\n fsmonitor = ./hook.sh\n"
+				addition = "\n[core]\n fsmonitor = " + hook + "\n"
 			}
 			f, err := os.OpenFile(config, os.O_APPEND|os.O_WRONLY, 0)
 			if err != nil {
@@ -74,7 +93,7 @@ func TestDeliveredGitReadCanExecuteConfiguredPrograms(t *testing.T) {
 				t.Fatal(err)
 			}
 			if mode != "relative-fsmonitor" {
-				if err := os.WriteFile(filepath.Join(project, "gitconfig.local"), []byte("[core]\n fsmonitor = ./hook.sh\n"), 0o600); err != nil {
+				if err := os.WriteFile(filepath.Join(project, "gitconfig.local"), []byte("[core]\n fsmonitor = "+hook+"\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -108,15 +127,12 @@ func TestDeliveredGitReadCanExecuteConfiguredPrograms(t *testing.T) {
 }
 
 func TestHeadlessGuardResolvesSeparateGitdirAndAlias(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("marker hook requires a POSIX shell")
-	}
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	project := t.TempDir()
 	gitForGuardTest(t, project, "init", "-q", "--separate-git-dir="+filepath.Join(project, "meta"))
-	marker := installFSMonitorMarker(t, project)
-	gitForGuardTest(t, project, "config", "--local", "core.fsmonitor", "./hook.sh")
+	marker, hook := installFSMonitorMarker(t, project)
+	gitForGuardTest(t, project, "config", "--local", "core.fsmonitor", hook)
 	for _, path := range []string{"meta/config", ".git"} {
 		if deny, reason := HeadlessGitDecision(project, "Edit", map[string]any{"file_path": path}); !deny {
 			t.Fatalf("headless edit of %q allowed: %s", path, reason)
