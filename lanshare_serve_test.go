@@ -62,6 +62,12 @@ func TestGuardServePath(t *testing.T) {
 		filepath.Join(home, "s2u-share"),
 	}
 	for _, p := range allowed {
+		// The macOS runner's isolated test HOME is under /var/folders.
+		// /var is itself a denied system root, so these are not safe paths
+		// despite being ordinary home subfolders on a normal installation.
+		if runtime.GOOS == "darwin" && pathAtOrUnder(resolveServePath(p), resolveServePath("/var")) {
+			continue
+		}
 		if err := guardServePath(p); err != nil {
 			t.Errorf("guardServePath(%q) = %v, want nil", p, err)
 		}
