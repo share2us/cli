@@ -1701,6 +1701,7 @@ func TestGetBarePublicIDUsesConfiguredGateway(t *testing.T) {
 }
 
 func TestListJSONIncludesOriginAndAvailability(t *testing.T) {
+	withCredential(t, "https://api.example.test")
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	cacheFile := writeTempFile(t, "cached.txt", "hello")
 	digest := sha256.Sum256([]byte("hello"))
@@ -1710,7 +1711,6 @@ func TestListJSONIncludesOriginAndAvailability(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("SaveCacheManifest() error = %v", err)
 	}
-	withCredential(t, "https://api.example.test")
 	sourcePath := filepath.Join(t.TempDir(), "projects", "share2us", "cached.txt")
 	if err := clicore.SaveSourceRegistry(clicore.SourceRegistry{
 		sourcePath: {PublicID: "pub-local", Link: "https://s.share2.us/pub-local"},

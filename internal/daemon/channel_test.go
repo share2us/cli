@@ -206,6 +206,7 @@ func TestChannelServerSpeaksTheChannelContract(t *testing.T) {
 func TestHookDecisionEnforcesTheRules(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	dir := t.TempDir()
+	outside := t.TempDir()
 	bash := func(cmd string) map[string]any { return map[string]any{"command": cmd} }
 	for _, c := range []struct {
 		tool  string
@@ -220,7 +221,7 @@ func TestHookDecisionEnforcesTheRules(t *testing.T) {
 		{"WebFetch", map[string]any{"url": "https://example.com"}, true},
 		{"mcp__share2us__report", map[string]any{"request_id": "r", "result": "x"}, false},
 		{"Grep", map[string]any{"pattern": "x"}, false},
-		{"Edit", map[string]any{"file_path": "/etc/hosts"}, true},
+		{"Edit", map[string]any{"file_path": filepath.Join(outside, "hosts")}, true},
 		{"Edit", map[string]any{"file_path": filepath.Join(dir, ".s2u.rules")}, true},
 		{"Write", map[string]any{"file_path": filepath.Join(dir, ".claude", "settings.json")}, true},
 		{"Edit", map[string]any{"file_path": filepath.Join(dir, "main.go")}, false},

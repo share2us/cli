@@ -40,9 +40,10 @@ func TestTerminalHookProofIsProcessBoundAndChannelIndependent(t *testing.T) {
 	}
 	path, _ := terminalGuardPath("s1", "proof")
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("hook proof permissions = %v, %v", info, err)
+	if err != nil {
+		t.Fatalf("hook proof missing: %v", err)
 	}
+	wantPrivate(t, info.Mode(), "hook proof")
 }
 
 func TestTypedGuardMarkerAndTranscriptMatch(t *testing.T) {
