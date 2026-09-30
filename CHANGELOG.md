@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- `s2u claude` can deliver guarded prompts into its verified Zellij pane when
+  an organisation blocks Claude development channels. It no longer requires
+  an MCP channel poll for terminal delivery; a channel remains preferred when
+  it is proven available. An active typed turn fails closed if the daemon stops.
+
 ## [20260929205703] - 2026-09-29
 
 ### Fixed
