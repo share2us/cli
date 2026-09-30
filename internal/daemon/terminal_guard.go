@@ -152,16 +152,15 @@ func EndTypedGuard(session, request string) error {
 	return err
 }
 
-// TranscriptHasLastUserRequest verifies that Stop belongs to this typed hop,
-// not to a later owner turn. Claude records human prompts as user entries with
-// string content; tool-result entries use structured content and are skipped.
-func TranscriptHasLastUserRequest(path, request string) bool {
+// TranscriptRequestState distinguishes the delivered turn from a later owner
+// turn. An unreadable transcript is unknown and must never release the guard.
+func TranscriptRequestState(path, request string) (matches, known bool) {
 	if path == "" || request == "" {
-		return false
+		return false, false
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		return false, false
 	}
 	defer f.Close()
 	scanner := bufio.NewScanner(f)
@@ -180,8 +179,35 @@ func TranscriptHasLastUserRequest(path, request string) bool {
 		}
 		var content string
 		if json.Unmarshal(entry.Message.Content, &content) == nil {
-			last = content
+			last, known = content, true
+			continue
+		}
+		var blocks []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+			parts := make([]string, 0, len(blocks))
+			human := false
+			for _, block := range blocks {
+				if block.Type == "tool_result" {
+					continue
+				}
+				human = true
+				parts = append(parts, block.Text)
+			}
+			if human {
+				last, known = strings.Join(parts, "\n"), true
+			}
 		}
 	}
-	return scanner.Err() == nil && strings.Contains(last, "[Share2Us] from device ") && strings.Contains(last, ", request "+request+":")
+	if scanner.Err() != nil || !known {
+		return false, false
+	}
+	return strings.Contains(last, "[Share2Us] from device ") && strings.Contains(last, ", request "+request+":"), true
+}
+
+func TranscriptHasLastUserRequest(path, request string) bool {
+	matches, _ := TranscriptRequestState(path, request)
+	return matches
 }

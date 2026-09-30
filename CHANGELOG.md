@@ -18,6 +18,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   an organisation blocks Claude development channels. It no longer requires
   an MCP channel poll for terminal delivery; a channel remains preferred when
   it is proven available. An active typed turn fails closed if the daemon stops.
+  If that turn is interrupted, a later owner turn no longer stays locked by
+  the old guard marker.
 
 ## [20260929205703] - 2026-09-29
 

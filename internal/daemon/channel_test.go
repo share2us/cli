@@ -94,14 +94,14 @@ func TestChannelHubWithdraw(t *testing.T) {
 
 func TestChannelHubTypedHopIsGuardedAndExclusive(t *testing.T) {
 	h := newChannelHub()
-	result, ok := h.beginTyped("s1", ChannelDelivery{RequestID: "typed-1", Strict: true})
+	result, _, ok := h.beginTyped("s1", ChannelDelivery{RequestID: "typed-1", Strict: true})
 	if !ok {
 		t.Fatal("first typed hop was refused")
 	}
 	if active, strict := h.guarded("s1"); !active || !strict {
 		t.Fatalf("typed guard = %v/%v", active, strict)
 	}
-	if _, ok := h.beginTyped("s1", ChannelDelivery{RequestID: "typed-2"}); ok {
+	if _, _, ok := h.beginTyped("s1", ChannelDelivery{RequestID: "typed-2"}); ok {
 		t.Fatal("a second typed hop entered the same session")
 	}
 	if _, _, ok := h.deliver("s1", ChannelDelivery{RequestID: "channel-2"}); ok {
@@ -461,7 +461,7 @@ func TestOwnerTurnCannotCompleteUnreportedChannelHop(t *testing.T) {
 
 func proveReportTool(t *testing.T, h *channelHub, session string) {
 	t.Helper()
-	if _, ok := h.beginTyped(session, ChannelDelivery{RequestID: "proof"}); !ok {
+	if _, _, ok := h.beginTyped(session, ChannelDelivery{RequestID: "proof"}); !ok {
 		t.Fatal("proof setup")
 	}
 	if !h.report("proof", "confirmed") {
@@ -511,7 +511,7 @@ func TestChannelReadinessRequiresReportAndResetsOnStart(t *testing.T) {
 	if h.report("unknown", "forged") || h.channelReady("s1") {
 		t.Fatal("unknown report proved readiness")
 	}
-	_, _ = h.beginTyped("s1", ChannelDelivery{RequestID: "typed"})
+	_, _, _ = h.beginTyped("s1", ChannelDelivery{RequestID: "typed"})
 	if h.report("typed", "  ") {
 		t.Fatal("blank report proved readiness")
 	}
