@@ -14,7 +14,7 @@ func TestReleaseRequiresExplicitDispatchAndTagsItsBuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := string(raw)
+	s := strings.ReplaceAll(string(raw), "\r\n", "\n")
 	start := strings.Index(s, "\non:\n")
 	end := strings.Index(s, "\npermissions:")
 	if start < 0 || end <= start {

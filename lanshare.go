@@ -1052,6 +1052,9 @@ func guardServePath(abs string) error {
 	home := ""
 	if h, err := os.UserHomeDir(); err == nil && h != "" {
 		home = filepath.Clean(h)
+		if resolved, err := filepath.EvalSymlinks(h); err == nil {
+			home = filepath.Clean(resolved)
+		}
 	}
 
 	// Serving home (or a directory that contains home, like / or /home) would
@@ -1061,6 +1064,9 @@ func guardServePath(abs string) error {
 	}
 
 	for _, s := range sensitiveServeRoots(home) {
+		if resolved, err := filepath.EvalSymlinks(s); err == nil {
+			s = filepath.Clean(resolved)
+		}
 		if pathAtOrUnder(real, s) {
 			return fmt.Errorf("refusing to serve %s: it is inside a sensitive location (%s); s2u will not expose credentials over the network", real, s)
 		}

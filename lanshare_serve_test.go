@@ -68,6 +68,21 @@ func TestGuardServePath(t *testing.T) {
 	}
 }
 
+func TestGuardServePathResolvesSensitiveRootSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires elevated Windows privileges")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	secret := t.TempDir()
+	if err := os.Symlink(secret, filepath.Join(home, ".ssh")); err != nil {
+		t.Fatal(err)
+	}
+	if err := guardServePath(secret); err == nil {
+		t.Fatal("sensitive root symlink target could be served")
+	}
+}
+
 // --keep turns one-shot receiving into a persistent listener. The primitive
 // already existed in cli-core (ReceiveOptions.Loop); this guards the CLI wiring
 // that was missing.
