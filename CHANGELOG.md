@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260930200947] - 2026-09-30
+
 ### Fixed
 
 - Guarded agent hops no longer treat `git status` or `git blame` as safe
