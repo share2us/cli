@@ -16,11 +16,15 @@ func TestTerminalHookProofIsProcessBoundAndChannelIndependent(t *testing.T) {
 	if TerminalHookReady("s1", 123) {
 		t.Fatal("unproved session was ready")
 	}
-	if err := ProveTerminalHook("s1", 123); err != nil {
+	pane := &ZellijPane{Session: "test", Pane: "1"}
+	if err := ProveTerminalHook("s1", 123, pane); err != nil {
 		t.Fatal(err)
 	}
 	if !TerminalHookReady("s1", 123) || TerminalHookReady("s1", 456) || TerminalHookReady("s2", 123) {
 		t.Fatal("proof was not tied to session and process")
+	}
+	if got := TerminalHookPane("s1", 123); got == nil || *got != *pane || TerminalHookPane("s1", 456) != nil {
+		t.Fatalf("pane proof = %+v", got)
 	}
 	path, _ := terminalGuardPath("s1", "proof")
 	info, err := os.Stat(path)
@@ -61,7 +65,7 @@ func TestTypedGuardMarkerAndTranscriptMatch(t *testing.T) {
 	if err := BeginTypedGuard("s1", "req-2"); err != nil {
 		t.Fatal(err)
 	}
-	if err := ProveTerminalHook("s1", 123); err != nil {
+	if err := ProveTerminalHook("s1", 123, &ZellijPane{Session: "test", Pane: "1"}); err != nil {
 		t.Fatal(err)
 	}
 	EndTerminalSession("s1")

@@ -17,9 +17,10 @@ import (
 // The hook proves it loaded in a particular Claude process independently of
 // the optional MCP channel. Both records live outside the editable project.
 type terminalGuardRecord struct {
-	Session string `json:"session"`
-	PID     int    `json:"pid,omitempty"`
-	Request string `json:"request,omitempty"`
+	Session string      `json:"session"`
+	PID     int         `json:"pid,omitempty"`
+	Zellij  *ZellijPane `json:"zellij,omitempty"`
+	Request string      `json:"request,omitempty"`
 }
 
 func terminalGuardPath(session, kind string) (string, error) {
@@ -83,17 +84,28 @@ func readTerminalGuard(session, kind string) (terminalGuardRecord, bool) {
 
 // ProveTerminalHook is called from inside Claude's SessionStart or Stop hook.
 // The PID comes from process ancestry, not from hook JSON supplied by Claude.
-func ProveTerminalHook(session string, pid int) error {
+func ProveTerminalHook(session string, pid int, pane *ZellijPane) error {
 	if pid <= 1 {
 		return os.ErrInvalid
 	}
-	return writeTerminalGuard(session, "proof", terminalGuardRecord{Session: session, PID: pid})
+	return writeTerminalGuard(session, "proof", terminalGuardRecord{Session: session, PID: pid, Zellij: pane})
 }
 
 // TerminalHookReady is deliberately independent of MCP channel polling.
 func TerminalHookReady(session string, pid int) bool {
 	record, ok := readTerminalGuard(session, "proof")
 	return ok && pid > 1 && record.PID == pid
+}
+
+// TerminalHookPane is the two inherited Zellij identifiers attested by the
+// hook. The service may be unable to read /proc/PID/environ under systemd's
+// ProtectSystem=full; this stays tied to the same Claude session and PID.
+func TerminalHookPane(session string, pid int) *ZellijPane {
+	record, ok := readTerminalGuard(session, "proof")
+	if !ok || pid <= 1 || record.PID != pid {
+		return nil
+	}
+	return record.Zellij
 }
 
 // EndTerminalSession clears stale proof and active markers only after Claude

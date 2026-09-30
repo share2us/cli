@@ -39,7 +39,13 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		return false
 	}
 	z := rt.paneDriver()
-	pane, err := resolveZellijPaneWith(ctx, z, binding, session, rt.processZellijPane)
+	processPane := func(pid int) *ZellijPane {
+		if current := rt.processZellijPane(pid); current != nil {
+			return current
+		}
+		return TerminalHookPane(req.TargetSessionID, pid)
+	}
+	pane, err := resolveZellijPaneWith(ctx, z, binding, session, processPane)
 	if err != nil {
 		deps.logf("agent-bridge: zellij pane unavailable for %s: %v", req.ID, err)
 		return false
@@ -85,7 +91,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	// The owner may exit Claude between the initial pane check and Enter. A
 	// shell can display the same prompt marker, so revalidate both process and
 	// pane identity immediately before sending the key.
-	current, err := resolveZellijPaneWith(ctx, z, binding, session, rt.processZellijPane)
+	current, err := resolveZellijPaneWith(ctx, z, binding, session, processPane)
 	if err != nil || current != pane {
 		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, waited)
 		return true

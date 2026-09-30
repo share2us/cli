@@ -31,7 +31,7 @@ func typedRuntime(t *testing.T, screens ...string) (*Runtime, *fakeZellij, strin
 	runtime := rt()
 	runtime.zellij = z
 	runtime.processPane = func(int) *ZellijPane { return &ZellijPane{Session: "stale-name", Pane: "4"} }
-	if err := ProveTerminalHook("win-1", 123); err != nil {
+	if err := ProveTerminalHook("win-1", 123, pane); err != nil {
 		t.Fatal(err)
 	}
 	return runtime, z, dir
@@ -123,6 +123,35 @@ func TestPlainClaudeIsNeverTypedInto(t *testing.T) {
 	cancel()
 	if len(z.pasted) != 0 || z.entered != 0 {
 		t.Fatalf("plain Claude received paste=%q enter=%d", z.pasted, z.entered)
+	}
+}
+
+func TestZellijFallbackUsesHookPaneWhenServiceCannotReadProcessEnvironment(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, z, dir := typedRuntime(t, "│ ❯  │", "│ ❯ [Pasted text +3 lines] │")
+	runtime.processPane = func(int) *ZellijPane { return nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-hook-pane", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
+	if len(z.pasted) != 1 || z.entered != 1 {
+		t.Fatalf("hook-proven pane: paste=%q enter=%d", z.pasted, z.entered)
+	}
+}
+
+func TestZellijFallbackRejectsWrongHookPaneWhenServiceCannotReadProcessEnvironment(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, z, dir := typedRuntime(t, "│ ❯  │")
+	runtime.processPane = func(int) *ZellijPane { return nil }
+	if err := ProveTerminalHook("win-1", 123, &ZellijPane{Session: "stale-name", Pane: "9"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-wrong-hook-pane", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
+	if len(z.pasted) != 0 || z.entered != 0 {
+		t.Fatalf("wrong hook pane received paste=%q enter=%d", z.pasted, z.entered)
 	}
 }
 
