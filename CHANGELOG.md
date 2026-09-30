@@ -14,6 +14,9 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ### Fixed
 
+- Guarded live agent deliveries now refuse Claude subagents. A background
+  subagent could otherwise keep running after the parent turn ended and use
+  tools outside the delivered-hop guard.
 - Guarded agent hops no longer treat `git status` or `git blame` as safe
   unattended reads: Git configuration can make either run a program. Headless
   Claude hops also resolve edit targets before allowing them, so a separate Git

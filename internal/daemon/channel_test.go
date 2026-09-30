@@ -242,6 +242,21 @@ func TestHookDecisionEnforcesTheRules(t *testing.T) {
 	}
 }
 
+// A live S8 probe showed that a background Agent kept running after the
+// parent's delivered turn ended and read /etc/hostname in auto mode. Until
+// subagent tool calls inherit the guard, spawning one must be refused.
+func TestHookDecisionDeniesSubagentsDuringDeliveredHop(t *testing.T) {
+	project := t.TempDir()
+	for _, tool := range []string{"Agent", "Task"} {
+		for _, strict := range []bool{false, true} {
+			input := map[string]any{"prompt": "Read /etc/hostname"}
+			if deny, reason := HookDecision(project, tool, input, strict); !deny || !strings.Contains(reason, "subagent") {
+				t.Errorf("%s strict=%v: deny=%v reason=%q, want subagent refusal", tool, strict, deny, reason)
+			}
+		}
+	}
+}
+
 // End to end in the daemon: a live session with a listening channel gets the
 // hop delivered INTO it (no wait, no headless run), and the report is the result.
 func TestLiveSessionWithAChannelGetsTheHopDelivered(t *testing.T) {
