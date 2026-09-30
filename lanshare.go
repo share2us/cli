@@ -1044,17 +1044,11 @@ func (a app) lanServe(ctx context.Context, args []string) int {
 // a link into a sensitive location cannot slip past. It intentionally allows a
 // normal subfolder of home (e.g. ~/Downloads, ~/projects/site).
 func guardServePath(abs string) error {
-	real := filepath.Clean(abs)
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		real = filepath.Clean(resolved)
-	}
+	real := resolveServePath(abs)
 
 	home := ""
 	if h, err := os.UserHomeDir(); err == nil && h != "" {
-		home = filepath.Clean(h)
-		if resolved, err := filepath.EvalSymlinks(h); err == nil {
-			home = filepath.Clean(resolved)
-		}
+		home = resolveServePath(h)
 	}
 
 	// Serving home (or a directory that contains home, like / or /home) would
@@ -1064,14 +1058,35 @@ func guardServePath(abs string) error {
 	}
 
 	for _, s := range sensitiveServeRoots(home) {
-		if resolved, err := filepath.EvalSymlinks(s); err == nil {
-			s = filepath.Clean(resolved)
-		}
+		s = resolveServePath(s)
 		if pathAtOrUnder(real, s) {
 			return fmt.Errorf("refusing to serve %s: it is inside a sensitive location (%s); s2u will not expose credentials over the network", real, s)
 		}
 	}
 	return nil
+}
+
+// resolveServePath canonicalizes the existing prefix even when the selected
+// file or directory does not exist yet. macOS temp paths, for example, spell
+// /private/var as /var; comparing an unresolved new path to a resolved home
+// would otherwise miss home-relative credential stores.
+func resolveServePath(p string) string {
+	p = filepath.Clean(p)
+	var missing []string
+	for {
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved)
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return filepath.Clean(p)
+		}
+		missing = append(missing, filepath.Base(p))
+		p = parent
+	}
 }
 
 // sensitiveServeRoots lists credential stores and system directories that must
