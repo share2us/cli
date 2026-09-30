@@ -34,6 +34,9 @@ func typedRuntime(t *testing.T, screens ...string) (*Runtime, *fakeZellij, strin
 	if err := ProveTerminalHook("win-1", 123, pane); err != nil {
 		t.Fatal(err)
 	}
+	if err := ProveTerminalPromptHook("win-1", 123, pane); err != nil {
+		t.Fatal(err)
+	}
 	return runtime, z, dir
 }
 
@@ -147,6 +150,22 @@ func TestPlainClaudeIsNeverTypedInto(t *testing.T) {
 	cancel()
 	if len(z.pasted) != 0 || z.entered != 0 {
 		t.Fatalf("plain Claude received paste=%q enter=%d", z.pasted, z.entered)
+	}
+}
+
+func TestOldWrapperWithoutPromptSubmitHookTypesNothing(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, z, dir := typedRuntime(t, "│ ❯  │")
+	EndTerminalSession("win-1")
+	if err := ProveTerminalHook("win-1", 123, &ZellijPane{Session: "stale-name", Pane: "4"}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-old-wrapper", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
+	if len(z.pasted) != 0 || z.entered != 0 {
+		t.Fatalf("old wrapper received paste=%q enter=%d", z.pasted, z.entered)
 	}
 }
 

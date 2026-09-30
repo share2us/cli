@@ -229,6 +229,8 @@ func WriteChannelLaunchConfig(exe string) (mcpPath, settingsPath string, err err
 	settings := map[string]any{"hooks": map[string]any{
 		"SessionStart": []any{map[string]any{"hooks": []any{
 			map[string]any{"type": "command", "command": quoted + " agent hook session-start"}}}},
+		"UserPromptSubmit": []any{map[string]any{"hooks": []any{
+			map[string]any{"type": "command", "command": quoted + " agent hook user-prompt-submit"}}}},
 		"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{
 			map[string]any{"type": "command", "command": quoted + " agent hook pre-tool-use"}}}},
 		"Stop": []any{map[string]any{"hooks": []any{

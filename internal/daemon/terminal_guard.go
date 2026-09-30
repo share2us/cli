@@ -17,10 +17,12 @@ import (
 // The hook proves it loaded in a particular Claude process independently of
 // the optional MCP channel. Both records live outside the editable project.
 type terminalGuardRecord struct {
-	Session string      `json:"session"`
-	PID     int         `json:"pid,omitempty"`
-	Zellij  *ZellijPane `json:"zellij,omitempty"`
-	Request string      `json:"request,omitempty"`
+	Session    string      `json:"session"`
+	PID        int         `json:"pid,omitempty"`
+	Zellij     *ZellijPane `json:"zellij,omitempty"`
+	Request    string      `json:"request,omitempty"`
+	PromptID   string      `json:"prompt_id,omitempty"`
+	PromptHook bool        `json:"prompt_hook,omitempty"`
 }
 
 func terminalGuardPath(session, kind string) (string, error) {
@@ -88,13 +90,30 @@ func ProveTerminalHook(session string, pid int, pane *ZellijPane) error {
 	if pid <= 1 {
 		return os.ErrInvalid
 	}
-	return writeTerminalGuard(session, "proof", terminalGuardRecord{Session: session, PID: pid, Zellij: pane})
+	prior, ok := readTerminalGuard(session, "proof")
+	return writeTerminalGuard(session, "proof", terminalGuardRecord{Session: session, PID: pid, Zellij: pane,
+		PromptHook: ok && prior.PID == pid && prior.PromptHook})
+}
+
+// ProveTerminalPromptHook records that this exact process loaded the newer
+// UserPromptSubmit hook needed to bind prompt ids. Old wrapper sessions must
+// restart before accepting another typed hop.
+func ProveTerminalPromptHook(session string, pid int, pane *ZellijPane) error {
+	if pid <= 1 {
+		return os.ErrInvalid
+	}
+	return writeTerminalGuard(session, "proof", terminalGuardRecord{Session: session, PID: pid, Zellij: pane, PromptHook: true})
 }
 
 // TerminalHookReady is deliberately independent of MCP channel polling.
 func TerminalHookReady(session string, pid int) bool {
 	record, ok := readTerminalGuard(session, "proof")
 	return ok && pid > 1 && record.PID == pid
+}
+
+func TerminalTypedReady(session string, pid int) bool {
+	record, ok := readTerminalGuard(session, "proof")
+	return ok && pid > 1 && record.PID == pid && record.PromptHook
 }
 
 // TerminalHookPane is the two inherited Zellij identifiers attested by the
@@ -135,6 +154,31 @@ func TypedGuardRequest(session string) string {
 	return record.Request
 }
 
+// BindTypedPromptID is called by UserPromptSubmit for the exact pasted
+// Share2Us prompt. Claude carries this prompt_id through its tool hooks even
+// when internal transcript entries are appended during the turn.
+func BindTypedPromptID(session, prompt, promptID string) bool {
+	if promptID == "" {
+		return false
+	}
+	record, ok := readTerminalGuard(session, "active")
+	if !ok || record.Request == "" || record.PromptID != "" ||
+		!strings.Contains(prompt, "[Share2Us] from device ") ||
+		!strings.Contains(prompt, ", request "+record.Request+":") {
+		return false
+	}
+	record.PromptID = promptID
+	return writeTerminalGuard(session, "active", record) == nil
+}
+
+func TypedGuardPromptID(session string) string {
+	record, ok := readTerminalGuard(session, "active")
+	if !ok {
+		return ""
+	}
+	return record.PromptID
+}
+
 // EndTypedGuard only removes the marker for the request that owned it.
 func EndTypedGuard(session, request string) error {
 	record, ok := readTerminalGuard(session, "active")
@@ -168,13 +212,15 @@ func TranscriptRequestState(path, request string) (matches, known bool) {
 	last := ""
 	for scanner.Scan() {
 		var entry struct {
-			Type    string `json:"type"`
-			Message struct {
+			Type             string `json:"type"`
+			IsMeta           bool   `json:"isMeta"`
+			IsCompactSummary bool   `json:"isCompactSummary"`
+			Message          struct {
 				Role    string          `json:"role"`
 				Content json.RawMessage `json:"content"`
 			} `json:"message"`
 		}
-		if json.Unmarshal(scanner.Bytes(), &entry) != nil || entry.Type != "user" || entry.Message.Role != "user" {
+		if json.Unmarshal(scanner.Bytes(), &entry) != nil || entry.Type != "user" || entry.Message.Role != "user" || entry.IsMeta || entry.IsCompactSummary {
 			continue
 		}
 		var content string
@@ -210,4 +256,102 @@ func TranscriptRequestState(path, request string) (matches, known bool) {
 func TranscriptHasLastUserRequest(path, request string) bool {
 	matches, _ := TranscriptRequestState(path, request)
 	return matches
+}
+
+// TranscriptToolIsLaterOwnerTurn is deliberately stricter than comparing the
+// newest user-role entry. Compaction, meta context, and a prompt queued while
+// Claude is busy can all appear after the delivered prompt. Only release when
+// the *current tool call* is a descendant of a different human prompt, not of
+// the delivered one. The transcript is asynchronous, so missing ids fail closed.
+func TranscriptToolIsLaterOwnerTurn(path, request, toolUseID string) bool {
+	if path == "" || request == "" || toolUseID == "" {
+		return false
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	type node struct {
+		parent string
+		human  bool
+		index  int
+	}
+	nodes := map[string]node{}
+	remote, toolNode, remoteIndex := "", "", 0
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 8<<20)
+	for index := 1; scanner.Scan(); index++ {
+		var entry struct {
+			Type             string `json:"type"`
+			UUID             string `json:"uuid"`
+			ParentUUID       string `json:"parentUuid"`
+			IsMeta           bool   `json:"isMeta"`
+			IsCompactSummary bool   `json:"isCompactSummary"`
+			Message          struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
+			return false
+		}
+		if entry.UUID == "" {
+			continue
+		}
+		n := node{parent: entry.ParentUUID, index: index}
+		if entry.Type == "user" && entry.Message.Role == "user" && !entry.IsMeta && !entry.IsCompactSummary {
+			var content string
+			if json.Unmarshal(entry.Message.Content, &content) == nil {
+				n.human = true
+				if strings.Contains(content, "[Share2Us] from device ") && strings.Contains(content, ", request "+request+":") {
+					remote = entry.UUID
+					remoteIndex = index
+				}
+			} else {
+				var blocks []struct {
+					Type string `json:"type"`
+				}
+				if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+					for _, block := range blocks {
+						if block.Type != "tool_result" {
+							n.human = true
+							break
+						}
+					}
+				}
+			}
+		}
+		if entry.Type == "assistant" {
+			var blocks []struct {
+				Type string `json:"type"`
+				ID   string `json:"id"`
+			}
+			if json.Unmarshal(entry.Message.Content, &blocks) == nil {
+				for _, block := range blocks {
+					if block.Type == "tool_use" && block.ID == toolUseID {
+						toolNode = entry.UUID
+					}
+				}
+			}
+		}
+		nodes[entry.UUID] = n
+	}
+	if scanner.Err() != nil || remote == "" || toolNode == "" {
+		return false
+	}
+	for id, steps := toolNode, 0; id != "" && steps <= len(nodes); steps++ {
+		if id == remote {
+			return false
+		}
+		n, ok := nodes[id]
+		if !ok {
+			return false
+		}
+		if n.human {
+			return n.index > remoteIndex
+		}
+		id = n.parent
+	}
+	return false
 }
