@@ -101,7 +101,7 @@ func (a app) agentHook(args []string) int {
 func (a app) proveTerminalHook(sessionID string) {
 	s, err := daemon.FindOwnSession(context.Background())
 	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
-		_ = daemon.ProveTerminalHook(sessionID, s.PID)
+		_ = daemon.ProveTerminalHook(sessionID, s.PID, daemon.CurrentZellijPane())
 	}
 }
 
