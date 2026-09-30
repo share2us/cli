@@ -23,6 +23,9 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   compaction and queued messages cannot release the guard mid-turn; older
   `s2u claude` windows need to restart and run one local prompt before receiving
   typed hops.
+- A typed hop's report no longer marks an MCP channel as deliverable. This
+  prevents the next hop from waiting on a development channel that the
+  organisation silently blocks.
 
 ## [20260929205703] - 2026-09-29
 

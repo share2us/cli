@@ -42,7 +42,7 @@ type channelHub struct {
 	active   map[string]map[string]bool   // session -> requests in progress
 	owner    map[string]string            // request -> session
 	guard    map[string]bool              // session -> SessionStart hook proved loaded
-	proven   map[string]bool              // session -> a live request was answered via report
+	proven   map[string]bool              // session -> a channel-delivered request was answered via report
 	channel  map[string]bool              // request -> requires an explicit report, never Stop
 	reported map[string]string            // request -> result, held until the guarded turn ends
 }
@@ -67,9 +67,9 @@ func (h *channelHub) markGuardReady(session string) {
 }
 
 // channelReady is separate from guardedAlive: polling and hooks do not prove
-// Claude can report a request. A successful report establishes readiness, even
-// from a typed request. This does not prove notifications are enabled, so each
-// subsequent channel request still needs its own report to finish.
+// Claude can receive notifications. A typed request's report proves only the
+// report tool, not channel delivery; only a channel-delivered request can
+// establish readiness. Each channel request still needs its own report.
 func (h *channelHub) channelReady(session string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -203,7 +203,9 @@ func (h *channelHub) report(requestID, text string) bool {
 	if _, already := h.reported[requestID]; already {
 		return false
 	}
-	h.proven[session] = true
+	if h.channel[requestID] {
+		h.proven[session] = true
+	}
 	h.reported[requestID] = text
 	return true
 }

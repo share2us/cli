@@ -461,9 +461,10 @@ func TestOwnerTurnCannotCompleteUnreportedChannelHop(t *testing.T) {
 
 func proveReportTool(t *testing.T, h *channelHub, session string) {
 	t.Helper()
-	if _, _, ok := h.beginTyped(session, ChannelDelivery{RequestID: "proof"}); !ok {
+	if _, _, ok := h.deliver(session, ChannelDelivery{RequestID: "proof"}); !ok {
 		t.Fatal("proof setup")
 	}
+	h.poll(session)
 	if !h.report("proof", "confirmed") {
 		t.Fatal("proof report")
 	}
@@ -518,6 +519,14 @@ func TestChannelReadinessRequiresReportAndResetsOnStart(t *testing.T) {
 	h.turnEnded("s1")
 	if h.channelReady("s1") {
 		t.Fatal("Stop proved readiness")
+	}
+	_, _, ok := h.beginTyped("s1", ChannelDelivery{RequestID: "typed-confirmed"})
+	if !ok || !h.report("typed-confirmed", "confirmed") {
+		t.Fatal("typed report setup")
+	}
+	h.turnEnded("s1")
+	if h.channelReady("s1") {
+		t.Fatal("typed report falsely proved channel delivery")
 	}
 	proveReportTool(t, h, "s1")
 	if !h.channelReady("s1") || h.channelReady("s2") {
