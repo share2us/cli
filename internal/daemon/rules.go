@@ -47,6 +47,10 @@ var selfProtection = []string{
 	"Edit(**/.claude/settings.local.json)",
 	"Edit(**/.git)",
 	"Edit(**/.git/**)",
+	// These read-looking Git commands may run core.fsmonitor. Keep privileged
+	// Git operations available; only the unsafe unattended read exceptions go.
+	"Bash(git status:*)",
+	"Bash(git blame:*)",
 }
 
 // hopReadOnly is what an unattended hop may run without approval (owner,
@@ -63,7 +67,6 @@ var selfProtection = []string{
 var hopReadOnly = []string{
 	"Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(grep:*)",
 	"Bash(wc:*)", "Bash(pwd)", "Bash(stat:*)", "Bash(which:*)",
-	"Bash(git status:*)", "Bash(git blame:*)",
 }
 
 // hardRule maps a keyword found in a prohibition to the deny patterns it compiles

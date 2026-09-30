@@ -63,6 +63,15 @@ func (a app) agentHook(args []string) int {
 	}
 	var in hookInput
 	if err := json.NewDecoder(io.LimitReader(os.Stdin, 8<<20)).Decode(&in); err != nil || in.SessionID == "" {
+		if args[0] == "headless-pre-tool-use" {
+			fmt.Fprintln(a.stdout, hookDeny("Share2Us: the headless Git guard could not identify this tool call."))
+		}
+		return 0
+	}
+	if args[0] == "headless-pre-tool-use" {
+		if deny, reason := daemon.HeadlessGitDecision(os.Getenv("S2U_HEADLESS_GUARD_PROJECT"), in.ToolName, in.ToolInput); deny {
+			fmt.Fprintln(a.stdout, hookDeny(reason))
+		}
 		return 0
 	}
 	switch args[0] {

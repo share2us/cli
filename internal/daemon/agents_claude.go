@@ -7,7 +7,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -145,6 +148,9 @@ func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string, forceRe
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "claude", buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv))...)
+	if err := guardHeadlessClaude(cmd, cwd); err != nil {
+		return "", err
+	}
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -166,6 +172,9 @@ func RunClaudeInjectSession(ctx context.Context, sessionID, cwd, prompt string, 
 	defer cancel()
 	args := append(buildClaudeInjectArgs(sessionID, prompt, policy, claudeMode(priv)), "--output-format", "json")
 	cmd := exec.CommandContext(cctx, "claude", args...)
+	if err := guardHeadlessClaude(cmd, cwd); err != nil {
+		return "", "", err
+	}
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -228,6 +237,52 @@ func buildClaudeInjectArgs(sessionID, prompt string, policy Policy, mode string)
 	}
 	args = append(args, "-p", prompt)
 	return args
+}
+
+// guardHeadlessClaude adds a hook that resolves edit targets before Claude's
+// tool executor acts. An inline settings document cannot be changed by the
+// delivered prompt, unlike a project settings file.
+func guardHeadlessClaude(cmd *exec.Cmd, project string) error {
+	if project == "" {
+		return errors.New("headless Git guard: missing project path")
+	}
+	root, err := filepath.Abs(project)
+	if err != nil {
+		return fmt.Errorf("headless Git guard: invalid project path: %w", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("headless Git guard: executable: %w", err)
+	}
+	quoted := `"` + strings.ReplaceAll(filepath.ToSlash(exe), `"`, `\"`) + `"`
+	settings, err := json.Marshal(map[string]any{"hooks": map[string]any{
+		"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{
+			map[string]any{"type": "command", "command": quoted + " agent hook headless-pre-tool-use"},
+		}}},
+	}})
+	if err != nil {
+		return err
+	}
+	// Put --settings before -p, the final variadic boundary in the invocation.
+	promptFlag := -1
+	for i, arg := range cmd.Args {
+		if arg == "-p" {
+			promptFlag = i
+			break
+		}
+	}
+	if promptFlag < 0 {
+		return errors.New("headless Git guard: missing prompt flag")
+	}
+	cmd.Args = append(cmd.Args[:promptFlag], append([]string{"--settings", string(settings)}, cmd.Args[promptFlag:]...)...)
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "S2U_HEADLESS_GUARD_PROJECT=") {
+			env = append(env, entry)
+		}
+	}
+	cmd.Env = append(env, "S2U_HEADLESS_GUARD_PROJECT="+root)
+	return nil
 }
 
 // claudeMode picks the injected run's permission mode from the agent's privilege

@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Guarded agent hops no longer treat `git status` or `git blame` as safe
+  unattended reads: Git configuration can make either run a program. Headless
+  Claude hops also resolve edit targets before allowing them, so a separate Git
+  directory or path alias cannot hide editable Git metadata from the guard.
+
 ## [20260930152334] - 2026-09-30
 
 ### Fixed

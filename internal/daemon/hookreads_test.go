@@ -49,7 +49,7 @@ func TestDeliveredReadsStayInsideProject(t *testing.T) {
 	}{
 		{"cat inside.txt", false},
 		{"grep -n foo inside.txt | head", false},
-		{"git status && ls", false},
+		{"git status && ls", true},
 		{"cat 'inside file.txt'", false},
 		{"cat " + filepath.Join(outside, "private.txt"), true},
 		{"grep -n secret " + filepath.Join(outside, "private.txt"), true},
