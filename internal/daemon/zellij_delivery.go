@@ -32,9 +32,10 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	if senderName, safe = safeTerminalText(senderName); !safe {
 		return false
 	}
-	// A recent channel poll is proof this is an `s2u claude` process with the
-	// guardrail and Stop hooks loaded. Plain Claude must never be typed into.
-	if binding.Zellij == nil || !rt.hub().guardedAlive(req.TargetSessionID) {
+	// Claude channels are optional. A hook proof tied to this exact process is
+	// sufficient for guarded terminal delivery when the organisation disables
+	// development channels. Plain Claude never writes that proof.
+	if binding.Zellij == nil || !TerminalHookReady(req.TargetSessionID, session.PID) {
 		return false
 	}
 	z := rt.paneDriver()
@@ -55,6 +56,10 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	if !accepted {
 		return false
 	}
+	if err := BeginTypedGuard(req.TargetSessionID, req.ID); err != nil {
+		rt.hub().withdraw(req.TargetSessionID, req.ID)
+		return false // no persistent fail-closed marker: type nothing
+	}
 	sender := req.SenderDeviceID
 	if name := strings.TrimSpace(senderName); name != "" {
 		sender = fmt.Sprintf("%q (%s)", name, req.SenderDeviceID)
@@ -62,10 +67,12 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s", sender, req.ID, prompt)
 	if visible, safe = safeTerminalText(visible); !safe {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
+		_ = EndTypedGuard(req.TargetSessionID, req.ID)
 		return false
 	}
 	if err := z.Paste(ctx, pane.Session, pane.Pane, visible); err != nil {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
+		_ = EndTypedGuard(req.TargetSessionID, req.ID)
 		return false
 	}
 	if !waitForPastedClaudeInput(ctx, z, pane, visible) {
@@ -177,6 +184,7 @@ func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, de
 			out = out[:maxReportedResult]
 		}
 		_ = client.AgentReportResult(ctx, req.ID, "done", out)
+		_ = EndTypedGuard(req.TargetSessionID, req.ID)
 	}()
 }
 
@@ -206,6 +214,7 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 					out = "The guarded agent turn finished in the session."
 				}
 				_ = client.AgentReportResult(ctx, req.ID, "done", out)
+				_ = EndTypedGuard(req.TargetSessionID, req.ID)
 				return
 			case <-ticker.C:
 				screen, err := rt.paneDriver().Dump(ctx, pane.Session, pane.Pane)
@@ -215,6 +224,7 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 						// The owner cleared the unsubmitted text. Release the guard
 						// and return to the ordinary wait/retry path.
 						rt.hub().withdraw(req.TargetSessionID, req.ID)
+						_ = EndTypedGuard(req.TargetSessionID, req.ID)
 						rt.holdInject(ctx, client, runner, deps, req, shown, prompt, senderName, cwd)
 						return
 					}

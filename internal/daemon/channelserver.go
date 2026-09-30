@@ -233,6 +233,8 @@ func WriteChannelLaunchConfig(exe string) (mcpPath, settingsPath string, err err
 			map[string]any{"type": "command", "command": quoted + " agent hook pre-tool-use"}}}},
 		"Stop": []any{map[string]any{"hooks": []any{
 			map[string]any{"type": "command", "command": quoted + " agent hook stop"}}}},
+		"SessionEnd": []any{map[string]any{"hooks": []any{
+			map[string]any{"type": "command", "command": quoted + " agent hook session-end"}}}},
 	}}
 	mcpPath, settingsPath = filepath.Join(dir, "mcp.json"), filepath.Join(dir, "settings.json")
 	for path, v := range map[string]any{mcpPath: mcp, settingsPath: settings} {

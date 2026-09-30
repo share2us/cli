@@ -191,9 +191,19 @@ func (h *channelHub) report(requestID, text string) bool {
 // early in the turn and must not make subsequent tools unguarded. Channel
 // requests require their own explicit report before any Stop can complete them.
 func (h *channelHub) turnEnded(session string) {
+	h.turnEndedForHook(session, "", false)
+}
+
+// turnEndedForHook requires the last human transcript prompt to match a typed
+// request before that request can complete. Channel requests still require an
+// explicit report, independently of Stop.
+func (h *channelHub) turnEndedForHook(session, requestID string, verifyTyped bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id := range h.active[session] {
+		if verifyTyped && !h.channel[id] && id != requestID {
+			continue
+		}
 		out, reported := h.reported[id]
 		if h.channel[id] && !reported {
 			continue // an unrelated owner turn is not this request's report
@@ -247,10 +257,12 @@ func (h *channelHub) channelControl(req daemonctl.Request) (daemonctl.Response, 
 	case "channel-report":
 		return daemonctl.Response{OK: h.report(req.Args["request_id"], req.Args["result"])}, true
 	case "channel-turn-ended":
-		h.turnEnded(req.Args["session"])
+		h.turnEndedForHook(req.Args["session"], req.Args["request_id"], true)
 		return daemonctl.Response{OK: true}, true
 	case "channel-alive":
 		return daemonctl.Response{OK: h.guardedAlive(req.Args["session"])}, true
+	case "channel-ready":
+		return daemonctl.Response{OK: h.channelReady(req.Args["session"])}, true
 	case "channel-guard-ready":
 		h.markGuardReady(req.Args["session"])
 		return daemonctl.Response{OK: req.Args["session"] != ""}, true
