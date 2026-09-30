@@ -16,6 +16,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ### Fixed
 
+- Local `--serve` refuses macOS system and credential directories even when
+  those paths resolve through a symlink (for example `/etc` to `/private/etc`).
 - Guarded agent hops no longer treat `git status` or `git blame` as safe
   unattended reads: Git configuration can make either run a program. Headless
   Claude hops also resolve edit targets before allowing them, so a separate Git

@@ -62,9 +62,49 @@ func TestGuardServePath(t *testing.T) {
 		filepath.Join(home, "s2u-share"),
 	}
 	for _, p := range allowed {
+		// The macOS runner's isolated test HOME is under /var/folders.
+		// /var is itself a denied system root, so these are not safe paths
+		// despite being ordinary home subfolders on a normal installation.
+		if runtime.GOOS == "darwin" && pathAtOrUnder(resolveServePath(p), resolveServePath("/var")) {
+			continue
+		}
 		if err := guardServePath(p); err != nil {
 			t.Errorf("guardServePath(%q) = %v, want nil", p, err)
 		}
+	}
+}
+
+func TestGuardServePathResolvesSensitiveRootSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks requires elevated Windows privileges")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	secret := t.TempDir()
+	if err := os.Symlink(secret, filepath.Join(home, ".ssh")); err != nil {
+		t.Fatal(err)
+	}
+	if err := guardServePath(secret); err == nil {
+		t.Fatal("sensitive root symlink target could be served")
+	}
+}
+
+func TestGuardServePathResolvesMissingPathUnderHomeAlias(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("this test requires a directory symlink")
+	}
+	parent := t.TempDir()
+	realHome := filepath.Join(parent, "real-home")
+	if err := os.Mkdir(realHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aliasHome := filepath.Join(parent, "alias-home")
+	if err := os.Symlink(realHome, aliasHome); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", realHome)
+	if err := guardServePath(filepath.Join(aliasHome, ".ssh", "id_rsa")); err == nil {
+		t.Fatal("missing credential path under a home alias could be served")
 	}
 }
 
