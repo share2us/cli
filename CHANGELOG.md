@@ -12,8 +12,6 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
-## [20260930200947] - 2026-09-30
-
 ### Fixed
 
 - Guarded live agent deliveries now refuse Claude subagents. A background
@@ -25,6 +23,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   without disabling channel delivery or later in-place delivery.
 - Local `--serve` refuses macOS system and credential directories even when
   those paths resolve through a symlink (for example `/etc` to `/private/etc`).
+
+## [20260930200947] - 2026-09-30
+
+### Fixed
+
 - Guarded agent hops no longer treat `git status` or `git blame` as safe
   unattended reads: Git configuration can make either run a program. Headless
   Claude hops also resolve edit targets before allowing them, so a separate Git
