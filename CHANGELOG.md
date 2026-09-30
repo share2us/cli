@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260930212043] - 2026-09-30
+
 ### Fixed
 
 - Guarded live agent deliveries now refuse Claude subagents. A background
