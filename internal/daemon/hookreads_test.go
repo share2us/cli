@@ -35,7 +35,7 @@ func TestDeliveredReadsStayInsideProject(t *testing.T) {
 		{"Glob", "path", "", false},
 		{"Glob", "path", outside, true},
 		{"Grep", "path", "escape", true},
-		{"LS", "path", "/etc", true},
+		{"LS", "path", outside, true},
 		{"NotebookRead", "notebook_path", "escape/new.ipynb", true},
 	} {
 		input := map[string]any{tc.key: tc.path}

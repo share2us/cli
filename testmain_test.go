@@ -13,25 +13,26 @@ import (
 )
 
 // TestMain keeps the update path away from the developer's real daemon and
-// service manager: by default no daemon answers, and restarting is refused
-// loudly. Tests that exercise the restart replace these per test.
+// service manager, and keeps platform config/cache paths in scratch.
 func TestMain(m *testing.M) {
 	queryDaemon = func(string) (daemonctl.Response, bool) { return daemonctl.Response{}, false }
 	serviceActive = func() bool { return false }
 	serviceRestart = func() error { panic("a test tried to restart the real service") }
 	startDetached = func(string) error { panic("a test tried to start a real daemon") }
-	// On Windows the config and cache dirs are %AppData% and %LocalAppData%,
-	// which ignore XDG_*: without this, tests wrote config.json and
-	// credentials.json into the developer's real profile (found on the Windows
-	// VM, 2026-09-28). Point both at scratch for the whole run.
+	// Windows config/cache dirs ignore XDG_*; macOS uses HOME/Library rather
+	// than XDG_*. Isolate both so tests cannot read or write a real profile.
 	var scratch string
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		var err error
 		if scratch, err = os.MkdirTemp("", "s2u-cli-test-profile-*"); err != nil {
 			panic(err)
 		}
-		for _, k := range []string{"APPDATA", "LOCALAPPDATA"} {
-			_ = os.Setenv(k, filepath.Join(scratch, k))
+		if runtime.GOOS == "darwin" {
+			_ = os.Setenv("HOME", scratch)
+		} else {
+			for _, k := range []string{"APPDATA", "LOCALAPPDATA"} {
+				_ = os.Setenv(k, filepath.Join(scratch, k))
+			}
 		}
 	}
 	code := m.Run()
@@ -41,12 +42,14 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// setConfigHome gives a test its own config dir on every OS: XDG_CONFIG_HOME,
-// and on Windows %AppData%, which is what os.UserConfigDir reads there.
+// setConfigHome gives a test its own config dir on every OS. Windows uses
+// %AppData%; macOS uses HOME/Library; Linux uses XDG_CONFIG_HOME.
 func setConfigHome(t *testing.T, dir string) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	if runtime.GOOS == "windows" {
 		t.Setenv("APPDATA", dir)
+	} else if runtime.GOOS == "darwin" {
+		t.Setenv("HOME", dir)
 	}
 }
