@@ -52,6 +52,8 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentBind(ctx, args[1:])
 	case "unbind":
 		return a.agentUnbind(args[1:])
+	case "typed":
+		return a.agentTyped(args[1:])
 	case "bindings":
 		return a.agentBindings(ctx)
 	case "goal", "goals":
@@ -77,7 +79,7 @@ func (a app) agent(ctx context.Context, args []string) int {
 }
 
 func (a app) agentUsage() int {
-	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|bindings|goal|rules|policy>\n", commandName)
+	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|typed|bindings|goal|rules|policy>\n", commandName)
 	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
 	fmt.Fprintf(a.stderr, "  send --agent ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
 	fmt.Fprintf(a.stderr, "       [--device ID] [--session ID]         or name the session instead; any id may be a\n                                             unique prefix, as `agent list` prints it\n")
@@ -94,6 +96,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  bind <session-id> [PROJECT-NAME]           let this machine advertise that session (nothing\n")
 	fmt.Fprintf(a.stderr, "                                             is advertised until you bind it)\n")
 	fmt.Fprintf(a.stderr, "  unbind <session-id|--project DIR>          stop advertising it\n")
+	fmt.Fprintf(a.stderr, "  typed <on|off> [--project DIR]              allow or pause automatic Zellij typing for a Claude binding\n")
 	fmt.Fprintf(a.stderr, "  bindings                                   what this machine advertises\n")
 	fmt.Fprintf(a.stderr, "  goal <new|list|show|close|wait>            a unit of autonomous work, with a budget\n")
 	fmt.Fprintf(a.stderr, "  rules [--project DIR]                      show which .s2u.rules are hard-enforced vs advisory\n")
@@ -230,6 +233,34 @@ func (a app) agentUnbind(args []string) int {
 		return 0
 	}
 	fmt.Fprintf(a.stdout, "unbound %d binding(s); the daemon retires those sessions on its next pass\n", n)
+	return 0
+}
+
+func (a app) agentTyped(args []string) int {
+	if len(args) != 1 && len(args) != 3 {
+		fmt.Fprintf(a.stderr, "usage: %s agent typed <on|off> [--project DIR]\n", commandName)
+		return 2
+	}
+	if args[0] != "on" && args[0] != "off" {
+		fmt.Fprintf(a.stderr, "typed delivery must be on or off\n")
+		return 2
+	}
+	project, err := os.Getwd()
+	if err != nil {
+		return a.fail("current directory", err)
+	}
+	if len(args) == 3 {
+		if args[1] != "--project" || args[2] == "" {
+			fmt.Fprintf(a.stderr, "usage: %s agent typed <on|off> [--project DIR]\n", commandName)
+			return 2
+		}
+		project = args[2]
+	}
+	b, err := daemon.SetTypedDelivery(project, args[0] == "on")
+	if err != nil {
+		return a.fail("typed delivery setting", err)
+	}
+	fmt.Fprintf(a.stdout, "automatic Zellij typing %s for Claude binding %s (%s)\n", args[0], b.AgentID, b.Project)
 	return 0
 }
 

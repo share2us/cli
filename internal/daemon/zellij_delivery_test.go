@@ -49,6 +49,8 @@ func TestLiveS2UClaudeHopIsTypedAndReported(t *testing.T) {
 	// The first post-paste snapshot can still be Claude's old empty input;
 	// delivery must wait for its asynchronous folded-paste marker before Enter.
 	runtime, z, dir := typedRuntime(t, "│ ❯  │", "│ ❯  │", "│ ❯ [Pasted text #1 +3 lines] │")
+	notice := &recordingNotifier{}
+	runtime.notifier = notice
 	c, r := &fakeAgentClient{}, typedRunner(dir)
 	key, _ := clicore.NewContentKey()
 	var encrypted bytes.Buffer
@@ -66,6 +68,9 @@ func TestLiveS2UClaudeHopIsTypedAndReported(t *testing.T) {
 	}
 	if z.entered != 1 || r.ran != 0 {
 		t.Fatalf("Enter=%d headless runs=%d", z.entered, r.ran)
+	}
+	if len(notice.msgs) != 1 || !strings.Contains(notice.msgs[0], "1/3 typed deliveries this hour") {
+		t.Fatalf("desktop typed-delivery count notice = %v", notice.msgs)
 	}
 	filePath := filepath.Join(dir, ".s2u-inbox", "note.txt")
 	if got, err := os.ReadFile(filePath); err != nil || string(got) != "file contents" || !strings.Contains(z.pasted[0], filePath) {

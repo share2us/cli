@@ -109,6 +109,8 @@ type Runtime struct {
 	zellij      zellijDriver
 	zellijOnce  sync.Once
 	processPane func(int) *ZellijPane
+	// typedMu serializes the persisted per-session delivery counter.
+	typedMu sync.Mutex
 }
 
 func (rt *Runtime) processZellijPane(pid int) *ZellijPane {

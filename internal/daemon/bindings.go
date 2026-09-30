@@ -56,6 +56,9 @@ type Binding struct {
 	// is only a hint: every delivery re-proves the process, pane, command and
 	// project before typing anything. Nil means live typing is unavailable.
 	Zellij *ZellijPane `json:"zellij,omitempty"`
+	// TypedDeliveryDisabled is the owner's switch for automatic Zellij paste.
+	// Channel and headless delivery remain available when this is true.
+	TypedDeliveryDisabled bool `json:"typed_delivery_disabled,omitempty"`
 }
 
 // ZellijPane is the small, non-secret part of a session process environment
@@ -116,6 +119,23 @@ func setSession(project, tool, sessionID string, pane *ZellijPane, created bool)
 		}
 	}
 	return Binding{}, false, os.ErrNotExist
+}
+
+// SetTypedDelivery lets the owner disable or re-enable automatic terminal
+// typing for an existing Claude binding without changing its identity.
+func SetTypedDelivery(project string, enabled bool) (Binding, error) {
+	list, err := LoadBindings()
+	if err != nil {
+		return Binding{}, err
+	}
+	p := normalizeProject(project)
+	for i := range list {
+		if list[i].Tool == "claude" && normalizeProject(list[i].Project) == p {
+			list[i].TypedDeliveryDisabled = !enabled
+			return list[i], saveBindings(list)
+		}
+	}
+	return Binding{}, os.ErrNotExist
 }
 
 // bindingsFile is the on-disk shape, versioned so the format can move.

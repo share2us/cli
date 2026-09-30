@@ -35,7 +35,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	// Claude channels are optional. A hook proof tied to this exact process is
 	// sufficient for guarded terminal delivery when the organisation disables
 	// development channels. Plain Claude never writes that proof.
-	if binding.Zellij == nil || !TerminalTypedReady(req.TargetSessionID, session.PID) {
+	if binding.TypedDeliveryDisabled || binding.Zellij == nil || !TerminalTypedReady(req.TargetSessionID, session.PID) {
 		return false
 	}
 	z := rt.paneDriver()
@@ -66,6 +66,13 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
 		return false // no persistent fail-closed marker: type nothing
 	}
+	count, limitReason, limitErr := rt.reserveTypedDelivery(req.TargetSessionID)
+	if limitErr != nil || limitReason != "" {
+		rt.hub().withdraw(req.TargetSessionID, req.ID)
+		_ = EndTypedGuard(req.TargetSessionID, req.ID)
+		deps.logf("agent-bridge: typed delivery paused for %s: %s %v", req.TargetSessionID, limitReason, limitErr)
+		return false
+	}
 	sender := req.SenderDeviceID
 	if name := strings.TrimSpace(senderName); name != "" {
 		sender = fmt.Sprintf("%q (%s)", name, req.SenderDeviceID)
@@ -81,6 +88,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		_ = EndTypedGuard(req.TargetSessionID, req.ID)
 		return false
 	}
+	rt.notify("Share2Us", fmt.Sprintf("A prompt reached your open %s input (%d/%d typed deliveries this hour)", req.Tool, count, typedDeliveryCap))
 	if !waitForPastedClaudeInput(ctx, z, pane, visible) {
 		// Something changed after the empty-input check. Never press Enter and
 		// keep the guard active: the pasted remote text may still be submitted
@@ -161,7 +169,6 @@ func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, de
 	go func() {
 		defer rt.holding.Add(-1)
 		deps.logf("agent-bridge: typed inject %s into open session %s", req.ID, req.TargetSessionID)
-		rt.notify("Share2Us", "A prompt was typed into your open "+req.Tool+" session")
 		_ = client.AgentReportResult(ctx, req.ID, "running", "Delivered into the open "+req.Tool+" session.")
 		hop := HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 			Target: req.TargetSessionID, RanIn: req.TargetSessionID, Mode: "typed", Prompt: shown}
