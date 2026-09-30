@@ -546,7 +546,7 @@ func TestChannelLaunchConfig(t *testing.T) {
 		t.Fatalf("mcp config = %s (%v)", b, err)
 	}
 	s, _ := os.ReadFile(settings)
-	if !strings.Contains(string(s), `agent hook session-start`) || !strings.Contains(string(s), `agent hook pre-tool-use`) || !strings.Contains(string(s), `agent hook stop`) || !strings.Contains(string(s), `agent hook session-end`) {
+	if !strings.Contains(string(s), `agent hook session-start`) || !strings.Contains(string(s), `agent hook user-prompt-submit`) || !strings.Contains(string(s), `agent hook pre-tool-use`) || !strings.Contains(string(s), `agent hook stop`) || !strings.Contains(string(s), `agent hook session-end`) {
 		t.Fatalf("settings = %s", s)
 	}
 	args := strings.Join(ClaudeChannelArgs(mcp, settings), " ")

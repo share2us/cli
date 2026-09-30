@@ -23,6 +23,18 @@ func TestTerminalHookProofIsProcessBoundAndChannelIndependent(t *testing.T) {
 	if !TerminalHookReady("s1", 123) || TerminalHookReady("s1", 456) || TerminalHookReady("s2", 123) {
 		t.Fatal("proof was not tied to session and process")
 	}
+	if TerminalTypedReady("s1", 123) {
+		t.Fatal("old wrapper without prompt hook was allowed typed delivery")
+	}
+	if err := ProveTerminalPromptHook("s1", 123, pane); err != nil {
+		t.Fatal(err)
+	}
+	if !TerminalTypedReady("s1", 123) || TerminalTypedReady("s1", 456) {
+		t.Fatal("prompt hook proof was not tied to session and process")
+	}
+	if err := ProveTerminalHook("s1", 123, pane); err != nil || !TerminalTypedReady("s1", 123) {
+		t.Fatal("Stop hook lost prompt-hook proof for same process")
+	}
 	if got := TerminalHookPane("s1", 123); got == nil || *got != *pane || TerminalHookPane("s1", 456) != nil {
 		t.Fatalf("pane proof = %+v", got)
 	}
@@ -67,6 +79,14 @@ func TestTypedGuardMarkerAndTranscriptMatch(t *testing.T) {
 	}
 	if matches, known := TranscriptRequestState(path, "req-1"); matches || !known {
 		t.Fatal("multimodal owner turn did not replace old remote turn")
+	}
+	if err := os.WriteFile(path, []byte(content+
+		`{"type":"user","isMeta":true,"message":{"role":"user","content":"internal context"}}`+"\n"+
+		`{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"summary"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if matches, known := TranscriptRequestState(path, "req-1"); !matches || !known {
+		t.Fatal("internal context or compaction displaced delivered prompt")
 	}
 	if err := EndTypedGuard("s1", "wrong"); err != nil || TypedGuardRequest("s1") == "" {
 		t.Fatal("wrong request removed the active marker")

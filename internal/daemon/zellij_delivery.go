@@ -35,7 +35,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	// Claude channels are optional. A hook proof tied to this exact process is
 	// sufficient for guarded terminal delivery when the organisation disables
 	// development channels. Plain Claude never writes that proof.
-	if binding.Zellij == nil || !TerminalHookReady(req.TargetSessionID, session.PID) {
+	if binding.Zellij == nil || !TerminalTypedReady(req.TargetSessionID, session.PID) {
 		return false
 	}
 	z := rt.paneDriver()

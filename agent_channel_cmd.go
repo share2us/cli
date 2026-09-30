@@ -43,9 +43,12 @@ func (a app) agentChannel(ctx context.Context) int {
 // hookInput is the part of a Claude hook's stdin the guardrail uses.
 type hookInput struct {
 	SessionID      string         `json:"session_id"`
+	PromptID       string         `json:"prompt_id"`
+	Prompt         string         `json:"prompt"`
 	TranscriptPath string         `json:"transcript_path"`
 	CWD            string         `json:"cwd"`
 	ToolName       string         `json:"tool_name"`
+	ToolUseID      string         `json:"tool_use_id"`
 	ToolInput      map[string]any `json:"tool_input"`
 }
 
@@ -55,7 +58,7 @@ type hookInput struct {
 // A daemon failure during a typed hop fails closed using its on-disk marker.
 func (a app) agentHook(args []string) int {
 	if len(args) != 1 {
-		fmt.Fprintf(a.stderr, "usage: %s agent hook <session-start|pre-tool-use|stop|session-end>\n", commandName)
+		fmt.Fprintf(a.stderr, "usage: %s agent hook <session-start|user-prompt-submit|pre-tool-use|stop|session-end>\n", commandName)
 		return 2
 	}
 	var in hookInput
@@ -66,12 +69,23 @@ func (a app) agentHook(args []string) int {
 	case "session-start":
 		a.proveTerminalHook(in.SessionID)
 		daemonctl.Call(daemonctl.Request{Op: "channel-guard-ready", Args: map[string]string{"session": in.SessionID}})
+	case "user-prompt-submit":
+		if in.PromptID != "" {
+			a.proveTerminalPromptHook(in.SessionID)
+		}
+		_ = daemon.BindTypedPromptID(in.SessionID, in.Prompt, in.PromptID)
 	case "pre-tool-use":
 		activeRequest := daemon.TypedGuardRequest(in.SessionID)
 		if activeRequest != "" {
-			if matches, known := daemon.TranscriptRequestState(in.TranscriptPath, activeRequest); known && !matches {
+			bound := daemon.TypedGuardPromptID(in.SessionID)
+			if bound != "" && in.PromptID == "" {
+				fmt.Fprintln(a.stdout, hookDeny("Share2Us: the guarded turn has no prompt identity; tool use is blocked."))
+				return 0
+			}
+			if bound != "" && in.PromptID != bound &&
+				daemon.TranscriptToolIsLaterOwnerTurn(in.TranscriptPath, activeRequest, in.ToolUseID) {
 				a.abandonTypedTurn(in.SessionID, activeRequest)
-				activeRequest = "" // later owner turn; still check for a separate active channel hop
+				activeRequest = "" // a different turn; still check for an active channel hop
 			}
 		}
 		resp, ok := daemonctl.Call(daemonctl.Request{Op: "channel-guarded", Args: map[string]string{"session": in.SessionID}})
@@ -91,12 +105,23 @@ func (a app) agentHook(args []string) int {
 	case "stop":
 		a.proveTerminalHook(in.SessionID)
 		request := daemon.TypedGuardRequest(in.SessionID)
-		matches, known := daemon.TranscriptRequestState(in.TranscriptPath, request)
-		if known && !matches {
-			a.abandonTypedTurn(in.SessionID, request)
-		}
-		if !matches {
-			request = ""
+		if request != "" {
+			if bound := daemon.TypedGuardPromptID(in.SessionID); bound != "" {
+				if in.PromptID != bound {
+					if in.PromptID != "" {
+						a.abandonTypedTurn(in.SessionID, request)
+					}
+					request = ""
+				}
+			} else {
+				matches, known := daemon.TranscriptRequestState(in.TranscriptPath, request)
+				if known && !matches {
+					a.abandonTypedTurn(in.SessionID, request)
+				}
+				if !matches {
+					request = ""
+				}
+			}
 		}
 		daemonctl.Call(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": in.SessionID, "request_id": request}})
 		if request != "" {
@@ -108,9 +133,9 @@ func (a app) agentHook(args []string) int {
 	return 0
 }
 
-// A newer human message means the typed turn was interrupted. Only an
-// acknowledged daemon cancellation clears the marker; without the daemon,
-// later owner turns still bypass this stale marker by transcript identity.
+// A distinct Claude prompt_id means the typed turn is no longer the turn
+// executing tools. Only an acknowledged daemon cancellation clears the marker;
+// without the daemon, the later turn bypasses that stale marker by prompt id.
 func (a app) abandonTypedTurn(session, request string) {
 	resp, ok := daemonctl.Call(daemonctl.Request{Op: "channel-abandon-typed", Args: map[string]string{
 		"session": session, "request_id": request,
@@ -124,6 +149,13 @@ func (a app) proveTerminalHook(sessionID string) {
 	s, err := daemon.FindOwnSession(context.Background())
 	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
 		_ = daemon.ProveTerminalHook(sessionID, s.PID, daemon.CurrentZellijPane())
+	}
+}
+
+func (a app) proveTerminalPromptHook(sessionID string) {
+	s, err := daemon.FindOwnSession(context.Background())
+	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
+		_ = daemon.ProveTerminalPromptHook(sessionID, s.PID, daemon.CurrentZellijPane())
 	}
 }
 
@@ -176,7 +208,7 @@ func (a app) channelHint(sess daemon.DiscoveredSession) {
 	}
 	if bindings, err := daemon.LoadBindings(); err == nil {
 		if binding, ok := daemon.BindingForSession(bindings, sess.SessionID); ok &&
-			daemon.TerminalHookReady(sess.SessionID, sess.PID) {
+			daemon.TerminalTypedReady(sess.SessionID, sess.PID) {
 			if pane, ok := daemon.FindZellijLocation(context.Background(), binding, sess); ok {
 				fmt.Fprintf(a.stdout, "Prompts sent to this agent appear in this window through guarded Zellij delivery (tab %q, pane terminal_%s).\n", pane.TabName, pane.Pane)
 				return
