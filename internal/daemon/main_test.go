@@ -22,6 +22,12 @@ var (
 // s2u-daemon` acts on the unit by NAME, so a test calling ServiceUninstall used
 // to stop and disable the developer's own daemon.
 func TestMain(m *testing.M) {
+	if marker := os.Getenv("S2U_TEST_FSMONITOR_MARKER"); marker != "" {
+		if err := os.WriteFile(marker, nil, 0o600); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 	run = func(name string, args ...string) error {
 		serviceCallsMu.Lock()
 		serviceCalls = append(serviceCalls, name+" "+strings.Join(args, " "))
