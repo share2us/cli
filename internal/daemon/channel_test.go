@@ -216,7 +216,7 @@ func TestHookDecisionEnforcesTheRules(t *testing.T) {
 		{"Bash", bash("go test ./... && git push"), true},
 		{"Bash", bash("FOO=1 rm -rf build"), true},
 		{"Bash", bash("go test ./..."), true}, // not a read: a headless hop could not either
-		{"Bash", bash("git status && ls"), false},
+		{"Bash", bash("git status && ls"), true},
 		{"WebFetch", map[string]any{"url": "https://example.com"}, true},
 		{"mcp__share2us__report", map[string]any{"request_id": "r", "result": "x"}, false},
 		{"Grep", map[string]any{"pattern": "x"}, false},

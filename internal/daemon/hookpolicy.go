@@ -102,6 +102,35 @@ func HookDecision(cwd, tool string, input map[string]any, forceRestricted bool) 
 	return true, "Share2Us: a delivered prompt may not use " + tool + " without your approval. Use it yourself if you want it."
 }
 
+// HeadlessGitDecision is the non-removable Git boundary for unattended Claude
+// runs. Literal --disallowedTools paths cannot describe symlink aliases or a
+// linked worktree's gitdir, so a PreToolUse hook checks the resolved target.
+func HeadlessGitDecision(project, tool string, input map[string]any) (bool, string) {
+	if project == "" || !filepath.IsAbs(project) {
+		return true, "Share2Us: the headless Git guard has no trusted project path."
+	}
+	if fileEditTools[tool] {
+		paths := editPaths(input)
+		if len(paths) == 0 {
+			return true, "Share2Us: a delivered prompt must identify the file it edits."
+		}
+		for _, path := range paths {
+			if !insideDir(project, path) || insideGitMetadata(project, path) {
+				return true, "Share2Us: a delivered prompt may not edit Git metadata or files outside its project."
+			}
+		}
+	}
+	if tool == "Bash" {
+		cmd, _ := input["command"].(string)
+		for _, part := range splitShell(cmd) {
+			if bashMatches("git status:*", part) || bashMatches("git blame:*", part) {
+				return true, "Share2Us: git status and git blame may execute configured programs and are unavailable in delivered prompts."
+			}
+		}
+	}
+	return false, ""
+}
+
 // insideDir reports whether a path resolves to dir or below it. Resolve the
 // nearest existing parent too, so a new file below an escaping symlink is not
 // accepted as an in-project path.
