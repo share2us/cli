@@ -21,12 +21,12 @@ import (
 // fileEditTools are the tools Claude's Edit(...) rules cover.
 var fileEditTools = map[string]bool{"Edit": true, "Write": true, "MultiEdit": true, "NotebookEdit": true}
 
-// hookFreeTools are what a headless hop could use without an approval: Claude
-// asks for none of these (reads, search, planning, subagents, whose own tool
-// calls pass through this hook too).
+// hookFreeTools are local reads, search, and planning that a delivered hop may
+// use without an approval. Subagents are excluded: their tool calls do not
+// reliably inherit this session's guard.
 var hookFreeTools = map[string]bool{
 	"Read": true, "Glob": true, "Grep": true, "LS": true, "NotebookRead": true,
-	"TodoWrite": true, "TodoRead": true, "ToolSearch": true, "Task": true, "Agent": true,
+	"TodoWrite": true, "TodoRead": true, "ToolSearch": true,
 }
 
 var readToolPathKey = map[string]string{
@@ -53,6 +53,8 @@ func HookDecision(cwd, tool string, input map[string]any, forceRestricted bool) 
 	switch {
 	case strings.HasPrefix(tool, "mcp__"+ChannelServerName+"__"):
 		return false, "" // the report tool
+	case tool == "Agent" || tool == "Task":
+		return true, "Share2Us: a delivered prompt may not start a subagent because its tool calls may run outside this turn's guard."
 	case fileEditTools[tool]:
 		if priv == PrivilegeRestricted {
 			return true, "Share2Us: this agent is read-only for delivered prompts, so it may not edit files."
