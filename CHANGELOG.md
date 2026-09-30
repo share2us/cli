@@ -16,6 +16,9 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ### Fixed
 
+- Guarded live agent deliveries now refuse Claude subagents. A background
+  subagent could otherwise keep running after the parent turn ended and use
+  tools outside the delivered-hop guard.
 - Local `--serve` refuses macOS system and credential directories even when
   those paths resolve through a symlink (for example `/etc` to `/private/etc`).
 - Guarded agent hops no longer treat `git status` or `git blame` as safe
