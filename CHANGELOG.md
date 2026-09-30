@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20260930152334] - 2026-09-30
+
 ### Fixed
 
 - `s2u claude` can deliver guarded prompts into its verified Zellij pane when
