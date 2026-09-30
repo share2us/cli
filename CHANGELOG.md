@@ -14,6 +14,10 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ### Fixed
 
+- Automatic Zellij delivery is limited to three prompts per Claude session per
+  rolling hour, at least five minutes apart. The desktop notice shows the count,
+  and `s2u agent typed off --project DIR` pauses terminal typing for a binding
+  without disabling channel delivery or later in-place delivery.
 - Local `--serve` refuses macOS system and credential directories even when
   those paths resolve through a symlink (for example `/etc` to `/private/etc`).
 - Guarded agent hops no longer treat `git status` or `git blame` as safe

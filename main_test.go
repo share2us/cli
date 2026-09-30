@@ -31,7 +31,32 @@ import (
 	clicore "github.com/share2us/cli-core"
 	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli-core/lanshare"
+	"github.com/share2us/cli/internal/daemon"
 )
+
+func TestAgentTypedOwnerSwitch(t *testing.T) {
+	setConfigHome(t, t.TempDir())
+	project := t.TempDir()
+	if _, _, err := daemon.Bind(project, "claude", "test"); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	a := app{stdout: &stdout, stderr: &stderr}
+	if code := a.agentTyped([]string{"off", "--project", project}); code != 0 {
+		t.Fatalf("typed off code=%d stderr=%s", code, stderr.String())
+	}
+	list, err := daemon.LoadBindings()
+	if err != nil || len(list) != 1 || !list[0].TypedDeliveryDisabled {
+		t.Fatalf("typed off binding=%+v err=%v", list, err)
+	}
+	if code := a.agentTyped([]string{"on", "--project", project}); code != 0 {
+		t.Fatalf("typed on code=%d stderr=%s", code, stderr.String())
+	}
+	list, err = daemon.LoadBindings()
+	if err != nil || len(list) != 1 || list[0].TypedDeliveryDisabled {
+		t.Fatalf("typed on binding=%+v err=%v", list, err)
+	}
+}
 
 func TestRunHelpAndVersion(t *testing.T) {
 	tests := []struct {
