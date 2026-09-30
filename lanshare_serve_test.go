@@ -83,6 +83,25 @@ func TestGuardServePathResolvesSensitiveRootSymlink(t *testing.T) {
 	}
 }
 
+func TestGuardServePathResolvesMissingPathUnderHomeAlias(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("this test requires a directory symlink")
+	}
+	parent := t.TempDir()
+	realHome := filepath.Join(parent, "real-home")
+	if err := os.Mkdir(realHome, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aliasHome := filepath.Join(parent, "alias-home")
+	if err := os.Symlink(realHome, aliasHome); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", realHome)
+	if err := guardServePath(filepath.Join(aliasHome, ".ssh", "id_rsa")); err == nil {
+		t.Fatal("missing credential path under a home alias could be served")
+	}
+}
+
 // --keep turns one-shot receiving into a persistent listener. The primitive
 // already existed in cli-core (ReceiveOptions.Loop); this guards the CLI wiring
 // that was missing.
