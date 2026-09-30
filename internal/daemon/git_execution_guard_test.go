@@ -4,7 +4,6 @@
 package daemon
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -78,7 +77,9 @@ func TestDeliveredGitReadCanExecuteConfiguredPrograms(t *testing.T) {
 			case "include.path":
 				addition = "\n[include]\n path = ../gitconfig.local\n"
 			case "includeIf":
-				addition = fmt.Sprintf("\n[includeIf %q]\n path = ../gitconfig.local\n", "gitdir:"+filepath.ToSlash(filepath.Join(project, ".git")))
+				// The wildcard matches Git's canonical gitdir spelling on both
+				// Unix and Windows (where short/long and slash forms can differ).
+				addition = "\n[includeIf \"gitdir:**\"]\n path = ../gitconfig.local\n"
 			case "relative-fsmonitor":
 				addition = "\n[core]\n fsmonitor = " + hook + "\n"
 			}
