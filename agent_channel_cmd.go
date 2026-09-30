@@ -68,6 +68,12 @@ func (a app) agentHook(args []string) int {
 		daemonctl.Call(daemonctl.Request{Op: "channel-guard-ready", Args: map[string]string{"session": in.SessionID}})
 	case "pre-tool-use":
 		activeRequest := daemon.TypedGuardRequest(in.SessionID)
+		if activeRequest != "" {
+			if matches, known := daemon.TranscriptRequestState(in.TranscriptPath, activeRequest); known && !matches {
+				a.abandonTypedTurn(in.SessionID, activeRequest)
+				activeRequest = "" // later owner turn; still check for a separate active channel hop
+			}
+		}
 		resp, ok := daemonctl.Call(daemonctl.Request{Op: "channel-guarded", Args: map[string]string{"session": in.SessionID}})
 		if !ok || !resp.OK {
 			if activeRequest != "" {
@@ -85,7 +91,11 @@ func (a app) agentHook(args []string) int {
 	case "stop":
 		a.proveTerminalHook(in.SessionID)
 		request := daemon.TypedGuardRequest(in.SessionID)
-		if !daemon.TranscriptHasLastUserRequest(in.TranscriptPath, request) {
+		matches, known := daemon.TranscriptRequestState(in.TranscriptPath, request)
+		if known && !matches {
+			a.abandonTypedTurn(in.SessionID, request)
+		}
+		if !matches {
 			request = ""
 		}
 		daemonctl.Call(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": in.SessionID, "request_id": request}})
@@ -96,6 +106,18 @@ func (a app) agentHook(args []string) int {
 		daemon.EndTerminalSession(in.SessionID)
 	}
 	return 0
+}
+
+// A newer human message means the typed turn was interrupted. Only an
+// acknowledged daemon cancellation clears the marker; without the daemon,
+// later owner turns still bypass this stale marker by transcript identity.
+func (a app) abandonTypedTurn(session, request string) {
+	resp, ok := daemonctl.Call(daemonctl.Request{Op: "channel-abandon-typed", Args: map[string]string{
+		"session": session, "request_id": request,
+	}})
+	if ok && resp.OK {
+		_ = daemon.EndTypedGuard(session, request)
+	}
 }
 
 func (a app) proveTerminalHook(sessionID string) {

@@ -56,6 +56,18 @@ func TestTypedGuardMarkerAndTranscriptMatch(t *testing.T) {
 	if TranscriptHasLastUserRequest(path, "req-1") {
 		t.Fatal("an unrelated owner turn matched the old delivered request")
 	}
+	if matches, known := TranscriptRequestState(path, "req-1"); matches || !known {
+		t.Fatal("later owner turn was not recognized")
+	}
+	if matches, known := TranscriptRequestState(filepath.Join(t.TempDir(), "missing"), "req-1"); matches || known {
+		t.Fatal("unreadable transcript was treated as a later owner turn")
+	}
+	if err := os.WriteFile(path, []byte(content+`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"owner with image"},{"type":"image","source":{}}]}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if matches, known := TranscriptRequestState(path, "req-1"); matches || !known {
+		t.Fatal("multimodal owner turn did not replace old remote turn")
+	}
 	if err := EndTypedGuard("s1", "wrong"); err != nil || TypedGuardRequest("s1") == "" {
 		t.Fatal("wrong request removed the active marker")
 	}
@@ -74,9 +86,41 @@ func TestTypedGuardMarkerAndTranscriptMatch(t *testing.T) {
 	}
 }
 
+func TestAbandonTypedTurnCancelsOnlyMatchingTypedRequest(t *testing.T) {
+	h := newChannelHub()
+	result, aborted, ok := h.beginTyped("s1", ChannelDelivery{RequestID: "typed-1"})
+	if !ok || !h.abandonTyped("s1", "typed-1") {
+		t.Fatal("typed turn not abandoned")
+	}
+	select {
+	case <-aborted:
+	default:
+		t.Fatal("typed worker was not cancelled")
+	}
+	select {
+	case <-result:
+		t.Fatal("abandoned turn was reported done")
+	default:
+	}
+	if active, _ := h.guarded("s1"); active {
+		t.Fatal("abandoned turn still guards owner turns")
+	}
+	_, _, ok = h.deliver("s1", ChannelDelivery{RequestID: "channel-1"})
+	if !ok {
+		t.Fatal("channel setup")
+	}
+	h.poll("s1")
+	if !h.abandonTyped("s1", "channel-1") {
+		t.Fatal("idempotent cancellation refused")
+	}
+	if active, _ := h.guarded("s1"); !active {
+		t.Fatal("typed cancellation affected channel delivery")
+	}
+}
+
 func TestStopHookCannotFinishUnrelatedTypedTurn(t *testing.T) {
 	h := newChannelHub()
-	result, ok := h.beginTyped("s1", ChannelDelivery{RequestID: "req-1"})
+	result, _, ok := h.beginTyped("s1", ChannelDelivery{RequestID: "req-1"})
 	if !ok {
 		t.Fatal("begin typed")
 	}

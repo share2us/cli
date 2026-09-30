@@ -38,6 +38,7 @@ type channelHub struct {
 	queue    map[string][]ChannelDelivery // session -> not yet picked up
 	picked   map[string]chan struct{}     // request -> closed when picked up
 	result   map[string]chan string       // request -> the result, once
+	aborted  map[string]chan struct{}     // typed request -> closed if owner abandons the turn
 	active   map[string]map[string]bool   // session -> requests in progress
 	owner    map[string]string            // request -> session
 	guard    map[string]bool              // session -> SessionStart hook proved loaded
@@ -49,7 +50,7 @@ type channelHub struct {
 func newChannelHub() *channelHub {
 	return &channelHub{
 		seen: map[string]time.Time{}, queue: map[string][]ChannelDelivery{},
-		picked: map[string]chan struct{}{}, result: map[string]chan string{},
+		picked: map[string]chan struct{}{}, result: map[string]chan string{}, aborted: map[string]chan struct{}{},
 		active: map[string]map[string]bool{}, owner: map[string]string{},
 		guard: map[string]bool{}, proven: map[string]bool{}, channel: map[string]bool{},
 		reported: map[string]string{},
@@ -112,19 +113,39 @@ func (h *channelHub) deliver(session string, d ChannelDelivery) (picked <-chan s
 // PreToolUse hook enforce its guardrails even if the owner submits the text in
 // the small interval before the daemon's post-paste check. One session accepts
 // exactly one queued or active hop.
-func (h *channelHub) beginTyped(session string, d ChannelDelivery) (<-chan string, bool) {
+func (h *channelHub) beginTyped(session string, d ChannelDelivery) (<-chan string, <-chan struct{}, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.occupied(session) {
-		return nil, false
+		return nil, nil, false
 	}
 	r := make(chan string, 1)
+	abort := make(chan struct{})
 	if h.active[session] == nil {
 		h.active[session] = map[string]bool{}
 	}
 	h.active[session][d.RequestID] = d.Strict
 	h.result[d.RequestID], h.owner[d.RequestID] = r, session
-	return r, true
+	h.aborted[d.RequestID] = abort
+	return r, abort, true
+}
+
+// abandonTyped ends only the typed request whose prompt is no longer the last
+// human turn. It never reports success and cannot alter a channel delivery.
+func (h *channelHub) abandonTyped(session, requestID string) bool {
+	if session == "" || requestID == "" {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.owner[requestID] != session || h.channel[requestID] {
+		return true // idempotent after daemon restart or an earlier abandonment
+	}
+	if abort, ok := h.aborted[requestID]; ok {
+		close(abort)
+	}
+	h.forget(requestID)
+	return true
 }
 
 // occupied is called with h.mu held.
@@ -230,6 +251,7 @@ func (h *channelHub) guarded(session string) (active, strict bool) {
 // forget drops every record of a request. Callers hold h.mu.
 func (h *channelHub) forget(requestID string) {
 	delete(h.channel, requestID)
+	delete(h.aborted, requestID)
 	delete(h.reported, requestID)
 	if s, ok := h.owner[requestID]; ok {
 		delete(h.active[s], requestID)
@@ -259,6 +281,8 @@ func (h *channelHub) channelControl(req daemonctl.Request) (daemonctl.Response, 
 	case "channel-turn-ended":
 		h.turnEndedForHook(req.Args["session"], req.Args["request_id"], true)
 		return daemonctl.Response{OK: true}, true
+	case "channel-abandon-typed":
+		return daemonctl.Response{OK: h.abandonTyped(req.Args["session"], req.Args["request_id"])}, true
 	case "channel-alive":
 		return daemonctl.Response{OK: h.guardedAlive(req.Args["session"])}, true
 	case "channel-ready":

@@ -111,6 +111,30 @@ func TestDaemonShutdownDuringTypedHopKeepsFailClosedMarker(t *testing.T) {
 	}
 }
 
+func TestInterruptedTypedHopReportsFailureNotCompletion(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, _, dir := typedRuntime(t, "│ ❯  │", "│ ❯ [Pasted text +3 lines] │")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client := &fakeAgentClient{}
+	runtime.handleInject(ctx, client, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-interrupted", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
+	if !runtime.hub().abandonTyped("win-1", "req-interrupted") {
+		t.Fatal("could not abandon typed turn")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if runtime.holding.Load() != 0 || len(client.reports) != 2 || client.reports[1][0] != "failed" {
+		t.Fatalf("abandoned turn was not reported failed: holding=%d reports=%v", runtime.holding.Load(), client.reports)
+	}
+	hops, _ := LoadHops(0)
+	if len(hops) != 1 || hops[0].Status != "failed" || hops[0].Mode != "typed" {
+		t.Fatalf("abandoned hop history = %+v", hops)
+	}
+}
+
 func TestPlainClaudeIsNeverTypedInto(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	runtime, z, dir := typedRuntime(t, "│ ❯  │", "│ ❯ [Pasted text +3 lines] │")
