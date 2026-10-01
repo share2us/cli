@@ -32,10 +32,10 @@ func TestChannelHubDeliverPollReport(t *testing.T) {
 	if _, _, ok := h.deliver("s1", ChannelDelivery{RequestID: "r2"}); ok {
 		t.Fatal("a second delivery entered the same session")
 	}
-	if got := h.poll("s2"); len(got) != 0 {
+	if got := h.poll("s2", 123); len(got) != 0 {
 		t.Fatalf("another session got the delivery: %+v", got)
 	}
-	got := h.poll("s1")
+	got := h.poll("s1", 123)
 	if len(got) != 1 || got[0].RequestID != "r1" || !h.alive("s1") {
 		t.Fatalf("poll = %+v alive=%v", got, h.alive("s1"))
 	}
@@ -70,7 +70,7 @@ func TestChannelHubDeliverPollReport(t *testing.T) {
 func TestChannelHubTurnEndedWithoutReport(t *testing.T) {
 	h := newChannelHub()
 	_, result, _ := h.deliver("s1", ChannelDelivery{RequestID: "r1"})
-	h.poll("s1")
+	h.poll("s1", 123)
 	h.turnEnded("s1")
 	select {
 	case r := <-result:
@@ -87,7 +87,7 @@ func TestChannelHubWithdraw(t *testing.T) {
 	h := newChannelHub()
 	h.deliver("s1", ChannelDelivery{RequestID: "r1"})
 	h.withdraw("s1", "r1")
-	if got := h.poll("s1"); len(got) != 0 {
+	if got := h.poll("s1", 123); len(got) != 0 {
 		t.Fatalf("a withdrawn delivery was handed out: %+v", got)
 	}
 }
@@ -115,11 +115,11 @@ func TestChannelHubTypedHopIsGuardedAndExclusive(t *testing.T) {
 
 func TestGuardedAliveNeedsChannelAndSessionStartHook(t *testing.T) {
 	h := newChannelHub()
-	h.poll("s1")
+	h.poll("s1", 123)
 	if h.guardedAlive("s1") {
 		t.Fatal("a channel without the guard settings was trusted")
 	}
-	h.markGuardReady("s1")
+	h.markGuardReady("s1", 123)
 	if !h.guardedAlive("s1") {
 		t.Fatal("the polling channel with its SessionStart hook was not recognised")
 	}
@@ -269,15 +269,15 @@ func TestLiveSessionWithAChannelGetsTheHopDelivered(t *testing.T) {
 	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "available", Live: true}}, heldFor: 1 << 30}
 	c := &fakeAgentClient{reportNotify: make(chan struct{}, 1)}
 	runtime := rt()
-	runtime.hub().poll("win-1") // the channel is listening
-	runtime.hub().markGuardReady("win-1")
+	runtime.hub().poll("win-1", 123) // the channel is listening
+	runtime.hub().markGuardReady("win-1", 123)
 	proveReportTool(t, runtime.hub(), "win-1")
 	runtime.handleInject(context.Background(), c, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-5", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
 	var got []ChannelDelivery
 	deadline := time.Now().Add(5 * time.Second)
 	for len(got) == 0 && time.Now().Before(deadline) {
-		got = runtime.hub().poll("win-1")
+		got = runtime.hub().poll("win-1", 123)
 		time.Sleep(5 * time.Millisecond)
 	}
 	if len(got) != 1 || got[0].RequestID != "req-5" || !strings.Contains(got[0].Prompt, "go") {
@@ -312,8 +312,8 @@ func TestChannelPickupWithoutClaudeStartingFallsBackToWaiting(t *testing.T) {
 	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "available", Live: true}}, heldFor: 1 << 30}
 	c := &fakeAgentClient{reportNotify: make(chan struct{}, 1)}
 	runtime := rt()
-	runtime.hub().poll("win-1")
-	runtime.hub().markGuardReady("win-1")
+	runtime.hub().poll("win-1", 123)
+	runtime.hub().markGuardReady("win-1", 123)
 	proveReportTool(t, runtime.hub(), "win-1")
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime.handleInject(ctx, c, r, keyedDeps(),
@@ -321,7 +321,7 @@ func TestChannelPickupWithoutClaudeStartingFallsBackToWaiting(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	deliveries := 0
 	for time.Now().Before(deadline) {
-		if got := runtime.hub().poll("win-1"); len(got) != 0 {
+		if got := runtime.hub().poll("win-1", 123); len(got) != 0 {
 			deliveries += len(got) // MCP picks it up, but Claude never becomes busy
 			break
 		}
@@ -336,7 +336,7 @@ func TestChannelPickupWithoutClaudeStartingFallsBackToWaiting(t *testing.T) {
 	// must not be queued into it a second time.
 	until := time.Now().Add(6 * injectHoldPoll)
 	for time.Now().Before(until) {
-		deliveries += len(runtime.hub().poll("win-1"))
+		deliveries += len(runtime.hub().poll("win-1", 123))
 		time.Sleep(time.Millisecond)
 	}
 	cancel()
@@ -360,8 +360,8 @@ func TestBusySessionCannotConfirmDroppedChannelDelivery(t *testing.T) {
 	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "busy", Live: true}}, heldFor: 1 << 30}
 	c := &fakeAgentClient{reportNotify: make(chan struct{}, 1)}
 	runtime := rt()
-	runtime.hub().poll("win-1")
-	runtime.hub().markGuardReady("win-1")
+	runtime.hub().poll("win-1", 123)
+	runtime.hub().markGuardReady("win-1", 123)
 	proveReportTool(t, runtime.hub(), "win-1")
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime.handleInject(ctx, c, r, keyedDeps(),
@@ -371,7 +371,7 @@ func TestBusySessionCannotConfirmDroppedChannelDelivery(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("busy session did not report the hop waiting")
 	}
-	if got := runtime.hub().poll("win-1"); len(got) != 0 {
+	if got := runtime.hub().poll("win-1", 123); len(got) != 0 {
 		t.Fatalf("queued into an already-busy session: %+v", got)
 	}
 	runtime.hub().turnEnded("win-1") // the owner's turn, not this hop
@@ -398,15 +398,15 @@ func TestStopBeforeBusyTransitionCannotCompleteChannelHop(t *testing.T) {
 	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "available", Live: true}}, heldFor: 1 << 30}
 	c := &fakeAgentClient{reportNotify: make(chan struct{}, 2)}
 	runtime := rt()
-	runtime.hub().poll("win-1")
-	runtime.hub().markGuardReady("win-1")
+	runtime.hub().poll("win-1", 123)
+	runtime.hub().markGuardReady("win-1", 123)
 	proveReportTool(t, runtime.hub(), "win-1")
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime.handleInject(ctx, c, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-early-stop", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go"}))
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if got := runtime.hub().poll("win-1"); len(got) == 1 {
+		if got := runtime.hub().poll("win-1", 123); len(got) == 1 {
 			break
 		}
 		time.Sleep(time.Millisecond)
@@ -442,8 +442,8 @@ func TestOwnerTurnCannotCompleteUnreportedChannelHop(t *testing.T) {
 			r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Live: true}}, statuses: []string{"available", "available", "busy"}, heldFor: 1 << 30}
 			c := &fakeAgentClient{}
 			runtime := rt()
-			runtime.hub().poll("win-1")
-			runtime.hub().markGuardReady("win-1")
+			runtime.hub().poll("win-1", 123)
+			runtime.hub().markGuardReady("win-1", 123)
 			if proven {
 				proveReportTool(t, runtime.hub(), "win-1")
 			}
@@ -453,7 +453,7 @@ func TestOwnerTurnCannotCompleteUnreportedChannelHop(t *testing.T) {
 			deliveries := 0
 			until := time.Now().Add(100 * time.Millisecond)
 			for time.Now().Before(until) {
-				deliveries += len(runtime.hub().poll("win-1"))
+				deliveries += len(runtime.hub().poll("win-1", 123))
 				runtime.hub().turnEnded("win-1")
 				time.Sleep(time.Millisecond)
 			}
@@ -480,11 +480,24 @@ func proveReportTool(t *testing.T, h *channelHub, session string) {
 	if _, _, ok := h.deliver(session, ChannelDelivery{RequestID: "proof"}); !ok {
 		t.Fatal("proof setup")
 	}
-	h.poll(session)
+	h.poll(session, 123)
 	if !h.report("proof", "confirmed") {
 		t.Fatal("proof report")
 	}
 	h.turnEnded(session)
+}
+
+func TestNewGuardRegistrationResetsChannelProof(t *testing.T) {
+	h := newChannelHub()
+	h.markGuardReady("s1", 123)
+	proveReportTool(t, h, "s1")
+	if !h.channelReady("s1") {
+		t.Fatal("channel proof was not established")
+	}
+	h.markGuardReady("s1", 123)
+	if !h.guardRegistered("s1", 123) || h.channelReady("s1") {
+		t.Fatal("a new SessionStart reused the previous process's channel proof")
+	}
 }
 
 func TestUnreportedChannelExpiresWithoutCompletion(t *testing.T) {
@@ -496,13 +509,13 @@ func TestUnreportedChannelExpiresWithoutCompletion(t *testing.T) {
 	r := &sessionFake{discovered: []DiscoveredSession{{SessionID: "win-1", Tool: "claude", Project: dir, Status: "available", Live: true}}, heldFor: 1 << 30}
 	c := &fakeAgentClient{}
 	runtime := rt()
-	runtime.hub().poll("win-1")
-	runtime.hub().markGuardReady("win-1")
+	runtime.hub().poll("win-1", 123)
+	runtime.hub().markGuardReady("win-1", 123)
 	proveReportTool(t, runtime.hub(), "win-1")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	runtime.handleInject(ctx, c, r, keyedDeps(), signedReq(t, clicore.AgentRequest{ID: "expired", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "go", CreatedAt: time.Now().Add(-injectHoldMax - time.Second).UTC().Format(time.RFC3339)}))
-	runtime.hub().poll("win-1")
+	runtime.hub().poll("win-1", 123)
 	deadline := time.Now().Add(time.Second)
 	for runtime.holding.Load() != 0 && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
@@ -520,8 +533,8 @@ func TestUnreportedChannelExpiresWithoutCompletion(t *testing.T) {
 
 func TestChannelReadinessRequiresReportAndResetsOnStart(t *testing.T) {
 	h := newChannelHub()
-	h.poll("s1")
-	h.markGuardReady("s1")
+	h.poll("s1", 123)
+	h.markGuardReady("s1", 123)
 	if h.channelReady("s1") {
 		t.Fatal("poll and guard incorrectly prove channel readiness")
 	}
@@ -548,7 +561,7 @@ func TestChannelReadinessRequiresReportAndResetsOnStart(t *testing.T) {
 	if !h.channelReady("s1") || h.channelReady("s2") {
 		t.Fatal("readiness is not session-specific")
 	}
-	h.markGuardReady("s1")
+	h.markGuardReady("s1", 123)
 	if h.channelReady("s1") {
 		t.Fatal("restart retained readiness")
 	}

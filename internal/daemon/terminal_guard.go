@@ -127,10 +127,18 @@ func TerminalHookPane(session string, pid int) *ZellijPane {
 	return record.Zellij
 }
 
-// EndTerminalSession clears stale proof and active markers only after Claude
-// exits; no tool call from that process can follow SessionEnd.
-func EndTerminalSession(session string) {
+// EndTerminalSession clears only records owned by the Claude process that
+// exited. Another process may have resumed the same session ID and be running
+// a guarded hop, even while the daemon is unavailable.
+func EndTerminalSession(session string, pid int) {
+	if pid <= 1 {
+		return
+	}
 	for _, kind := range []string{"proof", "active"} {
+		record, ok := readTerminalGuard(session, kind)
+		if !ok || record.PID != pid {
+			continue
+		}
 		if path, err := terminalGuardPath(session, kind); err == nil {
 			_ = os.Remove(path)
 		}
@@ -139,11 +147,11 @@ func EndTerminalSession(session string) {
 
 // BeginTypedGuard persists the active hop before any remote text is pasted.
 // If the daemon dies, the hook can still deny tool use until the turn ends.
-func BeginTypedGuard(session, request string) error {
-	if request == "" {
+func BeginTypedGuard(session, request string, pid int) error {
+	if request == "" || pid <= 1 {
 		return os.ErrInvalid
 	}
-	return writeTerminalGuard(session, "active", terminalGuardRecord{Session: session, Request: request})
+	return writeTerminalGuard(session, "active", terminalGuardRecord{Session: session, Request: request, PID: pid})
 }
 
 func TypedGuardRequest(session string) string {

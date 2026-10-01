@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Agent-channel control requests are bound to the Claude session that actually
+  connected to the local daemon; another same-user process can no longer claim
+  a session or complete its request using the shared control token.
+
 ## [20260930212043] - 2026-09-30
 
 ### Fixed

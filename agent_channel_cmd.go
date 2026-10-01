@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strings"
+	"time"
 
 	"github.com/share2us/cli-core/daemonctl"
 
@@ -77,8 +78,11 @@ func (a app) agentHook(args []string) int {
 	switch args[0] {
 	case "session-start":
 		a.proveTerminalHook(in.SessionID)
-		daemonctl.Call(daemonctl.Request{Op: "channel-guard-ready", Args: map[string]string{"session": in.SessionID}})
+		markChannelGuardReady(in.SessionID, daemonctl.Call, time.Sleep)
 	case "user-prompt-submit":
+		// A just-started Claude process may not appear in `claude agents` at
+		// SessionStart yet. This later hook gives the guard one more chance.
+		ensureChannelGuardReady(in.SessionID, daemonctl.Call)
 		if in.PromptID != "" {
 			a.proveTerminalPromptHook(in.SessionID)
 		}
@@ -132,14 +136,52 @@ func (a app) agentHook(args []string) int {
 				}
 			}
 		}
-		daemonctl.Call(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": in.SessionID, "request_id": request}})
-		if request != "" {
-			_ = daemon.EndTypedGuard(in.SessionID, request)
-		}
+		completeHookTurn(in.SessionID, request, daemonctl.Call)
 	case "session-end":
-		daemon.EndTerminalSession(in.SessionID)
+		a.endTerminalSession(in.SessionID)
 	}
 	return 0
+}
+
+// Claude may invoke SessionStart before its process appears in `claude agents`.
+// Only an acknowledged registration proves this hook to the daemon.
+func markChannelGuardReady(session string, call daemon.ChannelCaller, wait func(time.Duration)) bool {
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, ok := call(daemonctl.Request{Op: "channel-guard-ready", Args: map[string]string{"session": session}})
+		if ok && resp.OK {
+			return true
+		}
+		if wait == nil {
+			break
+		}
+		if attempt < 2 {
+			wait(time.Duration(attempt+1) * 500 * time.Millisecond)
+		}
+	}
+	return false
+}
+
+// Most owner prompts need no process discovery. Register again only if the
+// daemon missed SessionStart or restarted since this Claude session began.
+func ensureChannelGuardReady(session string, call daemon.ChannelCaller) bool {
+	if resp, ok := call(daemonctl.Request{Op: "channel-guard-registered", Args: map[string]string{"session": session}}); ok && resp.OK {
+		return true
+	}
+	return markChannelGuardReady(session, call, nil)
+}
+
+// The local typed marker is the fail-closed fallback if the daemon vanishes
+// or refuses the Stop control. Clearing it before an acknowledgement would
+// leave the daemon's request active while the hook stops enforcing it.
+func completeHookTurn(session, request string, call daemon.ChannelCaller) bool {
+	resp, ok := call(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": session, "request_id": request}})
+	if !ok || !resp.OK {
+		return false
+	}
+	if request != "" {
+		_ = daemon.EndTypedGuard(session, request)
+	}
+	return true
 }
 
 // A distinct Claude prompt_id means the typed turn is no longer the turn
@@ -165,6 +207,13 @@ func (a app) proveTerminalPromptHook(sessionID string) {
 	s, err := daemon.FindOwnSession(context.Background())
 	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
 		_ = daemon.ProveTerminalPromptHook(sessionID, s.PID, daemon.CurrentZellijPane())
+	}
+}
+
+func (a app) endTerminalSession(sessionID string) {
+	s, err := daemon.FindOwnSession(context.Background())
+	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
+		daemon.EndTerminalSession(sessionID, s.PID)
 	}
 }
 

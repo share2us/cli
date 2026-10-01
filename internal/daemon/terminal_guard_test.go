@@ -48,7 +48,7 @@ func TestTerminalHookProofIsProcessBoundAndChannelIndependent(t *testing.T) {
 
 func TestTypedGuardMarkerAndTranscriptMatch(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := BeginTypedGuard("s1", "req-1"); err != nil {
+	if err := BeginTypedGuard("s1", "req-1", 123); err != nil {
 		t.Fatal(err)
 	}
 	if TypedGuardRequest("s1") != "req-1" || TypedGuardRequest("s2") != "" {
@@ -95,15 +95,33 @@ func TestTypedGuardMarkerAndTranscriptMatch(t *testing.T) {
 	if err := EndTypedGuard("s1", "req-1"); err != nil || TypedGuardRequest("s1") != "" {
 		t.Fatal("matching request did not remove the marker")
 	}
-	if err := BeginTypedGuard("s1", "req-2"); err != nil {
+	if err := BeginTypedGuard("s1", "req-2", 123); err != nil {
 		t.Fatal(err)
 	}
 	if err := ProveTerminalHook("s1", 123, &ZellijPane{Session: "test", Pane: "1"}); err != nil {
 		t.Fatal(err)
 	}
-	EndTerminalSession("s1")
+	EndTerminalSession("s1", 123)
 	if TypedGuardRequest("s1") != "" || TerminalHookReady("s1", 123) {
 		t.Fatal("SessionEnd retained stale guard records")
+	}
+}
+
+func TestOtherClaudeSessionEndCannotRemoveActiveTypedGuard(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := ProveTerminalHook("same-id", 100, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := BeginTypedGuard("same-id", "active-hop", 100); err != nil {
+		t.Fatal(err)
+	}
+	EndTerminalSession("same-id", 300)
+	if TypedGuardRequest("same-id") != "active-hop" || !TerminalHookReady("same-id", 100) {
+		t.Fatal("another Claude process erased the running hop's fallback guard")
+	}
+	EndTerminalSession("same-id", 100)
+	if TypedGuardRequest("same-id") != "" || TerminalHookReady("same-id", 100) {
+		t.Fatal("own SessionEnd did not clear its guard")
 	}
 }
 
@@ -130,7 +148,7 @@ func TestAbandonTypedTurnCancelsOnlyMatchingTypedRequest(t *testing.T) {
 	if !ok {
 		t.Fatal("channel setup")
 	}
-	h.poll("s1")
+	h.poll("s1", 123)
 	if !h.abandonTyped("s1", "channel-1") {
 		t.Fatal("idempotent cancellation refused")
 	}
@@ -165,11 +183,11 @@ func TestChannelReportStillCompletesThroughVerifiedStopControl(t *testing.T) {
 	if !ok {
 		t.Fatal("channel setup")
 	}
-	h.poll("s1")
+	h.poll("s1", 123)
 	if !h.report("channel-1", "reported") {
 		t.Fatal("channel report")
 	}
-	h.channelControl(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": "s1"}})
+	h.channelControl(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": "s1"}}, func(int, string) int { return 123 })
 	select {
 	case got := <-result:
 		if got != "reported" {

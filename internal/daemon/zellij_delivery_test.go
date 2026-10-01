@@ -161,7 +161,7 @@ func TestPlainClaudeIsNeverTypedInto(t *testing.T) {
 func TestOldWrapperWithoutPromptSubmitHookTypesNothing(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	runtime, z, dir := typedRuntime(t, "│ ❯  │")
-	EndTerminalSession("win-1")
+	EndTerminalSession("win-1", 123)
 	if err := ProveTerminalHook("win-1", 123, &ZellijPane{Session: "stale-name", Pane: "4"}); err != nil {
 		t.Fatal(err)
 	}
