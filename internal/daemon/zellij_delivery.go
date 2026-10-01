@@ -58,7 +58,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	if cr, ok := runner.(ClaudeRunner); ok {
 		strict = cr.Strict
 	}
-	result, aborted, accepted := rt.hub().beginTyped(req.TargetSessionID, ChannelDelivery{RequestID: req.ID, From: req.SenderDeviceID, Strict: strict})
+	result, aborted, accepted := rt.hub().beginTypedForProcess(req.TargetSessionID, ChannelDelivery{RequestID: req.ID, From: req.SenderDeviceID, Strict: strict}, session.PID)
 	if !accepted {
 		return false
 	}

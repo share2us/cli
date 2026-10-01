@@ -74,7 +74,7 @@ func TestChannelControlBindsPeerToSessionAndRequest(t *testing.T) {
 	if r := request(101, "channel-turn-ended", map[string]string{"session": "s1", "request_id": "r1"}); !r.OK || h.owner["r1"] != "" {
 		t.Fatalf("own turn end refused: %+v", r)
 	}
-	if _, _, ok := h.beginTyped("s1", ChannelDelivery{RequestID: "typed"}); !ok {
+	if _, _, ok := h.beginTypedForProcess("s1", ChannelDelivery{RequestID: "typed"}, 100); !ok {
 		t.Fatal("begin typed")
 	}
 	if r := request(201, "channel-abandon-typed", map[string]string{"session": "s1", "request_id": "typed"}); r.OK || h.owner["typed"] != "s1" {
@@ -194,5 +194,66 @@ func TestChannelProofCannotCarryToResumedClaudeProcess(t *testing.T) {
 	h.withdraw("same-id", "old-queued")
 	if !request(301, "channel-guard-ready").OK || h.proven["same-id"] || !request(301, "channel-guard-registered").OK {
 		t.Fatal("resumed process did not replace stale hook/channel proof")
+	}
+}
+
+func TestSecondClaudeProcessCannotClearFirstProcessHop(t *testing.T) {
+	rt := &Runtime{}
+	h := rt.hub()
+	rt.channelCaller.discover = func(context.Context) (map[int]DiscoveredSession, error) {
+		return map[int]DiscoveredSession{
+			100: {PID: 100, SessionID: "same-id", Tool: "claude"},
+			300: {PID: 300, SessionID: "same-id", Tool: "claude"},
+		}, nil
+	}
+	rt.channelCaller.parent = func(pid int) (int, error) {
+		if pid == 101 {
+			return 100, nil
+		}
+		if pid == 301 {
+			return 300, nil
+		}
+		return 1, nil
+	}
+	request := func(pid int, op string, args map[string]string) daemonctl.Response {
+		return rt.control()(daemonctl.Request{PeerPID: pid, Op: op, Args: args})
+	}
+	if !request(101, "channel-guard-ready", map[string]string{"session": "same-id"}).OK {
+		t.Fatal("first process guard registration")
+	}
+	if _, _, ok := h.deliver("same-id", ChannelDelivery{RequestID: "channel-hop"}); !ok {
+		t.Fatal("queue channel hop")
+	}
+	if !request(101, "channel-poll", map[string]string{"session": "same-id"}).OK {
+		t.Fatal("first process poll")
+	}
+	if request(301, "channel-report", map[string]string{"request_id": "channel-hop", "result": "forged"}).OK {
+		t.Fatal("second process reported first process hop")
+	}
+	if !request(101, "channel-report", map[string]string{"request_id": "channel-hop", "result": "real"}).OK {
+		t.Fatal("first process report")
+	}
+	request(301, "channel-turn-ended", map[string]string{"session": "same-id"})
+	if h.owner["channel-hop"] != "same-id" {
+		t.Fatal("second process ended first process channel hop")
+	}
+	request(101, "channel-turn-ended", map[string]string{"session": "same-id"})
+	if h.owner["channel-hop"] != "" {
+		t.Fatal("first process could not end its channel hop")
+	}
+	if _, _, ok := h.beginTypedForProcess("same-id", ChannelDelivery{RequestID: "typed-hop"}, 100); !ok {
+		t.Fatal("begin typed hop")
+	}
+	if request(301, "channel-abandon-typed", map[string]string{"session": "same-id", "request_id": "typed-hop"}).OK || h.owner["typed-hop"] != "same-id" {
+		t.Fatal("second process abandoned first process typed hop")
+	}
+	if request(301, "channel-turn-ended", map[string]string{"session": "same-id", "request_id": "typed-hop"}).OK {
+		t.Fatal("second process received an ACK that would clear the typed marker")
+	}
+	if h.owner["typed-hop"] != "same-id" {
+		t.Fatal("second process ended first process typed hop")
+	}
+	if !request(101, "channel-abandon-typed", map[string]string{"session": "same-id", "request_id": "typed-hop"}).OK {
+		t.Fatal("first process could not abandon its typed hop")
 	}
 }
