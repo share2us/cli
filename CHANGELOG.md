@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261001110746] - 2026-10-01
+
 ### Fixed
 
 - Agent-channel control requests are bound to the Claude session that actually
