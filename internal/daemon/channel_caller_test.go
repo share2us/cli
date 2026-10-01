@@ -172,12 +172,26 @@ func TestChannelProofCannotCarryToResumedClaudeProcess(t *testing.T) {
 	if !h.channelReady("same-id") {
 		t.Fatal("first process was not ready")
 	}
+	oldPicked, _, ok := h.deliver("same-id", ChannelDelivery{RequestID: "old-queued"})
+	if !ok {
+		t.Fatal("queue for first process")
+	}
 	if request(301, "channel-guard-registered").OK {
 		t.Fatal("resumed process inherited the first process's hook proof")
 	}
-	if !request(301, "channel-poll").OK || h.channelReady("same-id") {
+	resumedPoll := request(301, "channel-poll")
+	if !resumedPoll.OK || h.channelReady("same-id") {
 		t.Fatal("resumed process inherited the first process's channel proof")
 	}
+	select {
+	case <-oldPicked:
+		t.Fatal("resumed process picked up a delivery queued for the old guarded process")
+	default:
+	}
+	if len(h.queue["same-id"]) != 1 {
+		t.Fatal("old delivery was removed from the queue")
+	}
+	h.withdraw("same-id", "old-queued")
 	if !request(301, "channel-guard-ready").OK || h.proven["same-id"] || !request(301, "channel-guard-registered").OK {
 		t.Fatal("resumed process did not replace stale hook/channel proof")
 	}

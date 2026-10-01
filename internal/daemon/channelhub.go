@@ -183,6 +183,11 @@ func (h *channelHub) poll(session string, claudePID int) []ChannelDelivery {
 	defer h.mu.Unlock()
 	h.seen[session] = time.Now()
 	h.seenPID[session] = claudePID
+	// A resumed Claude process may reuse the session ID while an old delivery
+	// remains queued. Do not hand it a prompt until its own hook registers.
+	if h.guard[session] && h.guardPID[session] != claudePID {
+		return nil
+	}
 	out := h.queue[session]
 	delete(h.queue, session)
 	for _, d := range out {
