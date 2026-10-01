@@ -91,7 +91,7 @@ func (v *channelCallerVerifier) inSession(peerPID int, session string) bool {
 			}
 		}
 		if len(v.known) >= maxCallerCacheEntries {
-			v.known = make(map[int]verifiedCaller) // fail closed on the next call
+			v.known = make(map[int]verifiedCaller) // force fresh attestation next time
 		}
 	}
 	v.known[peerPID] = verifiedCaller{session: verifiedSession, parent: directParent, expires: time.Now().Add(lifetime)}
