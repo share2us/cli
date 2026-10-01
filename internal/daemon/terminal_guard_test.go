@@ -130,7 +130,7 @@ func TestAbandonTypedTurnCancelsOnlyMatchingTypedRequest(t *testing.T) {
 	if !ok {
 		t.Fatal("channel setup")
 	}
-	h.poll("s1")
+	h.poll("s1", 123)
 	if !h.abandonTyped("s1", "channel-1") {
 		t.Fatal("idempotent cancellation refused")
 	}
@@ -165,11 +165,11 @@ func TestChannelReportStillCompletesThroughVerifiedStopControl(t *testing.T) {
 	if !ok {
 		t.Fatal("channel setup")
 	}
-	h.poll("s1")
+	h.poll("s1", 123)
 	if !h.report("channel-1", "reported") {
 		t.Fatal("channel report")
 	}
-	h.channelControl(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": "s1"}}, func(int, string) bool { return true })
+	h.channelControl(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": "s1"}}, func(int, string) int { return 123 })
 	select {
 	case got := <-result:
 		if got != "reported" {

@@ -21,9 +21,10 @@ type channelCallerVerifier struct {
 }
 
 type verifiedCaller struct {
-	session string
-	parent  int
-	expires time.Time
+	session   string
+	claudePID int
+	parent    int
+	expires   time.Time
 }
 
 const callerCacheLifetime = 10 * time.Second
@@ -41,8 +42,14 @@ func discoverClaudeProcesses(ctx context.Context) (map[int]DiscoveredSession, er
 }
 
 func (v *channelCallerVerifier) inSession(peerPID int, session string) bool {
+	return v.sessionPID(peerPID, session) > 1
+}
+
+// sessionPID returns the nearest Claude process PID only when it owns session.
+// Zero is a denial, including unsupported transports and discovery failures.
+func (v *channelCallerVerifier) sessionPID(peerPID int, session string) int {
 	if peerPID <= 1 || session == "" {
-		return false
+		return 0
 	}
 	parent := v.parent
 	if parent == nil {
@@ -50,12 +57,15 @@ func (v *channelCallerVerifier) inSession(peerPID int, session string) bool {
 	}
 	directParent, err := parent(peerPID)
 	if err != nil {
-		return false
+		return 0
 	}
 	v.mu.Lock()
 	if known, ok := v.known[peerPID]; ok && known.parent == directParent && time.Now().Before(known.expires) {
 		v.mu.Unlock()
-		return known.session == session
+		if known.session == session {
+			return known.claudePID
+		}
+		return 0
 	}
 	v.mu.Unlock()
 
@@ -75,9 +85,11 @@ func (v *channelCallerVerifier) inSession(peerPID int, session string) bool {
 		}, parent)
 	}
 	verifiedSession := ""
+	verifiedPID := 0
 	lifetime := callerMissLifetime
 	if matched.Tool == "claude" && matched.PID > 1 {
 		verifiedSession = matched.SessionID
+		verifiedPID = matched.PID
 		lifetime = callerCacheLifetime
 	}
 	v.mu.Lock()
@@ -94,7 +106,10 @@ func (v *channelCallerVerifier) inSession(peerPID int, session string) bool {
 			v.known = make(map[int]verifiedCaller) // force fresh attestation next time
 		}
 	}
-	v.known[peerPID] = verifiedCaller{session: verifiedSession, parent: directParent, expires: time.Now().Add(lifetime)}
+	v.known[peerPID] = verifiedCaller{session: verifiedSession, claudePID: verifiedPID, parent: directParent, expires: time.Now().Add(lifetime)}
 	v.mu.Unlock()
-	return verifiedSession == session
+	if verifiedSession == session {
+		return verifiedPID
+	}
+	return 0
 }

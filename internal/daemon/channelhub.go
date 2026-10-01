@@ -35,6 +35,7 @@ const channelAlive = 5 * time.Second
 type channelHub struct {
 	mu       sync.Mutex
 	seen     map[string]time.Time         // session -> last poll
+	seenPID  map[string]int               // session -> Claude process behind last poll
 	queue    map[string][]ChannelDelivery // session -> not yet picked up
 	picked   map[string]chan struct{}     // request -> closed when picked up
 	result   map[string]chan string       // request -> the result, once
@@ -42,6 +43,7 @@ type channelHub struct {
 	active   map[string]map[string]bool   // session -> requests in progress
 	owner    map[string]string            // request -> session
 	guard    map[string]bool              // session -> SessionStart hook proved loaded
+	guardPID map[string]int               // session -> Claude process whose hook registered
 	proven   map[string]bool              // session -> a channel-delivered request was answered via report
 	channel  map[string]bool              // request -> requires an explicit report, never Stop
 	reported map[string]string            // request -> result, held until the guarded turn ends
@@ -49,27 +51,28 @@ type channelHub struct {
 
 func newChannelHub() *channelHub {
 	return &channelHub{
-		seen: map[string]time.Time{}, queue: map[string][]ChannelDelivery{},
+		seen: map[string]time.Time{}, seenPID: map[string]int{}, queue: map[string][]ChannelDelivery{},
 		picked: map[string]chan struct{}{}, result: map[string]chan string{}, aborted: map[string]chan struct{}{},
 		active: map[string]map[string]bool{}, owner: map[string]string{},
-		guard: map[string]bool{}, proven: map[string]bool{}, channel: map[string]bool{},
+		guard: map[string]bool{}, guardPID: map[string]int{}, proven: map[string]bool{}, channel: map[string]bool{},
 		reported: map[string]string{},
 	}
 }
 
-func (h *channelHub) markGuardReady(session string) {
+func (h *channelHub) markGuardReady(session string, claudePID int) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if session != "" {
+	if session != "" && claudePID > 1 {
 		h.guard[session] = true
+		h.guardPID[session] = claudePID
 		delete(h.proven, session)
 	}
 }
 
-func (h *channelHub) guardRegistered(session string) bool {
+func (h *channelHub) guardRegistered(session string, claudePID int) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return session != "" && h.guard[session]
+	return session != "" && claudePID > 1 && h.guard[session] && h.guardPID[session] == claudePID
 }
 
 // channelReady is separate from guardedAlive: polling and hooks do not prove
@@ -80,7 +83,7 @@ func (h *channelHub) channelReady(session string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	seen, ok := h.seen[session]
-	return ok && time.Since(seen) < channelAlive && h.guard[session] && h.proven[session]
+	return ok && time.Since(seen) < channelAlive && h.guard[session] && h.guardPID[session] > 1 && h.seenPID[session] == h.guardPID[session] && h.proven[session]
 }
 
 // guardedAlive proves both halves started by `s2u claude` are present: the
@@ -89,7 +92,7 @@ func (h *channelHub) guardedAlive(session string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	seen, ok := h.seen[session]
-	return ok && time.Since(seen) < channelAlive && h.guard[session]
+	return ok && time.Since(seen) < channelAlive && h.guard[session] && h.guardPID[session] > 1 && h.seenPID[session] == h.guardPID[session]
 }
 
 // alive reports whether a channel for session polled recently.
@@ -175,10 +178,11 @@ func (h *channelHub) withdraw(session, requestID string) {
 
 // poll is the channel asking for its session's hops: it marks the channel
 // alive and hands over (and marks in progress) whatever is queued.
-func (h *channelHub) poll(session string) []ChannelDelivery {
+func (h *channelHub) poll(session string, claudePID int) []ChannelDelivery {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.seen[session] = time.Now()
+	h.seenPID[session] = claudePID
 	out := h.queue[session]
 	delete(h.queue, session)
 	for _, d := range out {
@@ -281,17 +285,24 @@ func (h *channelHub) forget(requestID string) {
 // channelControl accepts a state-changing channel op only from a process inside
 // the Claude session it names. The control token alone authenticates the user,
 // not the session: another same-user process can read it too.
-func (h *channelHub) channelControl(req daemonctl.Request, callerInSession func(int, string) bool) (daemonctl.Response, bool) {
+func (h *channelHub) channelControl(req daemonctl.Request, callerSessionPID func(int, string) int) (daemonctl.Response, bool) {
+	callerPID := func(session string) int {
+		if session == "" || callerSessionPID == nil {
+			return 0
+		}
+		return callerSessionPID(req.PeerPID, session)
+	}
 	authorized := func(session string) bool {
-		return session != "" && callerInSession != nil && callerInSession(req.PeerPID, session)
+		return callerPID(session) > 1
 	}
 	switch req.Op {
 	case "channel-poll":
 		session := req.Args["session"]
-		if !authorized(session) {
+		pid := callerPID(session)
+		if pid <= 1 {
 			return daemonctl.Response{Err: "caller is not in the claimed Claude session"}, true
 		}
-		b, _ := json.Marshal(h.poll(session))
+		b, _ := json.Marshal(h.poll(session, pid))
 		return daemonctl.Response{OK: true, Data: b}, true
 	case "channel-report":
 		if !authorized(h.requestSession(req.Args["request_id"])) {
@@ -314,13 +325,15 @@ func (h *channelHub) channelControl(req daemonctl.Request, callerInSession func(
 	case "channel-ready":
 		return daemonctl.Response{OK: h.channelReady(req.Args["session"])}, true
 	case "channel-guard-ready":
-		if !authorized(req.Args["session"]) {
+		pid := callerPID(req.Args["session"])
+		if pid <= 1 {
 			return daemonctl.Response{Err: "caller is not in the claimed Claude session"}, true
 		}
-		h.markGuardReady(req.Args["session"])
+		h.markGuardReady(req.Args["session"], pid)
 		return daemonctl.Response{OK: req.Args["session"] != ""}, true
 	case "channel-guard-registered":
-		return daemonctl.Response{OK: h.guardRegistered(req.Args["session"])}, true
+		session := req.Args["session"]
+		return daemonctl.Response{OK: h.guardRegistered(session, callerPID(session))}, true
 	case "channel-guarded":
 		active, strict := h.guarded(req.Args["session"])
 		b, _ := json.Marshal(map[string]bool{"strict": strict})

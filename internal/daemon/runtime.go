@@ -213,7 +213,7 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 // control returns the handler backing the control endpoint.
 func (rt *Runtime) control() func(daemonctl.Request) daemonctl.Response {
 	return func(req daemonctl.Request) daemonctl.Response {
-		if resp, ok := rt.hub().channelControl(req, rt.channelCaller.inSession); ok {
+		if resp, ok := rt.hub().channelControl(req, rt.channelCaller.sessionPID); ok {
 			return resp
 		}
 		switch req.Op {

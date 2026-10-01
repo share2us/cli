@@ -88,7 +88,7 @@ func TestChannelControlBindsPeerToSessionAndRequest(t *testing.T) {
 func TestChannelCallerDiscoveryDoesNotBlockOtherPeers(t *testing.T) {
 	started, release := make(chan struct{}), make(chan struct{})
 	v := &channelCallerVerifier{
-		known: map[int]verifiedCaller{201: {session: "s2", parent: 200, expires: time.Now().Add(time.Minute)}},
+		known: map[int]verifiedCaller{201: {session: "s2", claudePID: 200, parent: 200, expires: time.Now().Add(time.Minute)}},
 		parent: func(pid int) (int, error) {
 			if pid == 201 {
 				return 200, nil
@@ -131,5 +131,54 @@ func TestChannelCallerCachesFailedDiscoveryBriefly(t *testing.T) {
 	}
 	if v.inSession(101, "s1") || v.inSession(101, "s1") || calls != 1 {
 		t.Fatalf("failed discovery retried without a pause: calls=%d", calls)
+	}
+}
+
+func TestChannelProofCannotCarryToResumedClaudeProcess(t *testing.T) {
+	rt := &Runtime{}
+	h := rt.hub()
+	rt.channelCaller.discover = func(context.Context) (map[int]DiscoveredSession, error) {
+		return map[int]DiscoveredSession{
+			100: {PID: 100, SessionID: "same-id", Tool: "claude"},
+			300: {PID: 300, SessionID: "same-id", Tool: "claude"},
+		}, nil
+	}
+	rt.channelCaller.parent = func(pid int) (int, error) {
+		switch pid {
+		case 101:
+			return 100, nil
+		case 301:
+			return 300, nil
+		default:
+			return 1, nil
+		}
+	}
+	call := rt.control()
+	request := func(pid int, op string) daemonctl.Response {
+		return call(daemonctl.Request{PeerPID: pid, Op: op, Args: map[string]string{"session": "same-id"}})
+	}
+	if !request(101, "channel-guard-ready").OK || !request(101, "channel-poll").OK {
+		t.Fatal("first process did not register and poll")
+	}
+	// A real channel report in the first process proves delivery once.
+	if _, _, ok := h.deliver("same-id", ChannelDelivery{RequestID: "proof"}); !ok {
+		t.Fatal("queue proof")
+	}
+	h.poll("same-id", 100)
+	if !h.report("proof", "confirmed") {
+		t.Fatal("report proof")
+	}
+	h.turnEnded("same-id")
+	if !h.channelReady("same-id") {
+		t.Fatal("first process was not ready")
+	}
+	if request(301, "channel-guard-registered").OK {
+		t.Fatal("resumed process inherited the first process's hook proof")
+	}
+	if !request(301, "channel-poll").OK || h.channelReady("same-id") {
+		t.Fatal("resumed process inherited the first process's channel proof")
+	}
+	if !request(301, "channel-guard-ready").OK || h.proven["same-id"] || !request(301, "channel-guard-registered").OK {
+		t.Fatal("resumed process did not replace stale hook/channel proof")
 	}
 }
