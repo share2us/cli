@@ -10,25 +10,28 @@ import (
 	"time"
 )
 
-// channelCallerVerifier binds a control socket's kernel-attested peer PID to
-// one live Claude process. A short cache avoids running `claude agents` for
-// every poll; each request still has to descend from that same process.
+// channelCallerVerifier binds each control socket's kernel-attested peer PID
+// to its NEAREST live agent session. Caching by the exact peer process (not by
+// the claimed session) keeps a nested Claude session from claiming its parent.
 type channelCallerVerifier struct {
 	mu       sync.Mutex
-	known    map[string]verifiedClaudeProcess
+	known    map[int]verifiedCaller
 	discover func(context.Context) (map[int]DiscoveredSession, error)
 	parent   func(int) (int, error)
 }
 
-type verifiedClaudeProcess struct {
-	pid     int
+type verifiedCaller struct {
+	session string
+	parent  int
 	expires time.Time
 }
 
 const callerCacheLifetime = 10 * time.Second
+const callerMissLifetime = 500 * time.Millisecond
+const maxCallerCacheEntries = 1024
 
 func discoverClaudeProcesses(ctx context.Context) (map[int]DiscoveredSession, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "claude", "agents", "--json").Output()
 	if err != nil {
@@ -41,37 +44,57 @@ func (v *channelCallerVerifier) inSession(peerPID int, session string) bool {
 	if peerPID <= 1 || session == "" {
 		return false
 	}
-	v.mu.Lock()
-	defer v.mu.Unlock()
 	parent := v.parent
 	if parent == nil {
 		parent = parentPID
 	}
-	if known, ok := v.known[session]; ok && time.Now().Before(known.expires) {
-		if _, err := ownSession(peerPID, func(pid int) (DiscoveredSession, bool) {
-			return DiscoveredSession{}, pid == known.pid
-		}, parent); err == nil {
-			return true
-		}
+	directParent, err := parent(peerPID)
+	if err != nil {
+		return false
 	}
+	v.mu.Lock()
+	if known, ok := v.known[peerPID]; ok && known.parent == directParent && time.Now().Before(known.expires) {
+		v.mu.Unlock()
+		return known.session == session
+	}
+	v.mu.Unlock()
+
+	// A slow or failing discovery must not block unrelated sessions' polls.
 	discover := v.discover
 	if discover == nil {
 		discover = discoverClaudeProcesses
 	}
-	sessions, err := discover(context.Background())
-	if err != nil {
-		return false
+	sessions, discoverErr := discover(context.Background())
+	var matched DiscoveredSession
+	if discoverErr == nil {
+		matched, _ = ownSession(peerPID, func(pid int) (DiscoveredSession, bool) {
+			if s, ok := sessions[pid]; ok {
+				return s, true
+			}
+			return codexSessionOf(pid)
+		}, parent)
 	}
-	matched, err := ownSession(peerPID, func(pid int) (DiscoveredSession, bool) {
-		s, ok := sessions[pid]
-		return s, ok && s.SessionID == session && s.Tool == "claude"
-	}, parent)
-	if err != nil || matched.PID <= 1 {
-		return false
+	verifiedSession := ""
+	lifetime := callerMissLifetime
+	if matched.Tool == "claude" && matched.PID > 1 {
+		verifiedSession = matched.SessionID
+		lifetime = callerCacheLifetime
 	}
+	v.mu.Lock()
 	if v.known == nil {
-		v.known = make(map[string]verifiedClaudeProcess)
+		v.known = make(map[int]verifiedCaller)
 	}
-	v.known[session] = verifiedClaudeProcess{pid: matched.PID, expires: time.Now().Add(callerCacheLifetime)}
-	return true
+	if len(v.known) >= maxCallerCacheEntries {
+		for pid, entry := range v.known {
+			if time.Now().After(entry.expires) {
+				delete(v.known, pid)
+			}
+		}
+		if len(v.known) >= maxCallerCacheEntries {
+			v.known = make(map[int]verifiedCaller) // fail closed on the next call
+		}
+	}
+	v.known[peerPID] = verifiedCaller{session: verifiedSession, parent: directParent, expires: time.Now().Add(lifetime)}
+	v.mu.Unlock()
+	return verifiedSession == session
 }

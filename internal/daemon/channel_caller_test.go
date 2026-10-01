@@ -5,7 +5,9 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"github.com/share2us/cli-core/daemonctl"
 )
@@ -25,6 +27,10 @@ func TestChannelControlBindsPeerToSessionAndRequest(t *testing.T) {
 			return 100, nil
 		case 201:
 			return 200, nil
+		case 301:
+			return 200, nil // a client in Claude s2, launched inside s1
+		case 200:
+			return 100, nil
 		default:
 			return 1, nil
 		}
@@ -32,6 +38,12 @@ func TestChannelControlBindsPeerToSessionAndRequest(t *testing.T) {
 	call := rt.control()
 	request := func(pid int, op string, args map[string]string) daemonctl.Response {
 		return call(daemonctl.Request{PeerPID: pid, Op: op, Args: args})
+	}
+	if rt.channelCaller.inSession(301, "s1") {
+		t.Fatal("nested Claude session claimed its outer session")
+	}
+	if !rt.channelCaller.inSession(301, "s2") || rt.channelCaller.inSession(301, "s1") {
+		t.Fatal("nested caller was not bound to its nearest session")
 	}
 	if _, _, ok := h.deliver("s1", ChannelDelivery{RequestID: "r1"}); !ok {
 		t.Fatal("queue delivery")
@@ -70,5 +82,54 @@ func TestChannelControlBindsPeerToSessionAndRequest(t *testing.T) {
 	}
 	if r := request(101, "channel-abandon-typed", map[string]string{"session": "s1", "request_id": "typed"}); !r.OK || h.owner["typed"] != "" {
 		t.Fatalf("own typed abandon refused: %+v", r)
+	}
+}
+
+func TestChannelCallerDiscoveryDoesNotBlockOtherPeers(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	v := &channelCallerVerifier{
+		known: map[int]verifiedCaller{201: {session: "s2", parent: 200, expires: time.Now().Add(time.Minute)}},
+		parent: func(pid int) (int, error) {
+			if pid == 201 {
+				return 200, nil
+			}
+			return 100, nil
+		},
+		discover: func(context.Context) (map[int]DiscoveredSession, error) {
+			close(started)
+			<-release
+			return nil, errors.New("Claude discovery failed")
+		},
+	}
+	slowDone := make(chan bool, 1)
+	go func() { slowDone <- v.inSession(101, "s1") }()
+	<-started
+	fastDone := make(chan bool, 1)
+	go func() { fastDone <- v.inSession(201, "s2") }()
+	select {
+	case ok := <-fastDone:
+		if !ok {
+			t.Fatal("cached peer was denied")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("one slow discovery blocked a different session")
+	}
+	close(release)
+	if <-slowDone {
+		t.Fatal("failed discovery authorized caller")
+	}
+}
+
+func TestChannelCallerCachesFailedDiscoveryBriefly(t *testing.T) {
+	calls := 0
+	v := &channelCallerVerifier{
+		parent: func(int) (int, error) { return 100, nil },
+		discover: func(context.Context) (map[int]DiscoveredSession, error) {
+			calls++
+			return nil, errors.New("Claude unavailable")
+		},
+	}
+	if v.inSession(101, "s1") || v.inSession(101, "s1") || calls != 1 {
+		t.Fatalf("failed discovery retried without a pause: calls=%d", calls)
 	}
 }
