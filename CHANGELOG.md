@@ -16,6 +16,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ### Fixed
 
+- Agent inbox-only file deliveries place and notify without running an agent
+  prompt; unknown delivery modes fail closed.
 - File-carrying agent prompts now fail if the attachment cannot be opened or
   placed. Received files never overwrite an existing inbox file or follow an
   inbox symlink.

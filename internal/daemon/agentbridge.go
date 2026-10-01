@@ -355,6 +355,14 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 		return
 	}
 	env := ParseEnvelope(raw)
+	if env.Deliver != "" && env.Deliver != "run" && env.Deliver != "inbox" {
+		_ = client.AgentReportResult(ctx, req.ID, "failed", "unknown file delivery mode")
+		return
+	}
+	if env.Deliver == "inbox" && !req.HasFile {
+		_ = client.AgentReportResult(ctx, req.ID, "failed", "inbox delivery requires an attached file")
+		return
+	}
 	prompt := env.Prompt
 	cwd := ""
 	var binding Binding
@@ -386,6 +394,7 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 		_ = client.AgentReportResult(ctx, req.ID, "failed", "the attached file description is incomplete")
 		return
 	}
+	filePath := ""
 	if req.HasFile {
 		if req.SealedFileKey == "" || deps.DownloadContent == nil || deps.OpenContentKey == nil {
 			_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device cannot open the attached file")
@@ -407,7 +416,19 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 			_ = client.AgentReportResult(ctx, req.ID, "failed", "could not write the attached file")
 			return
 		}
+		filePath = path
 		prompt = prompt + "\n\n(A file for this task was placed at " + path + ".)"
+	}
+	if env.Deliver == "inbox" {
+		name := discovered.Name
+		if name == "" {
+			name = req.Tool
+		}
+		rt.notify("Share2Us", "A file arrived for agent "+name+" in "+cwd)
+		_ = AppendHop(HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool,
+			From: req.SenderDeviceID, Target: req.TargetSessionID, Mode: "inbox", Status: "done", Prompt: env.Prompt})
+		_ = client.AgentReportResult(ctx, req.ID, "done", filePath)
+		return
 	}
 	if live {
 		if discovered.Status == "available" && rt.hub().channelReady(req.TargetSessionID) {

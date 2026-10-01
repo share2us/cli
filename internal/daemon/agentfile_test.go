@@ -22,6 +22,10 @@ func TestParseEnvelope(t *testing.T) {
 	if b.Prompt != "just a prompt" || b.FileName != "" {
 		t.Fatalf("fallback = %+v", b)
 	}
+	inbox := ParseEnvelope(`{"prompt":"","file_name":"shot.png","deliver":"inbox"}`)
+	if inbox.Prompt != "" || inbox.FileName != "shot.png" || inbox.Deliver != "inbox" {
+		t.Fatalf("inbox envelope = %+v", inbox)
+	}
 }
 
 func TestPlaceInjectedFile(t *testing.T) {
