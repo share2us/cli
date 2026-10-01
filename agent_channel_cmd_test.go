@@ -216,3 +216,27 @@ func TestGuardReadyRetriesUntilAcknowledged(t *testing.T) {
 		t.Fatalf("later hook did not make exactly one attempt: tries=%d", tries)
 	}
 }
+
+func TestOwnerPromptRegistersGuardOnlyWhenMissing(t *testing.T) {
+	registered, registrationCalls := true, 0
+	call := func(req daemonctl.Request) (daemonctl.Response, bool) {
+		switch req.Op {
+		case "channel-guard-registered":
+			return daemonctl.Response{OK: registered}, true
+		case "channel-guard-ready":
+			registrationCalls++
+			registered = true
+			return daemonctl.Response{OK: true}, true
+		default:
+			t.Fatalf("unexpected channel op: %s", req.Op)
+			return daemonctl.Response{}, false
+		}
+	}
+	if !ensureChannelGuardReady("s1", call) || registrationCalls != 0 {
+		t.Fatal("owner prompt re-registered an already proven hook")
+	}
+	registered = false // daemon restarted after SessionStart
+	if !ensureChannelGuardReady("s1", call) || registrationCalls != 1 {
+		t.Fatal("owner prompt did not recover missing daemon registration")
+	}
+}

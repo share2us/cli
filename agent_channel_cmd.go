@@ -82,7 +82,7 @@ func (a app) agentHook(args []string) int {
 	case "user-prompt-submit":
 		// A just-started Claude process may not appear in `claude agents` at
 		// SessionStart yet. This later hook gives the guard one more chance.
-		markChannelGuardReady(in.SessionID, daemonctl.Call, nil)
+		ensureChannelGuardReady(in.SessionID, daemonctl.Call)
 		if in.PromptID != "" {
 			a.proveTerminalPromptHook(in.SessionID)
 		}
@@ -159,6 +159,15 @@ func markChannelGuardReady(session string, call daemon.ChannelCaller, wait func(
 		}
 	}
 	return false
+}
+
+// Most owner prompts need no process discovery. Register again only if the
+// daemon missed SessionStart or restarted since this Claude session began.
+func ensureChannelGuardReady(session string, call daemon.ChannelCaller) bool {
+	if resp, ok := call(daemonctl.Request{Op: "channel-guard-registered", Args: map[string]string{"session": session}}); ok && resp.OK {
+		return true
+	}
+	return markChannelGuardReady(session, call, nil)
 }
 
 // The local typed marker is the fail-closed fallback if the daemon vanishes

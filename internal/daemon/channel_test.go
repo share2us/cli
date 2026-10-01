@@ -487,6 +487,19 @@ func proveReportTool(t *testing.T, h *channelHub, session string) {
 	h.turnEnded(session)
 }
 
+func TestNewGuardRegistrationResetsChannelProof(t *testing.T) {
+	h := newChannelHub()
+	h.markGuardReady("s1")
+	proveReportTool(t, h, "s1")
+	if !h.channelReady("s1") {
+		t.Fatal("channel proof was not established")
+	}
+	h.markGuardReady("s1")
+	if !h.guardRegistered("s1") || h.channelReady("s1") {
+		t.Fatal("a new SessionStart reused the previous process's channel proof")
+	}
+}
+
 func TestUnreportedChannelExpiresWithoutCompletion(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	dir := t.TempDir()

@@ -66,6 +66,12 @@ func (h *channelHub) markGuardReady(session string) {
 	}
 }
 
+func (h *channelHub) guardRegistered(session string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return session != "" && h.guard[session]
+}
+
 // channelReady is separate from guardedAlive: polling and hooks do not prove
 // Claude can receive notifications. A typed request's report proves only the
 // report tool, not channel delivery; only a channel-delivered request can
@@ -313,6 +319,8 @@ func (h *channelHub) channelControl(req daemonctl.Request, callerInSession func(
 		}
 		h.markGuardReady(req.Args["session"])
 		return daemonctl.Response{OK: req.Args["session"] != ""}, true
+	case "channel-guard-registered":
+		return daemonctl.Response{OK: h.guardRegistered(req.Args["session"])}, true
 	case "channel-guarded":
 		active, strict := h.guarded(req.Args["session"])
 		b, _ := json.Marshal(map[string]bool{"strict": strict})
