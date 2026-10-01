@@ -18,7 +18,7 @@ import (
 
 func TestActiveTypedHopFailsClosedWithoutDaemon(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := daemon.BeginTypedGuard("session-1", "request-1"); err != nil {
+	if err := daemon.BeginTypedGuard("session-1", "request-1", 123); err != nil {
 		t.Fatal(err)
 	}
 	if !daemon.BindTypedPromptID("session-1", "[Share2Us] from device test, request request-1:\n\nwork", "prompt-remote") {
@@ -75,7 +75,7 @@ func TestHeadlessHookDeniesSeparateGitdirEdit(t *testing.T) {
 
 func TestInterruptedTypedTurnDoesNotLockLaterOwnerToolsWithoutDaemon(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := daemon.BeginTypedGuard("session-1", "request-1"); err != nil {
+	if err := daemon.BeginTypedGuard("session-1", "request-1", 123); err != nil {
 		t.Fatal(err)
 	}
 	if !daemon.BindTypedPromptID("session-1", "[Share2Us] from device test, request request-1:\n\nwork", "prompt-remote") {
@@ -114,7 +114,7 @@ func TestInterruptedTypedTurnDoesNotLockLaterOwnerToolsWithoutDaemon(t *testing.
 
 func TestCompactionAndQueuedMessageCannotReleaseGuardMidTurn(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := daemon.BeginTypedGuard("session-1", "request-1"); err != nil {
+	if err := daemon.BeginTypedGuard("session-1", "request-1", 123); err != nil {
 		t.Fatal(err)
 	}
 	if !daemon.BindTypedPromptID("session-1", "[Share2Us] from device test, request request-1:\n\nwork", "prompt-remote") {
@@ -154,7 +154,7 @@ func TestCompactionAndQueuedMessageCannotReleaseGuardMidTurn(t *testing.T) {
 
 func TestSubmitBindsPromptAndStopWaitsForDaemonAck(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	if err := daemon.BeginTypedGuard("session-1", "request-1"); err != nil {
+	if err := daemon.BeginTypedGuard("session-1", "request-1", 123); err != nil {
 		t.Fatal(err)
 	}
 	previous := os.Stdin

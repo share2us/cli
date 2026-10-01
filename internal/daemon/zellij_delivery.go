@@ -62,7 +62,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	if !accepted {
 		return false
 	}
-	if err := BeginTypedGuard(req.TargetSessionID, req.ID); err != nil {
+	if err := BeginTypedGuard(req.TargetSessionID, req.ID, session.PID); err != nil {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
 		return false // no persistent fail-closed marker: type nothing
 	}

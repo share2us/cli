@@ -138,7 +138,7 @@ func (a app) agentHook(args []string) int {
 		}
 		completeHookTurn(in.SessionID, request, daemonctl.Call)
 	case "session-end":
-		daemon.EndTerminalSession(in.SessionID)
+		a.endTerminalSession(in.SessionID)
 	}
 	return 0
 }
@@ -207,6 +207,13 @@ func (a app) proveTerminalPromptHook(sessionID string) {
 	s, err := daemon.FindOwnSession(context.Background())
 	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
 		_ = daemon.ProveTerminalPromptHook(sessionID, s.PID, daemon.CurrentZellijPane())
+	}
+}
+
+func (a app) endTerminalSession(sessionID string) {
+	s, err := daemon.FindOwnSession(context.Background())
+	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
+		daemon.EndTerminalSession(sessionID, s.PID)
 	}
 }
 
