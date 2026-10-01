@@ -14,6 +14,9 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ### Fixed
 
+- File-carrying agent prompts now fail if the attachment cannot be opened or
+  placed. Received files never overwrite an existing inbox file or follow an
+  inbox symlink.
 - Agent-channel control requests are bound to the Claude session that actually
   connected to the local daemon; another same-user process can no longer claim
   a session or complete its request using the shared control token.

@@ -6,6 +6,8 @@ package daemon
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -32,27 +34,49 @@ func ParseEnvelope(raw string) InjectEnvelope {
 	return InjectEnvelope{Prompt: raw}
 }
 
-// placeInjectedFile decrypts ciphertext with contentKey and writes it under
-// <cwd>/.s2u-inbox/<name>, returning the path the agent can read. The name is
-// base-sanitised so it can't escape the inbox dir.
+// placeInjectedFile decrypts ciphertext into the session's private inbox. An
+// existing file is never replaced (including a symlink), and a failed decrypt
+// removes only the new file. The caller must not run the prompt on an error.
 func placeInjectedFile(cwd, name string, ciphertext, contentKey []byte) (string, error) {
+	if cwd == "" {
+		return "", errors.New("session has no project directory")
+	}
 	dir := filepath.Join(cwd, ".s2u-inbox")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
-	safe := filepath.Base(name)
-	if safe == "." || safe == string(filepath.Separator) || safe == "" {
-		safe = "injected-file"
-	}
-	path := filepath.Join(dir, safe)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	info, err := os.Lstat(dir)
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
-	if err := clicore.DecryptStream(f, bytes.NewReader(ciphertext), contentKey); err != nil {
-		os.Remove(path)
-		return "", err
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("session inbox is not a real directory")
 	}
-	return path, nil
+	safe := filepath.Base(name)
+	if safe == "." || safe == ".." || safe == string(filepath.Separator) || safe == "" {
+		safe = "injected-file"
+	}
+	for n := 0; n < 1000; n++ {
+		candidate := safe
+		if n > 0 {
+			ext := filepath.Ext(safe)
+			candidate = fmt.Sprintf("%s-%d%s", safe[:len(safe)-len(ext)], n, ext)
+		}
+		path := filepath.Join(dir, candidate)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if errors.Is(err, os.ErrExist) {
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		decryptErr := clicore.DecryptStream(f, bytes.NewReader(ciphertext), contentKey)
+		closeErr := f.Close()
+		if decryptErr != nil || closeErr != nil {
+			_ = os.Remove(path)
+			return "", errors.Join(decryptErr, closeErr)
+		}
+		return path, nil
+	}
+	return "", errors.New("session inbox has too many files with this name")
 }
