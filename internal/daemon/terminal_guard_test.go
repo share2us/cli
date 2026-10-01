@@ -169,7 +169,7 @@ func TestChannelReportStillCompletesThroughVerifiedStopControl(t *testing.T) {
 	if !h.report("channel-1", "reported") {
 		t.Fatal("channel report")
 	}
-	h.channelControl(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": "s1"}})
+	h.channelControl(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": "s1"}}, func(int, string) bool { return true })
 	select {
 	case got := <-result:
 		if got != "reported" {

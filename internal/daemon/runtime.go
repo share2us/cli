@@ -102,8 +102,9 @@ type Runtime struct {
 	// start side by side when it frees up.
 	hopMu sync.Mutex
 	// channels is the daemon side of the Share2Us channel (channelhub.go).
-	channels     *channelHub
-	channelsOnce sync.Once
+	channels      *channelHub
+	channelsOnce  sync.Once
+	channelCaller channelCallerVerifier
 	// zellij is the terminal driver for guarded live delivery. Tests install a
 	// fake before first use; production constructs the system driver lazily.
 	zellij      zellijDriver
@@ -212,7 +213,7 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 // control returns the handler backing the control endpoint.
 func (rt *Runtime) control() func(daemonctl.Request) daemonctl.Response {
 	return func(req daemonctl.Request) daemonctl.Response {
-		if resp, ok := rt.hub().channelControl(req); ok {
+		if resp, ok := rt.hub().channelControl(req, rt.channelCaller.inSession); ok {
 			return resp
 		}
 		switch req.Op {

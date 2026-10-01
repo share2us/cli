@@ -250,6 +250,12 @@ func (h *channelHub) guarded(session string) (active, strict bool) {
 	return len(h.active[session]) > 0, strict
 }
 
+func (h *channelHub) requestSession(requestID string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.owner[requestID]
+}
+
 // forget drops every record of a request. Callers hold h.mu.
 func (h *channelHub) forget(requestID string) {
 	delete(h.channel, requestID)
@@ -266,30 +272,45 @@ func (h *channelHub) forget(requestID string) {
 	delete(h.owner, requestID)
 }
 
-// channelControl answers the channel ops on the control endpoint. The endpoint
-// is authenticated with the per-user token, so only this user's processes (the
-// channel and hook s2u starts inside their own Claude sessions) reach it.
-func (h *channelHub) channelControl(req daemonctl.Request) (daemonctl.Response, bool) {
+// channelControl accepts a state-changing channel op only from a process inside
+// the Claude session it names. The control token alone authenticates the user,
+// not the session: another same-user process can read it too.
+func (h *channelHub) channelControl(req daemonctl.Request, callerInSession func(int, string) bool) (daemonctl.Response, bool) {
+	authorized := func(session string) bool {
+		return session != "" && callerInSession != nil && callerInSession(req.PeerPID, session)
+	}
 	switch req.Op {
 	case "channel-poll":
 		session := req.Args["session"]
-		if session == "" {
-			return daemonctl.Response{Err: "session required"}, true
+		if !authorized(session) {
+			return daemonctl.Response{Err: "caller is not in the claimed Claude session"}, true
 		}
 		b, _ := json.Marshal(h.poll(session))
 		return daemonctl.Response{OK: true, Data: b}, true
 	case "channel-report":
+		if !authorized(h.requestSession(req.Args["request_id"])) {
+			return daemonctl.Response{Err: "caller does not own this request"}, true
+		}
 		return daemonctl.Response{OK: h.report(req.Args["request_id"], req.Args["result"])}, true
 	case "channel-turn-ended":
+		if !authorized(req.Args["session"]) {
+			return daemonctl.Response{Err: "caller is not in the claimed Claude session"}, true
+		}
 		h.turnEndedForHook(req.Args["session"], req.Args["request_id"], true)
 		return daemonctl.Response{OK: true}, true
 	case "channel-abandon-typed":
+		if !authorized(req.Args["session"]) {
+			return daemonctl.Response{Err: "caller is not in the claimed Claude session"}, true
+		}
 		return daemonctl.Response{OK: h.abandonTyped(req.Args["session"], req.Args["request_id"])}, true
 	case "channel-alive":
 		return daemonctl.Response{OK: h.guardedAlive(req.Args["session"])}, true
 	case "channel-ready":
 		return daemonctl.Response{OK: h.channelReady(req.Args["session"])}, true
 	case "channel-guard-ready":
+		if !authorized(req.Args["session"]) {
+			return daemonctl.Response{Err: "caller is not in the claimed Claude session"}, true
+		}
 		h.markGuardReady(req.Args["session"])
 		return daemonctl.Response{OK: req.Args["session"] != ""}, true
 	case "channel-guarded":
