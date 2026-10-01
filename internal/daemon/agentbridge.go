@@ -382,7 +382,15 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	// A delivered file (ADR-036 P4b): download the ciphertext, open its content
 	// key with this device's key, decrypt it into the session's .s2u-inbox, and
 	// point the prompt at it.
-	if req.HasFile && env.FileName != "" && deps.DownloadContent != nil && deps.OpenContentKey != nil {
+	if req.HasFile != (env.FileName != "") {
+		_ = client.AgentReportResult(ctx, req.ID, "failed", "the attached file description is incomplete")
+		return
+	}
+	if req.HasFile {
+		if req.SealedFileKey == "" || deps.DownloadContent == nil || deps.OpenContentKey == nil {
+			_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device cannot open the attached file")
+			return
+		}
 		ciphertext, derr := deps.DownloadContent(ctx, req.ID)
 		if derr != nil {
 			deps.logf("agent-bridge: download file for %s: %v", req.ID, derr)

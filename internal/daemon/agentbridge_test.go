@@ -4,11 +4,13 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,13 +63,14 @@ func (f *fakeAgentClient) AgentReportResult(_ context.Context, _, status, result
 type fakeRunner struct {
 	out       string
 	err       error
+	project   string
 	ranSID    string
 	ranPrompt string
 }
 
 func (f *fakeRunner) Tool() string { return "claude" }
 func (f *fakeRunner) Discover(context.Context) ([]DiscoveredSession, error) {
-	return []DiscoveredSession{{SessionID: "s1", Tool: "claude", Status: "available"}}, nil
+	return []DiscoveredSession{{SessionID: "s1", Tool: "claude", Status: "available", Project: f.project}}, nil
 }
 func (f *fakeRunner) Run(_ context.Context, sessionID, _, prompt string) (string, error) {
 	f.ranSID = sessionID
@@ -226,6 +229,77 @@ func TestHandleInjectUnsealFailureIsFatal(t *testing.T) {
 	}
 	if len(c.reports) != 1 || c.reports[0][0] != "failed" {
 		t.Fatalf("reports = %v, want a single failed", c.reports)
+	}
+}
+
+func TestHandleInjectRequiresCompleteAttachment(t *testing.T) {
+	for _, tc := range []struct {
+		name, envelope, sealedKey string
+		hasFile                   bool
+		withDownloader            bool
+		withKeyOpener             bool
+	}{
+		{name: "missing filename", envelope: `{"prompt":"do it"}`, hasFile: true, sealedKey: "key", withDownloader: true, withKeyOpener: true},
+		{name: "unannounced filename", envelope: `{"prompt":"do it","file_name":"x"}`},
+		{name: "missing key", envelope: `{"prompt":"do it","file_name":"x"}`, hasFile: true, withDownloader: true, withKeyOpener: true},
+		{name: "missing downloader", envelope: `{"prompt":"do it","file_name":"x"}`, hasFile: true, sealedKey: "key", withKeyOpener: true},
+		{name: "missing key opener", envelope: `{"prompt":"do it","file_name":"x"}`, hasFile: true, sealedKey: "key", withDownloader: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &fakeAgentClient{}
+			r := &fakeRunner{}
+			deps := keyedDeps()
+			if tc.withDownloader {
+				deps.DownloadContent = func(context.Context, string) ([]byte, error) { return nil, nil }
+			}
+			if tc.withKeyOpener {
+				deps.OpenContentKey = func(string) ([]byte, error) { return nil, nil }
+			}
+			req := signedReq(t, clicore.AgentRequest{ID: "req-file", Tool: "claude", TargetSessionID: "s1", SealedPrompt: tc.envelope, HasFile: tc.hasFile, SealedFileKey: tc.sealedKey})
+			rt().handleInject(context.Background(), c, r, deps, req)
+			if r.ranSID != "" || len(c.reports) != 1 || c.reports[0][0] != "failed" {
+				t.Fatalf("incomplete attachment ran or was not failed: prompt %q, reports %v", r.ranPrompt, c.reports)
+			}
+		})
+	}
+}
+
+func TestHandleInjectPlacesFileBeforeRunning(t *testing.T) {
+	cwd := t.TempDir()
+	c := &fakeAgentClient{}
+	r := &fakeRunner{out: "done", project: cwd}
+	ck, err := clicore.NewContentKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encrypted bytes.Buffer
+	if err := clicore.EncryptStream(&encrypted, bytes.NewReader([]byte("attachment")), ck); err != nil {
+		t.Fatal(err)
+	}
+	deps := keyedDeps()
+	deps.DownloadContent = func(_ context.Context, id string) ([]byte, error) {
+		if id != "req-file" {
+			t.Fatalf("downloaded unexpected request %q", id)
+		}
+		return encrypted.Bytes(), nil
+	}
+	deps.OpenContentKey = func(sealed string) ([]byte, error) {
+		if sealed != "sealed-key" {
+			t.Fatalf("opened unexpected key %q", sealed)
+		}
+		return ck, nil
+	}
+	req := signedReq(t, clicore.AgentRequest{ID: "req-file", Tool: "claude", TargetSessionID: "s1", SealedPrompt: `{"prompt":"read it","file_name":"shot.png"}`, HasFile: true, SealedFileKey: "sealed-key"})
+	rt().handleInject(context.Background(), c, r, deps, req)
+	path := filepath.Join(cwd, ".s2u-inbox", "shot.png")
+	if got, err := os.ReadFile(path); err != nil || string(got) != "attachment" {
+		t.Fatalf("attachment = %q, %v", got, err)
+	}
+	if r.ranSID != "s1" || !strings.Contains(r.ranPrompt, path) {
+		t.Fatalf("runner got session %q, prompt %q; missing placed file path", r.ranSID, r.ranPrompt)
+	}
+	if len(c.reports) != 2 || c.reports[1][0] != "done" {
+		t.Fatalf("reports = %v", c.reports)
 	}
 }
 
