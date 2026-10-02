@@ -291,6 +291,12 @@ github.com/share2us/cli-core v0.50.0 h1:izPZ9+GoHi6s5KUNXrJrad/xT7JE+ovY2qjNwEFz
 github.com/share2us/cli-core v0.50.0/go.mod h1:QuB4yL7Mo9o00PwjXksVBT2WDkXriUedEkvLUAVQkws=
 github.com/share2us/cli-core v0.51.0 h1:KSVf6jV+keN0ZbnNeiy7METIQM1GksFSFPkVxzncGoo=
 github.com/share2us/cli-core v0.51.0/go.mod h1:QuB4yL7Mo9o00PwjXksVBT2WDkXriUedEkvLUAVQkws=
+github.com/share2us/cli-core v0.52.0 h1:uXAHmWHHz9BI7WKeEk7kmVS0+2ePuHtrwBO7lebCnOs=
+github.com/share2us/cli-core v0.52.0/go.mod h1:QuB4yL7Mo9o00PwjXksVBT2WDkXriUedEkvLUAVQkws=
+github.com/share2us/cli-core v0.53.0 h1:7XBV8STOI0YAb+tuxyp3bh1Su3yCi3cafYzYC7NbsiE=
+github.com/share2us/cli-core v0.53.0/go.mod h1:QuB4yL7Mo9o00PwjXksVBT2WDkXriUedEkvLUAVQkws=
+github.com/share2us/cli-core v0.54.0 h1:pQv1LQBhxQPjoF2DhSKSCqk2dKZnfPhntIotKI96ZmA=
+github.com/share2us/cli-core v0.54.0/go.mod h1:QuB4yL7Mo9o00PwjXksVBT2WDkXriUedEkvLUAVQkws=
 github.com/share2us/mcp v0.4.0 h1:6jjdFs3x9zYn3jT/znpPJpSTAg8cZ8pdAvqpG+Ebhrc=
 github.com/share2us/mcp v0.4.0/go.mod h1:4dp6t1t6wW4GCmJDuz2RCpTO2oY9mm5zNBzeNyVfGWI=
 github.com/shopspring/decimal v1.4.0 h1:bxl37RwXBklmTi0C79JfXCEBD1cqqHt0bbgBAGFp81k=

@@ -516,7 +516,15 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	if inbox {
 		env.Deliver = "inbox"
 	}
-	var objectKey, sealedFileKey string
+	// The hop nonce is generated up front: a direct LAN push stages its ciphertext
+	// keyed by this nonce before the inject exists, and the hop is then signed with
+	// the same nonce (signHopWithNonce below).
+	nonce, nerr := clicore.NewHopNonce()
+	if nerr != nil {
+		return a.fail("hop nonce", nerr)
+	}
+	var objectKey, sealedFileKey, transport string
+	var lanFile bool
 	if file != "" {
 		data, rerr := os.ReadFile(file)
 		if rerr != nil {
@@ -530,9 +538,16 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		if eerr := clicore.EncryptStream(&enc, bytes.NewReader(data), ck); eerr != nil {
 			return a.fail("encrypt file", eerr)
 		}
-		objectKey, err = client.AgentUploadContent(ctx, enc.Bytes())
-		if err != nil {
-			return a.fail("upload file", err)
+		// LAN/TUN first: push the sealed bytes straight to the target's agent-file
+		// receiver, keyed by the nonce. On any failure, fall back to the relay.
+		if target.LANFingerprint != "" && pushAgentFileLAN(ctx, target.LANFingerprint, env.SenderDeviceName, nonce, enc.Bytes()) {
+			lanFile, transport = true, "direct LAN"
+		} else {
+			objectKey, err = client.AgentUploadContent(ctx, enc.Bytes())
+			if err != nil {
+				return a.fail("upload file", err)
+			}
+			transport = "relay"
 		}
 		sealedFileKey, err = clicore.SealContentKeyForDevice(ck, targetPub)
 		if err != nil {
@@ -551,6 +566,7 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		Tool:            tool,
 		SealedPrompt:    sealed,
 		ObjectKey:       objectKey,
+		LANFile:         lanFile,
 		SealedFileKey:   sealedFileKey,
 		GoalID:          goalID,
 		ProjectID:       strings.TrimSpace(projectID),
@@ -563,7 +579,7 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	if credential, cerr = ensureSigningKey(ctx, client, credential); cerr != nil {
 		return a.fail("signing key", cerr)
 	}
-	if serr := signHop(&injectIn, credential, time.Now()); serr != nil {
+	if serr := signHopWithNonce(&injectIn, credential, time.Now(), nonce); serr != nil {
 		return a.fail("sign hop", serr)
 	}
 	res, err := client.AgentInject(ctx, injectIn)
@@ -577,7 +593,11 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	case "pending":
 		fmt.Fprintf(a.stdout, "Sent (%s). Waiting for approval on the target device. Track: %s agent status %s\n", res.ID, commandName, res.ID)
 	default:
-		fmt.Fprintf(a.stdout, "Sent (%s), queued for delivery. Track: %s agent status %s\n", res.ID, commandName, res.ID)
+		via := ""
+		if transport != "" {
+			via = " via " + transport
+		}
+		fmt.Fprintf(a.stdout, "Sent (%s)%s, queued for delivery. Track: %s agent status %s\n", res.ID, via, commandName, res.ID)
 	}
 	return 0
 }
