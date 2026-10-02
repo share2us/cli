@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261002182845] - 2026-10-02
+
 ### Added
 
 - `s2u agent send --inbox --file PATH` drops a file into an agent's inbox without
