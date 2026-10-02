@@ -223,20 +223,17 @@ func WriteChannelLaunchConfig(exe string) (mcpPath, settingsPath string, err err
 	mcp := map[string]any{"mcpServers": map[string]any{
 		ChannelServerName: map[string]any{"command": exe, "args": []string{"agent", "channel"}},
 	}}
-	// Hooks run through a shell; a forward-slash path in double quotes works in
-	// bash and in Windows shells alike.
-	quoted := `"` + filepath.ToSlash(exe) + `"`
 	settings := map[string]any{"hooks": map[string]any{
 		"SessionStart": []any{map[string]any{"hooks": []any{
-			map[string]any{"type": "command", "command": quoted + " agent hook session-start"}}}},
+			map[string]any{"type": "command", "command": claudeHookCommand(exe, "session-start")}}}},
 		"UserPromptSubmit": []any{map[string]any{"hooks": []any{
-			map[string]any{"type": "command", "command": quoted + " agent hook user-prompt-submit"}}}},
+			map[string]any{"type": "command", "command": claudeHookCommand(exe, "user-prompt-submit")}}}},
 		"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{
-			map[string]any{"type": "command", "command": quoted + " agent hook pre-tool-use"}}}},
+			map[string]any{"type": "command", "command": claudeHookCommand(exe, "pre-tool-use")}}}},
 		"Stop": []any{map[string]any{"hooks": []any{
-			map[string]any{"type": "command", "command": quoted + " agent hook stop"}}}},
+			map[string]any{"type": "command", "command": claudeHookCommand(exe, "stop")}}}},
 		"SessionEnd": []any{map[string]any{"hooks": []any{
-			map[string]any{"type": "command", "command": quoted + " agent hook session-end"}}}},
+			map[string]any{"type": "command", "command": claudeHookCommand(exe, "session-end")}}}},
 	}}
 	mcpPath, settingsPath = filepath.Join(dir, "mcp.json"), filepath.Join(dir, "settings.json")
 	for path, v := range map[string]any{mcpPath: mcp, settingsPath: settings} {

@@ -254,10 +254,9 @@ func guardHeadlessClaude(cmd *exec.Cmd, project string) error {
 	if err != nil {
 		return fmt.Errorf("headless Git guard: executable: %w", err)
 	}
-	quoted := `"` + strings.ReplaceAll(filepath.ToSlash(exe), `"`, `\"`) + `"`
 	settings, err := json.Marshal(map[string]any{"hooks": map[string]any{
 		"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{
-			map[string]any{"type": "command", "command": quoted + " agent hook headless-pre-tool-use"},
+			map[string]any{"type": "command", "command": claudeHookCommand(exe, "headless-pre-tool-use")},
 		}}},
 	}})
 	if err != nil {

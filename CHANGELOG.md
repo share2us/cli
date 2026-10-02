@@ -20,6 +20,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   connection and resolved by the signed hop nonce before trying the relay.
   A direct push never reaches the agent inbox unless the sender's signed LAN
   fingerprint matches the peer that staged it; orphaned pushes expire.
+- Claude session and headless guard hooks invoke quoted executables correctly
+  through PowerShell on Windows.
 - Agent inbox-only file deliveries place and notify without running an agent
   prompt; unknown delivery modes fail closed.
 - File-carrying agent prompts now fail if the attachment cannot be opened or
