@@ -16,6 +16,7 @@ import (
 	"time"
 
 	clicore "github.com/share2us/cli-core"
+	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli/internal/daemon"
 )
 
@@ -82,6 +83,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|typed|bindings|goal|rules|policy>\n", commandName)
 	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
 	fmt.Fprintf(a.stderr, "  send --agent ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
+	fmt.Fprintf(a.stderr, "       --inbox --file PATH                   drop a file in the agent's inbox without running it\n")
 	fmt.Fprintf(a.stderr, "       [--device ID] [--session ID]         or name the session instead; any id may be a\n                                             unique prefix, as `agent list` prints it\n")
 	fmt.Fprintf(a.stderr, "       [--project ID [--as AGENT-ID]]       to an agent in another account: both agents must\n                                             be members of that project. The sending agent is\n                                             the one bound to this directory unless --as names it.\n")
 	fmt.Fprintf(a.stderr, "  join <code>                                join a sharenet project with THIS session: type\n                                             !s2u agent join <code> in Claude Code or Codex\n")
@@ -373,6 +375,7 @@ func (a app) agentList(ctx context.Context) int {
 
 func (a app) agentSend(ctx context.Context, args []string) int {
 	var deviceID, sessionID, agentID, prompt, tool, file, goalID, projectID, asAgent string
+	var inbox bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--agent", "--to":
@@ -420,13 +423,25 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 			if i < len(args) {
 				asAgent = args[i]
 			}
+		case "--inbox":
+			// Deliver the file to the agent's inbox without running it (the agent
+			// or its owner picks it up). Requires --file; the prompt is optional.
+			inbox = true
 		default:
 			fmt.Fprintf(a.stderr, "unknown flag %q\n", args[i])
 			return 2
 		}
 	}
-	if (agentID == "" && sessionID == "") || strings.TrimSpace(prompt) == "" {
+	if agentID == "" && sessionID == "" {
 		fmt.Fprintf(a.stderr, "usage: %s agent send --agent ID --prompt \"...\"   (or --session ID [--device ID])\n", commandName)
+		return 2
+	}
+	if inbox && strings.TrimSpace(file) == "" {
+		fmt.Fprintf(a.stderr, "--inbox delivers a file: pass --file PATH\n")
+		return 2
+	}
+	if !inbox && strings.TrimSpace(prompt) == "" {
+		fmt.Fprintf(a.stderr, "usage: %s agent send --agent ID --prompt \"...\" [--file PATH]   (or --inbox --file PATH to drop a file without running)\n", commandName)
 		return 2
 	}
 	client, ok := a.agentClient()
@@ -494,6 +509,13 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	// The display name stays inside that encrypted, signed envelope. The relay
 	// server cannot rewrite it after sealing, and older receivers ignore it.
 	env := daemon.InjectEnvelope{Prompt: prompt, SenderDeviceName: currentDeviceName(ctx, client, credential.DeviceSessionID)}
+	// The sender's LAN fingerprint rides in the signed envelope so a direct LAN
+	// transfer (when added) can be bound to this device; harmless on the relay
+	// path, where the receiver never looks for a staged file.
+	env.SenderLANFingerprint = lanid.Fingerprint()
+	if inbox {
+		env.Deliver = "inbox"
+	}
 	var objectKey, sealedFileKey string
 	if file != "" {
 		data, rerr := os.ReadFile(file)
