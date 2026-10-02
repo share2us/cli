@@ -16,6 +16,7 @@ import (
 	"time"
 
 	clicore "github.com/share2us/cli-core"
+	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli/internal/daemon"
 )
 
@@ -82,6 +83,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|typed|bindings|goal|rules|policy>\n", commandName)
 	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
 	fmt.Fprintf(a.stderr, "  send --agent ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
+	fmt.Fprintf(a.stderr, "       --inbox --file PATH                   drop a file in the agent's inbox without running it\n")
 	fmt.Fprintf(a.stderr, "       [--device ID] [--session ID]         or name the session instead; any id may be a\n                                             unique prefix, as `agent list` prints it\n")
 	fmt.Fprintf(a.stderr, "       [--project ID [--as AGENT-ID]]       to an agent in another account: both agents must\n                                             be members of that project. The sending agent is\n                                             the one bound to this directory unless --as names it.\n")
 	fmt.Fprintf(a.stderr, "  join <code>                                join a sharenet project with THIS session: type\n                                             !s2u agent join <code> in Claude Code or Codex\n")
@@ -373,6 +375,7 @@ func (a app) agentList(ctx context.Context) int {
 
 func (a app) agentSend(ctx context.Context, args []string) int {
 	var deviceID, sessionID, agentID, prompt, tool, file, goalID, projectID, asAgent string
+	var inbox bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--agent", "--to":
@@ -420,13 +423,25 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 			if i < len(args) {
 				asAgent = args[i]
 			}
+		case "--inbox":
+			// Deliver the file to the agent's inbox without running it (the agent
+			// or its owner picks it up). Requires --file; the prompt is optional.
+			inbox = true
 		default:
 			fmt.Fprintf(a.stderr, "unknown flag %q\n", args[i])
 			return 2
 		}
 	}
-	if (agentID == "" && sessionID == "") || strings.TrimSpace(prompt) == "" {
+	if agentID == "" && sessionID == "" {
 		fmt.Fprintf(a.stderr, "usage: %s agent send --agent ID --prompt \"...\"   (or --session ID [--device ID])\n", commandName)
+		return 2
+	}
+	if inbox && strings.TrimSpace(file) == "" {
+		fmt.Fprintf(a.stderr, "--inbox delivers a file: pass --file PATH\n")
+		return 2
+	}
+	if !inbox && strings.TrimSpace(prompt) == "" {
+		fmt.Fprintf(a.stderr, "usage: %s agent send --agent ID --prompt \"...\" [--file PATH]   (or --inbox --file PATH to drop a file without running)\n", commandName)
 		return 2
 	}
 	client, ok := a.agentClient()
@@ -494,7 +509,22 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	// The display name stays inside that encrypted, signed envelope. The relay
 	// server cannot rewrite it after sealing, and older receivers ignore it.
 	env := daemon.InjectEnvelope{Prompt: prompt, SenderDeviceName: currentDeviceName(ctx, client, credential.DeviceSessionID)}
-	var objectKey, sealedFileKey string
+	// The sender's LAN fingerprint rides in the signed envelope so a direct LAN
+	// transfer (when added) can be bound to this device; harmless on the relay
+	// path, where the receiver never looks for a staged file.
+	env.SenderLANFingerprint = lanid.Fingerprint()
+	if inbox {
+		env.Deliver = "inbox"
+	}
+	// The hop nonce is generated up front: a direct LAN push stages its ciphertext
+	// keyed by this nonce before the inject exists, and the hop is then signed with
+	// the same nonce (signHopWithNonce below).
+	nonce, nerr := clicore.NewHopNonce()
+	if nerr != nil {
+		return a.fail("hop nonce", nerr)
+	}
+	var objectKey, sealedFileKey, transport string
+	var lanFile bool
 	if file != "" {
 		data, rerr := os.ReadFile(file)
 		if rerr != nil {
@@ -508,9 +538,16 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		if eerr := clicore.EncryptStream(&enc, bytes.NewReader(data), ck); eerr != nil {
 			return a.fail("encrypt file", eerr)
 		}
-		objectKey, err = client.AgentUploadContent(ctx, enc.Bytes())
-		if err != nil {
-			return a.fail("upload file", err)
+		// LAN/TUN first: push the sealed bytes straight to the target's agent-file
+		// receiver, keyed by the nonce. On any failure, fall back to the relay.
+		if target.LANFingerprint != "" && pushAgentFileLAN(ctx, target.LANFingerprint, env.SenderDeviceName, nonce, enc.Bytes()) {
+			lanFile, transport = true, "direct LAN"
+		} else {
+			objectKey, err = client.AgentUploadContent(ctx, enc.Bytes())
+			if err != nil {
+				return a.fail("upload file", err)
+			}
+			transport = "relay"
 		}
 		sealedFileKey, err = clicore.SealContentKeyForDevice(ck, targetPub)
 		if err != nil {
@@ -529,6 +566,7 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		Tool:            tool,
 		SealedPrompt:    sealed,
 		ObjectKey:       objectKey,
+		LANFile:         lanFile,
 		SealedFileKey:   sealedFileKey,
 		GoalID:          goalID,
 		ProjectID:       strings.TrimSpace(projectID),
@@ -541,7 +579,7 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	if credential, cerr = ensureSigningKey(ctx, client, credential); cerr != nil {
 		return a.fail("signing key", cerr)
 	}
-	if serr := signHop(&injectIn, credential, time.Now()); serr != nil {
+	if serr := signHopWithNonce(&injectIn, credential, time.Now(), nonce); serr != nil {
 		return a.fail("sign hop", serr)
 	}
 	res, err := client.AgentInject(ctx, injectIn)
@@ -555,7 +593,11 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	case "pending":
 		fmt.Fprintf(a.stdout, "Sent (%s). Waiting for approval on the target device. Track: %s agent status %s\n", res.ID, commandName, res.ID)
 	default:
-		fmt.Fprintf(a.stdout, "Sent (%s), queued for delivery. Track: %s agent status %s\n", res.ID, commandName, res.ID)
+		via := ""
+		if transport != "" {
+			via = " via " + transport
+		}
+		fmt.Fprintf(a.stdout, "Sent (%s)%s, queued for delivery. Track: %s agent status %s\n", res.ID, via, commandName, res.ID)
 	}
 	return 0
 }

@@ -21,12 +21,20 @@ import (
 type agentTarget struct {
 	AgentID, SessionID, DeviceID, DeviceName, Tool, Status, PublicKey string
 	LastSeen                                                          string
+	// LANFingerprint is the target device's lanid fingerprint (from the
+	// directory), used to find and pin its agent-file receiver for a direct LAN
+	// transfer. Empty means relay-only.
+	LANFingerprint string
 }
 
 func targetsFromSessions(list []clicore.AgentSessionInfo) []agentTarget {
 	out := make([]agentTarget, 0, len(list))
 	for _, s := range list {
-		out = append(out, agentTarget{s.AgentID, s.SessionID, s.DeviceID, s.DeviceName, s.Tool, s.Status, s.DevicePublicKey, s.LastSeen})
+		out = append(out, agentTarget{
+			AgentID: s.AgentID, SessionID: s.SessionID, DeviceID: s.DeviceID,
+			DeviceName: s.DeviceName, Tool: s.Tool, Status: s.Status,
+			PublicKey: s.DevicePublicKey, LastSeen: s.LastSeen, LANFingerprint: s.LANFingerprint,
+		})
 	}
 	return out
 }
@@ -34,7 +42,13 @@ func targetsFromSessions(list []clicore.AgentSessionInfo) []agentTarget {
 func targetsFromProject(list []clicore.ProjectAgentAddress) []agentTarget {
 	out := make([]agentTarget, 0, len(list))
 	for _, s := range list {
-		out = append(out, agentTarget{s.AgentID, s.SessionID, s.DeviceID, "", s.Tool, s.Status, s.DevicePublicKey, s.LastSeen})
+		// Cross-account project members have no LAN fingerprint here: a direct
+		// LAN transfer to another account's device is not offered, so it uses the
+		// relay. LANFingerprint stays empty.
+		out = append(out, agentTarget{
+			AgentID: s.AgentID, SessionID: s.SessionID, DeviceID: s.DeviceID,
+			Tool: s.Tool, Status: s.Status, PublicKey: s.DevicePublicKey, LastSeen: s.LastSeen,
+		})
 	}
 	return out
 }

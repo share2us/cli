@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u agent send --inbox --file PATH` drops a file into an agent's inbox without
+  running it. A file sent to an agent now carries the sender's LAN fingerprint in
+  the signed envelope, so a later direct LAN transfer can be bound to this device.
+- A file sent to an agent now goes directly over LAN/Tailscale when the target
+  device is reachable, falling back to the relay otherwise. `s2u agent send` reports
+  which path it used.
+
 ### Fixed
 
 - Agent files can be staged as encrypted bytes over a trusted LAN/Tailscale

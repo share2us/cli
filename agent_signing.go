@@ -57,6 +57,13 @@ func signHop(in *clicore.AgentInjectInput, credential clicore.Credential, now ti
 	if err != nil {
 		return err
 	}
+	return signHopWithNonce(in, credential, now, nonce)
+}
+
+// signHopWithNonce signs with a caller-supplied nonce. A direct LAN file push
+// stages its ciphertext keyed by the nonce before the inject exists, so the
+// sender generates the nonce first, pushes, then signs the hop with it.
+func signHopWithNonce(in *clicore.AgentInjectInput, credential clicore.Credential, now time.Time, nonce string) error {
 	in.TargetDeviceID = strings.TrimSpace(in.TargetDeviceID)
 	in.TargetSessionID = strings.TrimSpace(in.TargetSessionID)
 	in.Tool = strings.ToLower(strings.TrimSpace(in.Tool))
