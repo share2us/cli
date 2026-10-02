@@ -4,9 +4,11 @@
 package daemon
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -396,22 +398,43 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	}
 	filePath := ""
 	if req.HasFile {
-		if req.SealedFileKey == "" || deps.DownloadContent == nil || deps.OpenContentKey == nil {
+		if req.SealedFileKey == "" || deps.OpenContentKey == nil {
 			_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device cannot open the attached file")
 			return
 		}
-		ciphertext, derr := deps.DownloadContent(ctx, req.ID)
-		if derr != nil {
-			deps.logf("agent-bridge: download file for %s: %v", req.ID, derr)
-			_ = client.AgentReportResult(ctx, req.ID, "failed", "could not download the attached file")
-			return
+		var ciphertext io.Reader
+		if deps.AgentFiles != nil && env.SenderLANFingerprint != "" {
+			staged, found, serr := deps.AgentFiles.open(req.Nonce, env.SenderLANFingerprint)
+			if serr != nil {
+				deps.logf("agent-bridge: read staged file for %s: %v", req.ID, serr)
+				_ = client.AgentReportResult(ctx, req.ID, "failed", "could not read the staged attached file")
+				return
+			}
+			if found {
+				defer deps.AgentFiles.remove(req.Nonce)
+				defer staged.Close() // close before removing, including on Windows
+				ciphertext = staged
+			}
+		}
+		if ciphertext == nil {
+			if deps.DownloadContent == nil {
+				_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device cannot download the attached file")
+				return
+			}
+			remote, derr := deps.DownloadContent(ctx, req.ID)
+			if derr != nil {
+				deps.logf("agent-bridge: download file for %s: %v", req.ID, derr)
+				_ = client.AgentReportResult(ctx, req.ID, "failed", "could not download the attached file")
+				return
+			}
+			ciphertext = bytes.NewReader(remote)
 		}
 		ck, kerr := deps.OpenContentKey(req.SealedFileKey)
 		if kerr != nil {
 			_ = client.AgentReportResult(ctx, req.ID, "failed", "could not decrypt the attached file key")
 			return
 		}
-		path, perr := placeInjectedFile(cwd, env.FileName, ciphertext, ck)
+		path, perr := placeInjectedFileFromReader(cwd, env.FileName, ciphertext, ck)
 		if perr != nil {
 			_ = client.AgentReportResult(ctx, req.ID, "failed", "could not write the attached file")
 			return
