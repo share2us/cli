@@ -303,6 +303,66 @@ func TestHandleInjectPlacesFileBeforeRunning(t *testing.T) {
 	}
 }
 
+func TestHandleInjectInboxOnlyNeverRuns(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cwd := t.TempDir()
+	c := &fakeAgentClient{}
+	r := &fakeRunner{project: cwd}
+	ck, err := clicore.NewContentKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encrypted bytes.Buffer
+	if err := clicore.EncryptStream(&encrypted, bytes.NewReader([]byte("for the inbox")), ck); err != nil {
+		t.Fatal(err)
+	}
+	deps := keyedDeps()
+	deps.DownloadContent = func(context.Context, string) ([]byte, error) { return encrypted.Bytes(), nil }
+	deps.OpenContentKey = func(string) ([]byte, error) { return ck, nil }
+	req := signedReq(t, clicore.AgentRequest{ID: "req-inbox", Tool: "claude", TargetSessionID: "s1",
+		SealedPrompt: `{"prompt":"do not run this","file_name":"note.txt","deliver":"inbox"}`,
+		HasFile:      true, SealedFileKey: "sealed-key"})
+	rt().handleInject(context.Background(), c, r, deps, req)
+	path := filepath.Join(cwd, ".s2u-inbox", "note.txt")
+	if got, err := os.ReadFile(path); err != nil || string(got) != "for the inbox" {
+		t.Fatalf("inbox file = %q, %v", got, err)
+	}
+	if r.ranSID != "" || r.ranPrompt != "" {
+		t.Fatalf("inbox-only delivery ran the agent: %q %q", r.ranSID, r.ranPrompt)
+	}
+	if len(c.reports) != 1 || c.reports[0] != [2]string{"done", path} {
+		t.Fatalf("reports = %v", c.reports)
+	}
+	hops, err := LoadHops(1)
+	if err != nil || len(hops) != 1 || hops[0].Prompt != "do not run this" || hops[0].Mode != "inbox" {
+		t.Fatalf("inbox note missing from hop log: %v, %v", hops, err)
+	}
+}
+
+func TestHandleInjectRejectsUnknownDeliveryMode(t *testing.T) {
+	c := &fakeAgentClient{}
+	r := &fakeRunner{}
+	rt().handleInject(context.Background(), c, r, keyedDeps(), signedReq(t, clicore.AgentRequest{
+		ID: "req-unknown", Tool: "claude", TargetSessionID: "s1",
+		SealedPrompt: `{"prompt":"run me","deliver":"inb0x"}`,
+	}))
+	if r.ranSID != "" || len(c.reports) != 1 || c.reports[0][0] != "failed" {
+		t.Fatalf("unknown delivery mode ran or was not failed: prompt %q, reports %v", r.ranPrompt, c.reports)
+	}
+}
+
+func TestHandleInjectInboxRequiresFile(t *testing.T) {
+	c := &fakeAgentClient{}
+	r := &fakeRunner{}
+	rt().handleInject(context.Background(), c, r, keyedDeps(), signedReq(t, clicore.AgentRequest{
+		ID: "req-no-file", Tool: "claude", TargetSessionID: "s1",
+		SealedPrompt: `{"file_name":"note.txt","deliver":"inbox"}`,
+	}))
+	if r.ranSID != "" || len(c.reports) != 1 || c.reports[0][0] != "failed" {
+		t.Fatalf("fileless inbox delivery ran or was not failed: prompt %q, reports %v", r.ranPrompt, c.reports)
+	}
+}
+
 // v2: the receiver verifies the signed project and agents too. A server that
 // relabels which project (or which agent) a hop came from is caught here, and
 // the hop does not run.

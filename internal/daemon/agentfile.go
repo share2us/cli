@@ -21,6 +21,7 @@ import (
 type InjectEnvelope struct {
 	Prompt           string `json:"prompt"`
 	FileName         string `json:"file_name,omitempty"`
+	Deliver          string `json:"deliver,omitempty"`
 	SenderDeviceName string `json:"sender_device_name,omitempty"`
 }
 
@@ -28,7 +29,7 @@ type InjectEnvelope struct {
 // is treated as a bare prompt (back-compat).
 func ParseEnvelope(raw string) InjectEnvelope {
 	var e InjectEnvelope
-	if err := json.Unmarshal([]byte(raw), &e); err == nil && e.Prompt != "" {
+	if err := json.Unmarshal([]byte(raw), &e); err == nil && (e.Prompt != "" || e.FileName != "" || e.Deliver != "") {
 		return e
 	}
 	return InjectEnvelope{Prompt: raw}
