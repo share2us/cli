@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -19,10 +20,13 @@ import (
 // (the server sees neither). A P4a raw-string prompt (no envelope) is handled by
 // ParseEnvelope's fallback.
 type InjectEnvelope struct {
-	Prompt           string `json:"prompt"`
-	FileName         string `json:"file_name,omitempty"`
-	Deliver          string `json:"deliver,omitempty"`
-	SenderDeviceName string `json:"sender_device_name,omitempty"`
+	Prompt   string `json:"prompt"`
+	FileName string `json:"file_name,omitempty"`
+	Deliver  string `json:"deliver,omitempty"`
+	// The sender's LAN key fingerprint is inside the signed, sealed prompt.
+	// It must match the TLS-proven peer that staged this hop's ciphertext.
+	SenderLANFingerprint string `json:"sender_lan_fingerprint,omitempty"`
+	SenderDeviceName     string `json:"sender_device_name,omitempty"`
 }
 
 // ParseEnvelope reads a decrypted inject payload. If it isn't a JSON envelope it
@@ -39,6 +43,10 @@ func ParseEnvelope(raw string) InjectEnvelope {
 // existing file is never replaced (including a symlink), and a failed decrypt
 // removes only the new file. The caller must not run the prompt on an error.
 func placeInjectedFile(cwd, name string, ciphertext, contentKey []byte) (string, error) {
+	return placeInjectedFileFromReader(cwd, name, bytes.NewReader(ciphertext), contentKey)
+}
+
+func placeInjectedFileFromReader(cwd, name string, ciphertext io.Reader, contentKey []byte) (string, error) {
 	if cwd == "" {
 		return "", errors.New("session has no project directory")
 	}
@@ -71,7 +79,7 @@ func placeInjectedFile(cwd, name string, ciphertext, contentKey []byte) (string,
 		if err != nil {
 			return "", err
 		}
-		decryptErr := clicore.DecryptStream(f, bytes.NewReader(ciphertext), contentKey)
+		decryptErr := clicore.DecryptStream(f, ciphertext, contentKey)
 		closeErr := f.Close()
 		if decryptErr != nil || closeErr != nil {
 			_ = os.Remove(path)

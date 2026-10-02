@@ -71,6 +71,8 @@ type Deps struct {
 	DownloadContent func(ctx context.Context, id string) ([]byte, error)
 	// OpenContentKey opens a sealed file content key with this device's key.
 	OpenContentKey func(sealed string) ([]byte, error)
+	// AgentFiles holds encrypted LAN pushes until a signed request claims them.
+	AgentFiles *AgentFileStage
 	// DeviceSessionID is this device's session id, used to tell our own agent
 	// sessions from another device's when retiring unbound ones, and as the
 	// target a signed hop must have been signed for.
@@ -180,6 +182,14 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 	defer closer.Close()
 
 	deps.logf("share2us daemon started (inbox=%v lan=%v notify=%v)", opts.RunInbox, opts.LANDiscoverable, opts.Notify)
+	if opts.AgentBridge && opts.LANDiscoverable && deps.Unseal != nil && deps.AgentClient != nil && len(deps.AgentRunners) > 0 && deps.AgentFiles == nil {
+		stage, err := defaultAgentFileStage()
+		if err != nil {
+			deps.logf("agent-file LAN receiver is off: %v", err)
+		} else {
+			deps.AgentFiles = stage
+		}
+	}
 
 	var wg sync.WaitGroup
 	if opts.RunInbox {
@@ -199,6 +209,10 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 		if deps.Unseal == nil {
 			deps.logf("agent bridge is off: this device has no encryption key (sign in again with the CLI to create one)")
 		} else {
+			if opts.LANDiscoverable && deps.AgentFiles != nil {
+				wg.Add(1)
+				go func() { defer wg.Done(); rt.agentFileLANLoop(ctx, opts, deps) }()
+			}
 			wg.Add(1)
 			go func() { defer wg.Done(); rt.agentBridge(ctx, deps.AgentClient, deps.AgentRunners, deps) }()
 		}
@@ -342,6 +356,11 @@ func (rt *Runtime) scheduler(ctx context.Context, opts Options, deps Deps) {
 			return nil
 		}},
 		{name: "cleanup", every: cleanupEvery, run: func(c context.Context) error {
+			if deps.AgentFiles != nil {
+				if err := deps.AgentFiles.sweep(time.Now()); err != nil {
+					return err
+				}
+			}
 			if deps.Cleanup != nil {
 				return deps.Cleanup(c)
 			}

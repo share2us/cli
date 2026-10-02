@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,7 +107,10 @@ var bridgeSender = func() sender {
 func signedReq(t *testing.T, req clicore.AgentRequest) clicore.AgentRequest {
 	t.Helper()
 	at := time.Now().UTC().Truncate(time.Second)
-	nonce := fmt.Sprintf("n-%d", time.Now().UnixNano())
+	nonce, err := clicore.NewHopNonce()
+	if err != nil {
+		t.Fatal(err)
+	}
 	sig, err := clicore.SignHop(clicore.HopClaims{
 		SenderDeviceID: bridgeSender.id, TargetDeviceID: self, TargetSessionID: req.TargetSessionID,
 		Tool: req.Tool, SealedPrompt: req.SealedPrompt, SealedFileKey: req.SealedFileKey,
@@ -360,6 +362,84 @@ func TestHandleInjectInboxRequiresFile(t *testing.T) {
 	}))
 	if r.ranSID != "" || len(c.reports) != 1 || c.reports[0][0] != "failed" {
 		t.Fatalf("fileless inbox delivery ran or was not failed: prompt %q, reports %v", r.ranPrompt, c.reports)
+	}
+}
+
+func TestHandleInjectUsesMatchingLANStageBeforeRelay(t *testing.T) {
+	cwd := t.TempDir()
+	stage, err := newAgentFileStage(filepath.Join(t.TempDir(), "pending"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ck, err := clicore.NewContentKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var encrypted bytes.Buffer
+	if err := clicore.EncryptStream(&encrypted, bytes.NewReader([]byte("direct bytes")), ck); err != nil {
+		t.Fatal(err)
+	}
+	c := &fakeAgentClient{}
+	r := &fakeRunner{project: cwd}
+	deps := keyedDeps()
+	deps.AgentFiles = stage
+	deps.OpenContentKey = func(string) ([]byte, error) { return ck, nil }
+	deps.DownloadContent = func(context.Context, string) ([]byte, error) {
+		t.Fatal("relay download was attempted despite a matching LAN stage")
+		return nil, nil
+	}
+	req := signedReq(t, clicore.AgentRequest{ID: "req-direct", Tool: "claude", TargetSessionID: "s1",
+		SealedPrompt: `{"prompt":"read it","file_name":"note.txt","sender_lan_fingerprint":"` + testStageFingerprint + `"}`,
+		HasFile:      true, SealedFileKey: "sealed-key"})
+	if err := stage.reserve(req.Nonce, testStageFingerprint, int64(encrypted.Len())); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stage.dir, req.Nonce), encrypted.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt().handleInject(context.Background(), c, r, deps, req)
+	if r.ranSID != "s1" {
+		t.Fatalf("LAN file did not run in target session; reports %v", c.reports)
+	}
+	if got, err := os.ReadFile(filepath.Join(cwd, ".s2u-inbox", "note.txt")); err != nil || string(got) != "direct bytes" {
+		t.Fatalf("placed LAN file = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(stage.dir, req.Nonce)); !os.IsNotExist(err) {
+		t.Fatalf("consumed stage was not deleted: %v", err)
+	}
+}
+
+func TestHandleInjectNeverUsesStageFromDifferentLANPeer(t *testing.T) {
+	stage, err := newAgentFileStage(filepath.Join(t.TempDir(), "pending"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &fakeAgentClient{}
+	r := &fakeRunner{project: t.TempDir()}
+	ck, err := clicore.NewContentKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attackerCiphertext bytes.Buffer
+	if err := clicore.EncryptStream(&attackerCiphertext, bytes.NewReader([]byte("attacker bytes")), ck); err != nil {
+		t.Fatal(err)
+	}
+	deps := keyedDeps()
+	deps.AgentFiles = stage
+	deps.OpenContentKey = func(string) ([]byte, error) { return ck, nil }
+	deps.DownloadContent = func(context.Context, string) ([]byte, error) { return nil, errors.New("no relay object") }
+	req := signedReq(t, clicore.AgentRequest{ID: "req-wrong-peer", Tool: "claude", TargetSessionID: "s1",
+		SealedPrompt: `{"prompt":"read it","file_name":"note.txt","sender_lan_fingerprint":"` + testStageFingerprint + `"}`,
+		HasFile:      true, SealedFileKey: "sealed-key"})
+	if err := stage.reserve(req.Nonce, strings.Repeat("b", 64), int64(attackerCiphertext.Len())); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stage.dir, req.Nonce), attackerCiphertext.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt().handleInject(context.Background(), c, r, deps, req)
+	if r.ranSID != "" || len(c.reports) != 1 || c.reports[0][0] != "failed" {
+		t.Fatalf("mismatched peer's staged bytes ran: %v, reports %v", r.ranPrompt, c.reports)
 	}
 }
 
