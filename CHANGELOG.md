@@ -12,8 +12,6 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
-## [20261001110746] - 2026-10-01
-
 ### Fixed
 
 - Agent files can be staged as encrypted bytes over a trusted LAN/Tailscale
@@ -27,6 +25,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 - File-carrying agent prompts now fail if the attachment cannot be opened or
   placed. Received files never overwrite an existing inbox file or follow an
   inbox symlink.
+
+## [20261001110746] - 2026-10-01
+
+### Fixed
+
 - Agent-channel control requests are bound to the Claude session that actually
   connected to the local daemon; another same-user process can no longer claim
   a session or complete its request using the shared control token.
