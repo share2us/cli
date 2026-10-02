@@ -13,6 +13,7 @@ import (
 	"time"
 
 	clicore "github.com/share2us/cli-core"
+	"github.com/share2us/cli-core/lanid"
 )
 
 // AgentClient is the subset of the server API the bridge loop drives (implemented
@@ -207,6 +208,9 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 			// can tell that a recreated session is still the same agent.
 			if err := client.RegisterAgentSession(ctx, clicore.AgentRegisterInput{
 				AgentID: b.AgentID, SessionID: s.SessionID, Tool: s.Tool, Name: s.Name, Project: s.Project, Status: s.Status,
+				// This device's LAN fingerprint, so a sender can find and pin it
+				// for a direct LAN agent-file transfer (the directory returns it).
+				LANFingerprint: lanid.Fingerprint(),
 			}); err != nil {
 				quiet.log("agent-bridge register: %v", err)
 			}
