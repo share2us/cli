@@ -4,19 +4,15 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	clicore "github.com/share2us/cli-core"
-	"github.com/share2us/cli-core/lanid"
 	"github.com/share2us/cli/internal/daemon"
 )
 
@@ -504,100 +500,42 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	if cerr != nil {
 		return a.fail("load login", cerr)
 	}
-	// A file rides along end-to-end: a fresh content key encrypts it, the ciphertext
-	// goes to R2 (object_key), and the content key is sealed to the target device.
-	// The display name stays inside that encrypted, signed envelope. The relay
-	// server cannot rewrite it after sealing, and older receivers ignore it.
-	env := daemon.InjectEnvelope{Prompt: prompt, SenderDeviceName: currentDeviceName(ctx, client, credential.DeviceSessionID)}
-	// The sender's LAN fingerprint rides in the signed envelope so a direct LAN
-	// transfer (when added) can be bound to this device; harmless on the relay
-	// path, where the receiver never looks for a staged file.
-	env.SenderLANFingerprint = lanid.Fingerprint()
-	if inbox {
-		env.Deliver = "inbox"
-	}
-	// The hop nonce is generated up front: a direct LAN push stages its ciphertext
-	// keyed by this nonce before the inject exists, and the hop is then signed with
-	// the same nonce (signHopWithNonce below).
-	nonce, nerr := clicore.NewHopNonce()
-	if nerr != nil {
-		return a.fail("hop nonce", nerr)
-	}
-	var objectKey, sealedFileKey, transport string
-	var lanFile bool
-	if file != "" {
-		data, rerr := os.ReadFile(file)
-		if rerr != nil {
-			return a.fail("read file", rerr)
-		}
-		ck, kerr := clicore.NewContentKey()
-		if kerr != nil {
-			return a.fail("content key", kerr)
-		}
-		var enc bytes.Buffer
-		if eerr := clicore.EncryptStream(&enc, bytes.NewReader(data), ck); eerr != nil {
-			return a.fail("encrypt file", eerr)
-		}
-		// LAN/TUN first: push the sealed bytes straight to the target's agent-file
-		// receiver, keyed by the nonce. On any failure, fall back to the relay.
-		if target.LANFingerprint != "" && pushAgentFileLAN(ctx, target.LANFingerprint, env.SenderDeviceName, nonce, enc.Bytes()) {
-			lanFile, transport = true, "direct LAN"
-		} else {
-			objectKey, err = client.AgentUploadContent(ctx, enc.Bytes())
-			if err != nil {
-				return a.fail("upload file", err)
-			}
-			transport = "relay"
-		}
-		sealedFileKey, err = clicore.SealContentKeyForDevice(ck, targetPub)
-		if err != nil {
-			return a.fail("seal file key", err)
-		}
-		env.FileName = filepath.Base(file)
-	}
-	envBytes, _ := json.Marshal(env)
-	sealed, err := clicore.SealForDevice(envBytes, targetPub)
-	if err != nil {
-		return a.fail("seal prompt", err)
-	}
-	injectIn := clicore.AgentInjectInput{
-		TargetDeviceID:  deviceID,
-		TargetSessionID: sessionID,
-		Tool:            tool,
-		SealedPrompt:    sealed,
-		ObjectKey:       objectKey,
-		LANFile:         lanFile,
-		SealedFileKey:   sealedFileKey,
-		GoalID:          goalID,
-		ProjectID:       strings.TrimSpace(projectID),
-		SenderAgentID:   senderAgent,
-		TargetAgentID:   target.AgentID,
-	}
-	// Sign the hop (ADR-041 §5), so the server can refuse a forgery and — the part
-	// that matters — the receiving machine can check it came from this device even
-	// if the server lies.
+	// Ensure this device has a registered hop signing key, then hand the whole
+	// send (seal, transport choice, sign, inject) to the shared cli-core path so
+	// the CLI and the desktop app behave identically.
 	if credential, cerr = ensureSigningKey(ctx, client, credential); cerr != nil {
 		return a.fail("signing key", cerr)
 	}
-	if serr := signHopWithNonce(&injectIn, credential, time.Now(), nonce); serr != nil {
-		return a.fail("sign hop", serr)
-	}
-	res, err := client.AgentInject(ctx, injectIn)
+	res, err := client.SendAgentFile(ctx, credential, clicore.SendAgentFileParams{
+		TargetDeviceID:       deviceID,
+		TargetSessionID:      sessionID,
+		Tool:                 tool,
+		TargetPublicKey:      targetPub,
+		TargetLANFingerprint: target.LANFingerprint,
+		TargetAgentID:        target.AgentID,
+		Prompt:               prompt,
+		FilePath:             file,
+		Inbox:                inbox,
+		GoalID:               goalID,
+		ProjectID:            projectID,
+		SenderAgentID:        senderAgent,
+		SenderDeviceName:     currentDeviceName(ctx, client, credential.DeviceSessionID),
+	})
 	if err != nil {
 		return a.fail("send", err)
 	}
 	if res.Busy {
-		fmt.Fprintln(a.stderr, "warning: that session is busy — injecting now may cause unintended results; it will run once the session is idle")
+		fmt.Fprintln(a.stderr, "warning: that session is busy; injecting now may cause unintended results, so it runs once the session is idle")
 	}
 	switch res.Status {
 	case "pending":
-		fmt.Fprintf(a.stdout, "Sent (%s). Waiting for approval on the target device. Track: %s agent status %s\n", res.ID, commandName, res.ID)
+		fmt.Fprintf(a.stdout, "Sent (%s). Waiting for approval on the target device. Track: %s agent status %s\n", res.RequestID, commandName, res.RequestID)
 	default:
 		via := ""
-		if transport != "" {
-			via = " via " + transport
+		if res.Transport != "" {
+			via = " via " + res.Transport
 		}
-		fmt.Fprintf(a.stdout, "Sent (%s)%s, queued for delivery. Track: %s agent status %s\n", res.ID, via, commandName, res.ID)
+		fmt.Fprintf(a.stdout, "Sent (%s)%s, queued for delivery. Track: %s agent status %s\n", res.RequestID, via, commandName, res.RequestID)
 	}
 	return 0
 }

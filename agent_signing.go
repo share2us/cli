@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	clicore "github.com/share2us/cli-core"
 )
@@ -22,6 +21,9 @@ import (
 // locally before it is registered. The other way round, a crash between the two
 // would leave the server holding a key this machine had lost, with no way to
 // replace it short of signing in again.
+//
+// The hop signing itself lives in cli-core (Client.SendAgentFile), so the CLI and
+// the desktop app sign and send the same way.
 func ensureSigningKey(ctx context.Context, client *clicore.Client, credential clicore.Credential) (clicore.Credential, error) {
 	if credential.DeviceSessionID == "" {
 		return credential, errors.New("this login has no device session; sign in again to send signed hops")
@@ -47,52 +49,4 @@ func ensureSigningKey(ctx context.Context, client *clicore.Client, credential cl
 		return credential, fmt.Errorf("register signing key: %w", err)
 	}
 	return credential, nil
-}
-
-// signHop signs an inject request in place. The claims use the values exactly as
-// the server will normalize them — trimmed ids and a lowercase tool — because the
-// server verifies over what it is about to act on, not over what was typed.
-func signHop(in *clicore.AgentInjectInput, credential clicore.Credential, now time.Time) error {
-	nonce, err := clicore.NewHopNonce()
-	if err != nil {
-		return err
-	}
-	return signHopWithNonce(in, credential, now, nonce)
-}
-
-// signHopWithNonce signs with a caller-supplied nonce. A direct LAN file push
-// stages its ciphertext keyed by the nonce before the inject exists, so the
-// sender generates the nonce first, pushes, then signs the hop with it.
-func signHopWithNonce(in *clicore.AgentInjectInput, credential clicore.Credential, now time.Time, nonce string) error {
-	in.TargetDeviceID = strings.TrimSpace(in.TargetDeviceID)
-	in.TargetSessionID = strings.TrimSpace(in.TargetSessionID)
-	in.Tool = strings.ToLower(strings.TrimSpace(in.Tool))
-	in.SealedFileKey = strings.TrimSpace(in.SealedFileKey)
-	in.GoalID = strings.TrimSpace(in.GoalID)
-	in.ProjectID = strings.TrimSpace(in.ProjectID)
-	in.SenderAgentID = strings.TrimSpace(in.SenderAgentID)
-	in.TargetAgentID = strings.TrimSpace(in.TargetAgentID)
-	issued := now.UTC().Truncate(time.Second)
-
-	sig, err := clicore.SignHop(clicore.HopClaims{
-		SenderDeviceID:  credential.DeviceSessionID,
-		TargetDeviceID:  in.TargetDeviceID,
-		TargetSessionID: in.TargetSessionID,
-		Tool:            in.Tool,
-		SealedPrompt:    in.SealedPrompt,
-		SealedFileKey:   in.SealedFileKey,
-		GoalID:          in.GoalID,
-		IssuedAt:        issued,
-		Nonce:           nonce,
-		ProjectID:       in.ProjectID,
-		SenderAgentID:   in.SenderAgentID,
-		TargetAgentID:   in.TargetAgentID,
-	}, credential.DeviceSigningPrivateKey)
-	if err != nil {
-		return err
-	}
-	in.Signature = sig
-	in.IssuedAt = issued.Format(time.RFC3339)
-	in.Nonce = nonce
-	return nil
 }
