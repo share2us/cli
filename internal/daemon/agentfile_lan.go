@@ -39,7 +39,7 @@ func (rt *Runtime) agentFileLANLoop(ctx context.Context, opts Options, deps Deps
 		DestDir:    deps.AgentFiles.dir,
 		Loop:       true,
 		OnRequest: func(r lanshare.RequestInfo) bool {
-			if err := acceptAgentFilePush(deps.AgentFiles, opts.IsTrustedSender, r); err != nil {
+			if err := acceptAgentFilePush(deps.AgentFiles, opts.IsTrustedSender, opts.IsOwnAccountDevice, r); err != nil {
 				deps.logf("agent-file LAN push refused: %v", err)
 				return false
 			}
@@ -64,9 +64,23 @@ func (rt *Runtime) agentFileLANLoop(ctx context.Context, opts Options, deps Deps
 	}
 }
 
-func acceptAgentFilePush(stage *AgentFileStage, trusted func([]byte) bool, r lanshare.RequestInfo) error {
-	if r.IsDir || trusted == nil || !trusted(r.SenderKey) {
-		return errors.New("agent-file sender is not a trusted device")
+// acceptAgentFilePush decides whether to stage an incoming LAN push. A sender is
+// admitted when it is either a server-signed trusted nearby device (ADR-034) OR
+// another device on this same account (ownAccount). The same-account path is a
+// deliberate loosening for the agent-file feature, which is about a user's own
+// devices talking to each other: requiring a separate device-pairing ceremony
+// between your own devices was friction with no security win here. Staging is
+// inert on its own — the bytes are E2E-sealed to the target and are only ever
+// claimed when a SIGNED, approved inject arrives carrying the matching
+// (nonce, sender LAN fingerprint); an un-claimed push expires on the TTL sweep.
+// Cross-account senders are not admitted this way and fall back to the relay.
+func acceptAgentFilePush(stage *AgentFileStage, trusted, ownAccount func([]byte) bool, r lanshare.RequestInfo) error {
+	if r.IsDir {
+		return errors.New("agent-file push cannot be a directory")
+	}
+	admitted := (trusted != nil && trusted(r.SenderKey)) || (ownAccount != nil && ownAccount(r.SenderKey))
+	if !admitted {
+		return errors.New("agent-file sender is neither a trusted device nor one of this account's devices")
 	}
 	return stage.reserve(r.Name, lanshare.IdentityFingerprint(r.SenderKey), r.Size)
 }
