@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261006073738] - 2026-10-06
+
 ### Fixed
 
 - Agent file transfers can go directly over LAN between active devices on the
