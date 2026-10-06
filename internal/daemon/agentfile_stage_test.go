@@ -90,14 +90,33 @@ func TestAgentFileLANPushRequiresTrustedIdentity(t *testing.T) {
 	}
 	key := []byte("verified LAN public key")
 	r := lanshare.RequestInfo{Name: testStageNonce, Size: 5, SenderKey: key}
-	if err := acceptAgentFilePush(stage, func([]byte) bool { return false }, r); err == nil {
-		t.Fatal("untrusted LAN sender was admitted")
+	no := func([]byte) bool { return false }
+	yes := func([]byte) bool { return true }
+	if err := acceptAgentFilePush(stage, no, no, r); err == nil {
+		t.Fatal("sender that is neither trusted nor own-account was admitted")
 	}
-	if err := acceptAgentFilePush(stage, func([]byte) bool { return true }, r); err != nil {
-		t.Fatal(err)
+	if err := acceptAgentFilePush(stage, yes, no, r); err != nil {
+		t.Fatalf("trusted sender was rejected: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(stage.dir, testStageNonce+".peer")); err != nil {
 		t.Fatalf("trusted sender was not reserved: %v", err)
+	}
+}
+
+func TestAgentFileLANPushAdmitsOwnAccountDevice(t *testing.T) {
+	stage, err := newAgentFileStage(filepath.Join(t.TempDir(), "pending"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := lanshare.RequestInfo{Name: testStageNonce, Size: 5, SenderKey: []byte("verified LAN public key")}
+	no := func([]byte) bool { return false }
+	ownAccount := func([]byte) bool { return true }
+	// Not an ADR-034 trusted device, but a device on this same account: admitted.
+	if err := acceptAgentFilePush(stage, no, ownAccount, r); err != nil {
+		t.Fatalf("own-account sender was rejected: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(stage.dir, testStageNonce+".peer")); err != nil {
+		t.Fatalf("own-account sender was not reserved: %v", err)
 	}
 }
 
@@ -123,7 +142,7 @@ func TestAgentFileLANPushStagesCiphertextBeforeAcknowledgement(t *testing.T) {
 			Bind: "127.0.0.1", NoPassword: true, Identity: receiverKey,
 			DestDir: stage.dir, OnListen: func(info lanshare.ListenInfo) { listening <- info },
 			OnRequest: func(r lanshare.RequestInfo) bool {
-				return acceptAgentFilePush(stage, func(key []byte) bool { return bytes.Equal(key, senderPub) }, r) == nil
+				return acceptAgentFilePush(stage, nil, func(key []byte) bool { return bytes.Equal(key, senderPub) }, r) == nil
 			},
 		})
 		done <- err

@@ -89,12 +89,18 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		destDir = settings.DestDir
 	}
 
+	// Agent-file pushes are also admitted from another device on this same account
+	// (not only ADR-034 trusted devices). The set is empty until the first refresh
+	// below, so this is inert until the daemon has pulled the account's devices.
+	ownDevices := newOwnAccountDevices()
+
 	runOpts := daemon.Options{
-		DestDir:         destDir,
-		LANDiscoverable: settings.LANDiscoverable && !opts.noLAN,
-		Notify:          settings.Notify && !opts.noNotify,
-		ApprovalPolicy:  settings.ApprovalPolicy,
-		IsTrustedSender: trustedSender,
+		DestDir:            destDir,
+		LANDiscoverable:    settings.LANDiscoverable && !opts.noLAN,
+		Notify:             settings.Notify && !opts.noNotify,
+		ApprovalPolicy:     settings.ApprovalPolicy,
+		IsTrustedSender:    trustedSender,
+		IsOwnAccountDevice: ownDevices.contains,
 	}
 
 	// The daemon runs LAN receive with no account — the LAN listener needs no
@@ -128,8 +134,14 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 			return receiveInboxOnce(c, client, credential, dir, true, a.stdout)
 		},
 		RefreshTrust: a.refreshTrustList,
-		CheckUpdate:  a.daemonUpdateCheck,
-		Cleanup:      func(c context.Context) error { return cleanupStaging(destDir) },
+		RefreshOwnDevices: func(c context.Context) {
+			bindings, err := daemon.LoadBindings()
+			if err == nil && len(bindings) > 0 {
+				ownDevices.refresh(c, client)
+			}
+		},
+		CheckUpdate: a.daemonUpdateCheck,
+		Cleanup:     func(c context.Context) error { return cleanupStaging(destDir) },
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(logw, format+"\n", args...)
 		},

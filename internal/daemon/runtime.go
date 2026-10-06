@@ -25,10 +25,14 @@ const defaultInboxInterval = 5 * time.Second
 // is latency-sensitive.
 const (
 	trustRefreshEvery = 24 * time.Hour
-	updateCheckEvery  = 6 * time.Hour
-	cleanupEvery      = 6 * time.Hour
-	schedulerTick     = 30 * time.Second
-	jobTimeout        = 60 * time.Second
+	// Own-account devices change far more often than the ADR-034 trust list (a new
+	// login adds one), and a sender is only recognized for direct LAN once it is
+	// cached, so this refreshes on a shorter cadence. A restart refreshes at once.
+	ownDevicesRefreshEvery = time.Hour
+	updateCheckEvery       = 6 * time.Hour
+	cleanupEvery           = 6 * time.Hour
+	schedulerTick          = 30 * time.Second
+	jobTimeout             = 60 * time.Second
 )
 
 // Options configures a daemon run. Zero values fall back to sensible defaults.
@@ -44,9 +48,14 @@ type Options struct {
 	// device (ADR-034). Replaces the old trust-by-IP, which a LAN attacker could
 	// claim by taking the address (todo W-M5).
 	IsTrustedSender func(senderKey []byte) bool
-	InboxInterval   time.Duration // inbox poll cadence (0 = default 5s)
-	ApprovalPolicy  string        // LAN approval policy (clicore.ApprovalPolicy*)
-	AgentBridge     bool          // ADR-036: register sessions + receive inject requests
+	// IsOwnAccountDevice reports whether a verified LAN sender key belongs to
+	// another device on THIS account. The agent-file receiver admits such a
+	// sender without a separate ADR-034 pairing (see acceptAgentFilePush); the
+	// ordinary file receiver does not use it.
+	IsOwnAccountDevice func(senderKey []byte) bool
+	InboxInterval      time.Duration // inbox poll cadence (0 = default 5s)
+	ApprovalPolicy     string        // LAN approval policy (clicore.ApprovalPolicy*)
+	AgentBridge        bool          // ADR-036: register sessions + receive inject requests
 }
 
 // Deps are the behaviours the daemon composes, injected from package main so this
@@ -57,6 +66,9 @@ type Deps struct {
 	ReceiveOnce func(ctx context.Context, destDir string) (int, error)
 	// RefreshTrust refreshes the server-signed LAN trust cache (best-effort).
 	RefreshTrust func(ctx context.Context)
+	// RefreshOwnDevices refreshes the cache of this account's own device LAN
+	// fingerprints, used by IsOwnAccountDevice (best-effort). nil = not refreshed.
+	RefreshOwnDevices func(ctx context.Context)
 	// CheckUpdate returns whether a newer build exists plus a human upgrade line.
 	CheckUpdate func(ctx context.Context) (available bool, message string)
 	// Cleanup removes stale temp/staging files (best-effort).
@@ -343,6 +355,12 @@ func (rt *Runtime) scheduler(ctx context.Context, opts Options, deps Deps) {
 		{name: "trust-refresh", every: trustRefreshEvery, run: func(c context.Context) error {
 			if deps.RefreshTrust != nil {
 				deps.RefreshTrust(c)
+			}
+			return nil
+		}},
+		{name: "own-devices-refresh", every: ownDevicesRefreshEvery, run: func(c context.Context) error {
+			if opts.AgentBridge && opts.LANDiscoverable && deps.RefreshOwnDevices != nil {
+				deps.RefreshOwnDevices(c)
 			}
 			return nil
 		}},

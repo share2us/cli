@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Agent file transfers can go directly over LAN between active devices on the
+  same account without separate nearby-device pairing. Account membership is
+  refreshed hourly and expires after 90 minutes without a successful refresh.
+
 ## [20261002182845] - 2026-10-02
 
 ### Added
