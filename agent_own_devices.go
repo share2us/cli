@@ -5,12 +5,18 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"strings"
 	"sync"
+	"time"
 
 	clicore "github.com/share2us/cli-core"
 	"github.com/share2us/cli-core/lanshare"
 )
+
+// The scheduler refreshes hourly. An outage may reuse a recent answer, but
+// never keep admitting a revoked device indefinitely.
+const ownDeviceCacheTTL = 90 * time.Minute
 
 // ownAccountDevices caches the LAN fingerprints of this account's own devices so
 // the agent-file receiver can admit a direct LAN push from another of the user's
@@ -20,16 +26,17 @@ import (
 // lanid identity fingerprint, never an address.
 type ownAccountDevices struct {
 	mu           sync.RWMutex
-	fingerprints map[string]struct{}
+	fingerprints map[string]time.Time
+	fetchedAt    time.Time
 }
 
 func newOwnAccountDevices() *ownAccountDevices {
-	return &ownAccountDevices{fingerprints: map[string]struct{}{}}
+	return &ownAccountDevices{fingerprints: map[string]time.Time{}}
 }
 
 // refresh replaces the cached set from the account's device list. Best-effort: on
-// any error the previous set is kept, so a transient outage does not suddenly
-// reject a device the daemon already knew.
+// any error the previous set is kept within its bounded lifetime, so a short
+// outage does not immediately reject a device the daemon already knew.
 func (o *ownAccountDevices) refresh(ctx context.Context, client *clicore.Client) {
 	if client == nil {
 		return
@@ -38,14 +45,24 @@ func (o *ownAccountDevices) refresh(ctx context.Context, client *clicore.Client)
 	if err != nil {
 		return
 	}
-	set := make(map[string]struct{}, len(resp.Sessions))
+	now := time.Now()
+	set := make(map[string]time.Time, len(resp.Sessions))
 	for _, d := range resp.Sessions {
-		if fp := strings.ToLower(strings.TrimSpace(d.LanFingerprint)); fp != "" {
-			set[fp] = struct{}{}
+		if d.ClientType != "cli" {
+			continue
+		}
+		expires, err := time.Parse(time.RFC3339, d.ExpiresAt)
+		if err != nil || !expires.After(now) {
+			continue
+		}
+		fp := strings.ToLower(strings.TrimSpace(d.LanFingerprint))
+		if decoded, err := hex.DecodeString(fp); err == nil && len(decoded) == 32 && expires.After(set[fp]) {
+			set[fp] = expires
 		}
 	}
 	o.mu.Lock()
 	o.fingerprints = set
+	o.fetchedAt = now
 	o.mu.Unlock()
 }
 
@@ -60,7 +77,9 @@ func (o *ownAccountDevices) contains(senderKey []byte) bool {
 		return false
 	}
 	o.mu.RLock()
-	_, ok := o.fingerprints[fp]
+	expires, ok := o.fingerprints[fp]
+	fetchedAt := o.fetchedAt
 	o.mu.RUnlock()
-	return ok
+	now := time.Now()
+	return ok && now.Before(expires) && !fetchedAt.IsZero() && now.Sub(fetchedAt) < ownDeviceCacheTTL
 }

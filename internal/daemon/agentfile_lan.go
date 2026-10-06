@@ -20,6 +20,13 @@ func (rt *Runtime) agentFileLANLoop(ctx context.Context, opts Options, deps Deps
 	if !waitForBinding(ctx, agentBindingPoll) {
 		return
 	}
+	// A binding may have appeared after the scheduler's startup pass. Populate
+	// membership before opening the endpoint rather than waiting for its next tick.
+	if deps.RefreshOwnDevices != nil {
+		refreshCtx, cancel := context.WithTimeout(ctx, jobTimeout)
+		deps.RefreshOwnDevices(refreshCtx)
+		cancel()
+	}
 	identity, err := lanid.Identity()
 	if err != nil {
 		deps.logf("agent-file LAN receiver is off: no device identity: %v", err)
@@ -68,8 +75,9 @@ func (rt *Runtime) agentFileLANLoop(ctx context.Context, opts Options, deps Deps
 // admitted when it is either a server-signed trusted nearby device (ADR-034) OR
 // another device on this same account (ownAccount). The same-account path is a
 // deliberate loosening for the agent-file feature, which is about a user's own
-// devices talking to each other: requiring a separate device-pairing ceremony
-// between your own devices was friction with no security win here. Staging is
+// devices talking to each other, without a separate device-pairing ceremony.
+// Admission permits staging disk use, but does not permit placement or execution.
+// Staging is
 // inert on its own — the bytes are E2E-sealed to the target and are only ever
 // claimed when a SIGNED, approved inject arrives carrying the matching
 // (nonce, sender LAN fingerprint); an un-claimed push expires on the TTL sweep.

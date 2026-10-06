@@ -30,9 +30,9 @@ const (
 	// cached, so this refreshes on a shorter cadence. A restart refreshes at once.
 	ownDevicesRefreshEvery = time.Hour
 	updateCheckEvery       = 6 * time.Hour
-	cleanupEvery      = 6 * time.Hour
-	schedulerTick     = 30 * time.Second
-	jobTimeout        = 60 * time.Second
+	cleanupEvery           = 6 * time.Hour
+	schedulerTick          = 30 * time.Second
+	jobTimeout             = 60 * time.Second
 )
 
 // Options configures a daemon run. Zero values fall back to sensible defaults.
@@ -54,8 +54,8 @@ type Options struct {
 	// ordinary file receiver does not use it.
 	IsOwnAccountDevice func(senderKey []byte) bool
 	InboxInterval      time.Duration // inbox poll cadence (0 = default 5s)
-	ApprovalPolicy  string        // LAN approval policy (clicore.ApprovalPolicy*)
-	AgentBridge     bool          // ADR-036: register sessions + receive inject requests
+	ApprovalPolicy     string        // LAN approval policy (clicore.ApprovalPolicy*)
+	AgentBridge        bool          // ADR-036: register sessions + receive inject requests
 }
 
 // Deps are the behaviours the daemon composes, injected from package main so this
@@ -359,7 +359,7 @@ func (rt *Runtime) scheduler(ctx context.Context, opts Options, deps Deps) {
 			return nil
 		}},
 		{name: "own-devices-refresh", every: ownDevicesRefreshEvery, run: func(c context.Context) error {
-			if deps.RefreshOwnDevices != nil {
+			if opts.AgentBridge && opts.LANDiscoverable && deps.RefreshOwnDevices != nil {
 				deps.RefreshOwnDevices(c)
 			}
 			return nil

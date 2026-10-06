@@ -133,10 +133,15 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 			// single file the user named (§AG two-node run, 2026-09-10).
 			return receiveInboxOnce(c, client, credential, dir, true, a.stdout)
 		},
-		RefreshTrust:      a.refreshTrustList,
-		RefreshOwnDevices: func(c context.Context) { ownDevices.refresh(c, client) },
-		CheckUpdate:       a.daemonUpdateCheck,
-		Cleanup:      func(c context.Context) error { return cleanupStaging(destDir) },
+		RefreshTrust: a.refreshTrustList,
+		RefreshOwnDevices: func(c context.Context) {
+			bindings, err := daemon.LoadBindings()
+			if err == nil && len(bindings) > 0 {
+				ownDevices.refresh(c, client)
+			}
+		},
+		CheckUpdate: a.daemonUpdateCheck,
+		Cleanup:     func(c context.Context) error { return cleanupStaging(destDir) },
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(logw, format+"\n", args...)
 		},

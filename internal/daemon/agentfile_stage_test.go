@@ -142,7 +142,7 @@ func TestAgentFileLANPushStagesCiphertextBeforeAcknowledgement(t *testing.T) {
 			Bind: "127.0.0.1", NoPassword: true, Identity: receiverKey,
 			DestDir: stage.dir, OnListen: func(info lanshare.ListenInfo) { listening <- info },
 			OnRequest: func(r lanshare.RequestInfo) bool {
-				return acceptAgentFilePush(stage, func(key []byte) bool { return bytes.Equal(key, senderPub) }, nil, r) == nil
+				return acceptAgentFilePush(stage, nil, func(key []byte) bool { return bytes.Equal(key, senderPub) }, r) == nil
 			},
 		})
 		done <- err
