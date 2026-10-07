@@ -29,6 +29,9 @@ on:
 
 permissions:
   contents: write
+  # OIDC for npm Trusted Publishing: npm exchanges GitHub's short-lived id-token
+  # for a scoped publish credential, so no NPM_TOKEN is stored or rotated.
+  id-token: write
 
 concurrency:
   group: release
@@ -38,7 +41,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # npm publishing is tokenless now (Trusted Publishing / OIDC); no NPM_TOKEN.
       APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
       # Optional Windows code signing. Absent by default, and the build is
       # unchanged when it is absent — see the "Prepare Windows signing" step.
@@ -336,13 +339,21 @@ jobs:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Publish @share2us/cli to npm
-        if: env.NPM_TOKEN != ''
+      # Tokenless publish via npm Trusted Publishing (OIDC). npm trades the job's
+      # GitHub id-token for a short-lived, scoped publish credential, so there is
+      # no NPM_TOKEN to leak or rotate, and provenance is attached automatically.
+      # Requirements, both of which must hold or publish fails:
+      #   - permissions: id-token: write (set at the workflow level above), and
+      #   - a Trusted Publisher configured for @share2us/cli on npmjs.com:
+      #     Access > GitHub Actions, org `share2us`, repo `cli`, workflow
+      #     `release.yml`. Configure that once on the website; it is not in code.
+      # OIDC publishing needs npm >= 11.5.1; Node 20 ships npm 10, so upgrade the
+      # bundled npm first (node 20.19+ satisfies npm 11's engine requirement).
+      - name: Publish @share2us/cli to npm (Trusted Publishing)
         working-directory: npm
-        env:
-          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
         run: |
           set -euo pipefail
+          npm install -g npm@latest
           # GPL-3.0-only: the licence text must travel with the package, and npm
           # packs this directory alone. Copied at publish time so the repo keeps
           # ONE copy of the licence rather than a duplicate that can drift.
