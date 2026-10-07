@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261007122734] - 2026-10-07
+
 ### Added
 
 - When a prompt sent to an agent cannot be delivered because the target session's
