@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261007071712] - 2026-10-07
+
 ### Added
 
 - Organise your agents: `s2u agent pin|unpin <id>` keeps an agent at the top of
