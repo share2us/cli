@@ -40,11 +40,13 @@ func ensureSigningKey(ctx context.Context, client *clicore.Client, credential cl
 		}
 	}
 	if err := client.RegisterSigningKey(ctx, credential.DeviceSigningPublicKey); err != nil {
-		// A 409 means the server holds a DIFFERENT key for this device session —
-		// most likely credentials copied from another machine. Say what to do
-		// rather than surfacing a bare conflict.
+		// A 409 means the server holds a DIFFERENT key for this device session:
+		// the local signing key was lost/replaced, or credentials were copied from
+		// another machine. A fresh login re-keys the device (ADR-045); on an older
+		// server, a plain login reuses this session and keeps the stuck key, so a
+		// sign-out first is the guaranteed reset. Give both, nearest-first.
 		if strings.Contains(err.Error(), "signing_key_already_set") {
-			return credential, errors.New("the server already holds a different signing key for this device; run `" + commandName + " login` to get a fresh device identity")
+			return credential, errors.New("the server holds a different signing key for this device (the local one was lost). Run `" + commandName + " login` again to re-key it; if that does not clear it, `" + commandName + " signout <device>` then `" + commandName + " login` (see `" + commandName + " devices` for the name)")
 		}
 		return credential, fmt.Errorf("register signing key: %w", err)
 	}

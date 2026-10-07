@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- The agent signing-key error now gives a recovery that works: run `login` again to
+  re-key the device, and if that does not clear it, `signout <device>` then `login`.
+  (The old text pointed only at `login`, which on the same machine reuses the session
+  and keeps the stuck key.)
+
 ## [20261007071712] - 2026-10-07
 
 ### Added
