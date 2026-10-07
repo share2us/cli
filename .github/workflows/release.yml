@@ -26,6 +26,11 @@ on:
         default: beta
         type: choice
         options: [beta, stable]
+      skip_npm:
+        description: "skip the npm publish (use until npm Trusted Publishing is configured on npmjs.com)"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -350,6 +355,7 @@ jobs:
       # OIDC publishing needs npm >= 11.5.1; Node 20 ships npm 10, so upgrade the
       # bundled npm first (node 20.19+ satisfies npm 11's engine requirement).
       - name: Publish @share2us/cli to npm (Trusted Publishing)
+        if: ${{ !inputs.skip_npm }}
         working-directory: npm
         run: |
           set -euo pipefail
