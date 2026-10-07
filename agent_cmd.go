@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -26,7 +27,17 @@ func (a app) agent(ctx context.Context, args []string) int {
 	}
 	switch args[0] {
 	case "list", "ls":
-		return a.agentList(ctx)
+		return a.agentList(ctx, args[1:])
+	case "pin":
+		return a.agentPin(ctx, args[1:], true)
+	case "unpin":
+		return a.agentPin(ctx, args[1:], false)
+	case "hide":
+		return a.agentHide(ctx, args[1:], true)
+	case "unhide", "show":
+		return a.agentHide(ctx, args[1:], false)
+	case "rename", "alias":
+		return a.agentRename(ctx, args[1:])
 	case "send", "inject":
 		return a.agentSend(ctx, args[1:])
 	case "status":
@@ -76,8 +87,11 @@ func (a app) agent(ctx context.Context, args []string) int {
 }
 
 func (a app) agentUsage() int {
-	fmt.Fprintf(a.stderr, "usage: %s agent <list|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|typed|bindings|goal|rules|policy>\n", commandName)
-	fmt.Fprintf(a.stderr, "  list                                       reachable agent sessions across your devices\n")
+	fmt.Fprintf(a.stderr, "usage: %s agent <list|pin|hide|rename|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|typed|bindings|goal|rules|policy>\n", commandName)
+	fmt.Fprintf(a.stderr, "  list [--all]                               reachable agent sessions across your devices\n                                             (--all includes hidden ones)\n")
+	fmt.Fprintf(a.stderr, "  pin|unpin <agent-id>                       pin an agent to the top of the list (or undo)\n")
+	fmt.Fprintf(a.stderr, "  hide|unhide <agent-id>                     hide an agent from the default list (or undo)\n")
+	fmt.Fprintf(a.stderr, "  rename <agent-id> [NAME]                   give an agent a local name (empty NAME clears it);\n                                             this is your label only, nobody else sees it\n")
 	fmt.Fprintf(a.stderr, "  send --agent ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
 	fmt.Fprintf(a.stderr, "       --inbox --file PATH                   drop a file in the agent's inbox without running it\n")
 	fmt.Fprintf(a.stderr, "       [--device ID] [--session ID]         or name the session instead; any id may be a\n                                             unique prefix, as `agent list` prints it\n")
@@ -344,7 +358,8 @@ func (a app) agentClient() (*clicore.Client, bool) {
 	return client, ok
 }
 
-func (a app) agentList(ctx context.Context) int {
+func (a app) agentList(ctx context.Context, args []string) int {
+	showAll := hasFlag(args, "--all", "-a")
 	client, ok := a.agentClient()
 	if !ok {
 		return 1
@@ -353,18 +368,46 @@ func (a app) agentList(ctx context.Context) int {
 	if err != nil {
 		return a.fail("list agent sessions", err)
 	}
-	if len(sessions) == 0 {
-		fmt.Fprintln(a.stdout, "No reachable agent sessions. Start the daemon with --agent-bridge on your other devices.")
+	// Local prefs (alias/pin/hide) decorate and order the list; a missing config
+	// is fine (everything is just unset).
+	config, _ := clicore.LoadConfig()
+	type row struct {
+		s clicore.AgentSessionInfo
+		p clicore.AgentPrefs
+	}
+	var rows []row
+	hidden := 0
+	for _, s := range sessions {
+		p := config.AgentPref(s.AgentID)
+		if p.Hidden && !showAll {
+			hidden++
+			continue
+		}
+		rows = append(rows, row{s, p})
+	}
+	// Pinned agents first, order otherwise preserved (stable).
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].p.Pinned && !rows[j].p.Pinned
+	})
+	if len(rows) == 0 {
+		if hidden > 0 {
+			fmt.Fprintf(a.stdout, "No visible agent sessions (%d hidden; run `%s agent list --all`).\n", hidden, commandName)
+		} else {
+			fmt.Fprintln(a.stdout, "No reachable agent sessions. Start the daemon with --agent-bridge on your other devices.")
+		}
 		return 0
 	}
 	// Full ids only: everything printed here can be pasted into `agent send`.
 	locations := a.localZellijLocations(ctx)
-	for _, s := range sessions {
-		line := sessionLine(s)
-		if where := locations[s.SessionID]; where != "" {
+	for _, r := range rows {
+		line := sessionLine(r.s, config.AgentDisplayName(r.s.AgentID, r.s.Name), r.p)
+		if where := locations[r.s.SessionID]; where != "" {
 			line += "  [" + where + "]"
 		}
 		fmt.Fprintln(a.stdout, line)
+	}
+	if hidden > 0 {
+		fmt.Fprintf(a.stdout, "(%d hidden; run `%s agent list --all`)\n", hidden, commandName)
 	}
 	return 0
 }
@@ -557,15 +600,28 @@ func deviceNameForID(devices []clicore.DeviceSession, deviceID string) string {
 	return ""
 }
 
-// sessionLine is one `agent list` row: agent id first, then the full --device
-// and --session, so any part of it pastes into `agent send`.
-func sessionLine(s clicore.AgentSessionInfo) string {
+// sessionLine is one `agent list` row: agent id FIRST (so it still pastes into
+// `agent send`), then the display name (the local alias when set, else the
+// server name), the full --device and --session, and any local [pinned]/[hidden]
+// tags at the end so they never disturb the pasteable fields.
+func sessionLine(s clicore.AgentSessionInfo, displayName string, p clicore.AgentPrefs) string {
 	agent := s.AgentID
 	if agent == "" {
 		agent = "-"
 	}
-	return fmt.Sprintf("%s  %-8s  %-11s  %s  (on %s)  --device %s --session %s",
-		agent, s.Tool, s.Status, s.Name, s.DeviceName, s.DeviceID, s.SessionID)
+	line := fmt.Sprintf("%s  %-8s  %-11s  %s  (on %s)  --device %s --session %s",
+		agent, s.Tool, s.Status, displayName, s.DeviceName, s.DeviceID, s.SessionID)
+	var tags []string
+	if p.Pinned {
+		tags = append(tags, "pinned")
+	}
+	if p.Hidden {
+		tags = append(tags, "hidden")
+	}
+	if len(tags) > 0 {
+		line += "  [" + strings.Join(tags, ",") + "]"
+	}
+	return line
 }
 
 // reachableTargets is the directory a send picks from: the project's member

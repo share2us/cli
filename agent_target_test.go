@@ -40,7 +40,7 @@ func flagValue(t *testing.T, line, name string) string {
 func TestListOutputPastesIntoSend(t *testing.T) {
 	targets := targetsFromSessions(twoSessions)
 	for _, s := range twoSessions {
-		line := sessionLine(s)
+		line := sessionLine(s, s.Name, clicore.AgentPrefs{})
 		if strings.Fields(line)[0] != s.AgentID {
 			t.Fatalf("list row must start with the agent id: %q", line)
 		}

@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- Organise your agents: `s2u agent pin|unpin <id>` keeps an agent at the top of
+  `agent list`, `s2u agent hide|unhide <id>` removes it from the default list
+  (`agent list --all` shows hidden ones), and `s2u agent rename <id> [NAME]`
+  gives it a local name (no NAME clears it). These are local labels on this
+  machine, shared with the desktop app; nobody else sees your names, and an agent
+  stays reachable while hidden.
+
 ## [20261006073738] - 2026-10-06
 
 ### Fixed
