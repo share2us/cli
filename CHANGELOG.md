@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- When a prompt sent to an agent cannot be delivered because the target session's
+  window can no longer be verified (its pane moved, or it was not re-bound after a
+  restart), the sender is now told to re-bind it instead of the prompt waiting
+  silently. `s2u agent status <id>` shows "action needed: re-bind the target
+  session"; the prompt is not lost and delivers on its own once the session is
+  re-bound. Any attached file was already in the inbox.
+
 ### Fixed
 
 - The agent signing-key error now gives a recovery that works: run `login` again to

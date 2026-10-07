@@ -115,7 +115,21 @@ type sessionRunner interface {
 var (
 	injectHoldPoll = 20 * time.Second
 	injectHoldMax  = 24 * time.Hour
+	// injectPaneRebindTimeout: how long a hop may sit undeliverable because the
+	// target session's bound Zellij pane can no longer be verified before the
+	// daemon tells the sender it needs a re-bind. Short, because this is a
+	// stuck state a person must act on, not a transient wait for a window.
+	injectPaneRebindTimeout = 2 * time.Minute
 )
+
+// AgentNeedsRebindMarker prefixes a reported "waiting" result when a prompt could
+// not be typed into its target session because that session's bound window/pane
+// can no longer be verified (it moved panes, left Zellij, or was never re-bound
+// after a restart). Senders detect this prefix to tell the user to re-bind the
+// session. The hop is NOT abandoned: once the session is re-bound it delivers on
+// the next poll, no re-send needed. Keep this string in sync with the desktop app
+// (share2us-gui internal/core/agent.go) and the CLI `agent status` display.
+const AgentNeedsRebindMarker = "S2U_NEEDS_REBIND: "
 
 // bridgeRefused reports a server answer that retrying soon cannot change: the
 // plan does not include agents, or the bridge is off on this server. The daemon
@@ -471,6 +485,43 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 	rt.runInject(ctx, client, runner, deps, req, env.Prompt, prompt, env.SenderDeviceName, cwd, 0)
 }
 
+// paneRebindNeeded reports whether this hop is stuck because typed delivery is
+// expected for the target session but its bound Zellij pane can no longer be
+// resolved (the needs-rebind condition). It reuses the exact resolution the
+// delivery path uses, so it agrees with why delivery keeps failing. False when
+// typed delivery is not expected, the session is not live, or the pane resolves.
+func (rt *Runtime) paneRebindNeeded(ctx context.Context, runner AgentRunner, req clicore.AgentRequest) bool {
+	list, err := LoadBindings()
+	if err != nil {
+		return false
+	}
+	binding, ok := BindingForSession(list, req.TargetSessionID)
+	if !ok || binding.Zellij == nil || binding.TypedDeliveryDisabled {
+		return false
+	}
+	sessions, err := runner.Discover(ctx)
+	if err != nil {
+		return false
+	}
+	for _, session := range sessions {
+		if session.SessionID != req.TargetSessionID || !session.Live {
+			continue
+		}
+		z := rt.paneDriver()
+		processPane := func(pid int) *ZellijPane {
+			if current := rt.processZellijPane(pid); current != nil {
+				return current
+			}
+			return TerminalHookPane(req.TargetSessionID, pid)
+		}
+		if _, perr := resolveZellijPaneWith(ctx, z, binding, session, processPane); perr != nil {
+			return true
+		}
+		return false
+	}
+	return false
+}
+
 // holdInject waits, off the receive loop, until nothing holds the session, then
 // runs the hop in it. The server already handed the hop over (it stays
 // "delivered"), so it lives here until then. It gives up after injectHoldMax.
@@ -494,6 +545,10 @@ func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runn
 	if t, err := time.Parse(time.RFC3339, req.CreatedAt); err == nil && t.Before(began) {
 		began = t
 	}
+	// Tracks a stuck typed-delivery pane so we can tell the sender to re-bind
+	// after injectPaneRebindTimeout, without abandoning the hop.
+	var paneBlockedSince time.Time
+	rebindReported := false
 	go func() {
 		defer rt.holding.Add(-1)
 		t := time.NewTicker(injectHoldPoll)
@@ -520,6 +575,23 @@ func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runn
 						}
 					}
 				}
+			}
+			// Typed delivery is expected but its pane can't be verified: after a
+			// short grace, tell the sender to re-bind. The hop keeps waiting, so a
+			// re-bind recovers it on the next poll with no re-send.
+			if rt.paneRebindNeeded(ctx, runner, req) {
+				if paneBlockedSince.IsZero() {
+					paneBlockedSince = time.Now()
+				}
+				if !rebindReported && time.Since(paneBlockedSince) > injectPaneRebindTimeout {
+					rebindReported = true
+					deps.logf("agent-bridge: inject %s needs re-bind: target %s bound pane unverifiable", req.ID, req.TargetSessionID)
+					rt.notify("Share2Us", "A prompt can't reach your "+req.Tool+" session: re-bind it with `s2u agent bind`.")
+					_ = client.AgentReportResult(ctx, req.ID, "waiting", AgentNeedsRebindMarker+"this agent's session cannot receive the prompt: its bound window could not be verified (its Zellij pane changed, or the session was not re-bound after a restart). Re-bind it by running `s2u agent bind "+req.TargetSessionID+"` in that session; the prompt then delivers on its own, no re-send needed. Any attached file is already in the session's inbox.")
+				}
+			} else {
+				paneBlockedSince = time.Time{}
+				rebindReported = false
 			}
 			if !sessionHeld(ctx, runner, req.TargetSessionID) {
 				rt.runInject(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, time.Since(began))

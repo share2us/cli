@@ -865,6 +865,13 @@ func (a app) agentStatus(ctx context.Context, args []string) int {
 	if err != nil {
 		return a.fail("status", err)
 	}
+	// A waiting hop whose target session cannot be verified carries a re-bind
+	// marker; surface it as an action, not a bare status line.
+	if reason, needsRebind := strings.CutPrefix(st.Result, daemon.AgentNeedsRebindMarker); needsRebind {
+		fmt.Fprintf(a.stdout, "status: %s  (action needed: re-bind the target session)\n", st.Status)
+		fmt.Fprintf(a.stdout, "%s\n", reason)
+		return 0
+	}
 	fmt.Fprintf(a.stdout, "status: %s\n", st.Status)
 	if strings.TrimSpace(st.Result) != "" {
 		fmt.Fprintf(a.stdout, "%s\n", st.Result)
