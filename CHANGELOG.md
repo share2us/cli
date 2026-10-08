@@ -12,6 +12,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- Sending to a device found by name now checks version compatibility first: an
+  incompatible receiver is refused with a clear "update both devices" message, and
+  a merely-older one prints a note and sends anyway. Based on the
+  minimum-compatible version each device advertises (cli-core v0.61.0). A receiver
+  that advertises no version, or one addressed by bare IP, is not gated.
+
 ## [20261008112800] - 2026-10-08
 
 ### Changed
