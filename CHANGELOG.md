@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008105756] - 2026-10-08
+
 ### Added
 
 - `s2u discover` now shows each nearby device's Share2Us version in a VERSION
