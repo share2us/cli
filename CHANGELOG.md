@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- LAN transfers no longer fail with "peer certificate fingerprint mismatch
+  (possible MITM)" (or a handshake error) after the other device restarted. Codes
+  are now tied to the device's stable identity and survive the peer regenerating
+  its session certificate; the warning now means a real identity change.
+
 ## [20261008063208] - 2026-10-08
 
 ### Fixed
