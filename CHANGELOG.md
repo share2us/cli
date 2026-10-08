@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008063208] - 2026-10-08
+
 ### Fixed
 
 - Plain interactive login repairs a lost device signing key without signing out,
