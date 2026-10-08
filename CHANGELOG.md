@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008122107] - 2026-10-08
+
 ### Added
 
 - Sending to a device found by name now checks version compatibility first: an
