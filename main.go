@@ -301,12 +301,17 @@ func (a app) login(ctx context.Context, args []string) int {
 	if err != nil {
 		return a.fail("detect device", err)
 	}
+	signingKey, err := clicore.PrepareLoginSigningKey()
+	if err != nil {
+		return a.fail("prepare login signing key", err)
+	}
 	code, err := client.StartDeviceCode(ctx, clicore.DeviceCodeRequest{
-		DeviceName:    device.DeviceName,
-		MachineID:     device.MachineID,
-		OS:            device.OS,
-		Arch:          device.Arch,
-		ClientVersion: clicore.FullVersion(),
+		SigningPublicKey: signingKey.PublicKey,
+		DeviceName:       device.DeviceName,
+		MachineID:        device.MachineID,
+		OS:               device.OS,
+		Arch:             device.Arch,
+		ClientVersion:    clicore.FullVersion(),
 	})
 	if err != nil {
 		return a.fail("start login", err)
@@ -358,13 +363,15 @@ func (a app) login(ctx context.Context, args []string) int {
 			email = me.UserID
 		}
 		if err := clicore.SaveCredential(clicore.Credential{
-			APIBase:          apiBase,
-			Token:            token.Credential,
-			Email:            email,
-			AccountID:        me.AccountID,
-			DeviceSessionID:  token.DeviceSessionID,
-			DevicePublicKey:  keyPair.PublicKey,
-			DevicePrivateKey: keyPair.PrivateKey,
+			DeviceSigningPublicKey:  signingKey.PublicKey,
+			DeviceSigningPrivateKey: signingKey.PrivateKey,
+			APIBase:                 apiBase,
+			Token:                   token.Credential,
+			Email:                   email,
+			AccountID:               me.AccountID,
+			DeviceSessionID:         token.DeviceSessionID,
+			DevicePublicKey:         keyPair.PublicKey,
+			DevicePrivateKey:        keyPair.PrivateKey,
 		}); err != nil {
 			return a.fail("save credential", err)
 		}

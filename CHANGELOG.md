@@ -12,6 +12,11 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Plain interactive login repairs a lost device signing key without signing out,
+  with an updated API. Login now preserves the signing pair it presents for approval.
+
 ## [20261007122734] - 2026-10-07
 
 ### Added
