@@ -154,6 +154,7 @@ func (a app) lanReceive(ctx context.Context, args []string) int {
 		Overwrite:       opts.overwrite,
 		OnListen: func(info lanshare.ListenInfo) {
 			printed = true
+			info.AppVersion = clicore.FullVersion() // so a peer can see our build
 			a.printReceiveBanner(info, opts)
 			// Advertise on the LAN so a sender can find us by name.
 			instance := opts.name
@@ -1678,6 +1679,7 @@ func (a app) lanBroadcast(ctx context.Context, args []string) int {
 		IsTrusted: func(fp string) bool { _, ok := lanid.Lookup(fp); return ok },
 		OnRequest: approve,
 		OnListen: func(li lanshare.ListenInfo) {
+			li.AppVersion = clicore.FullVersion() // so a peer can see our build
 			if c, aerr := lanshare.AdvertiseBroadcast(hostname, li, displayName, size); aerr == nil {
 				adv = c
 			}
