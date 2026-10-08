@@ -1,13 +1,13 @@
 Package: s2u
-Version: 20261007122734
+Version: 20261008063208
 Architecture: arm64
 Maintainer: Share2Us <support@share2.us>
-Installed-Size: 17570
-Filename: pool/stable/main/s/s2u/s2u_20261007122734_arm64.deb
-Size: 7071276
-MD5sum: 7a5b0f704bb6fc85f4f8abe7ba501574
-SHA1: ae843d6c28b8e7ea4602e12b968e9cdd872c848b
-SHA256: 8ad3ae193ecf0aed656ad821771e11cc25112c11c83a5267c37017f19c7b663f
+Installed-Size: 17634
+Filename: pool/stable/main/s/s2u/s2u_20261008063208_arm64.deb
+Size: 7072414
+MD5sum: 0cbf231413ef4a3913fd0dfc76a3c4a8
+SHA1: 46ff07af83e7e7bea57efdf94b892426f55ab760
+SHA256: 7de69f172bf0b90870676dc0be7d87c987ad16230c3eee647156b466a75475e9
 Section: utils
 Priority: optional
 Homepage: https://share2.us
