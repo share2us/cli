@@ -625,11 +625,21 @@ func (a app) lanSend(ctx context.Context, args []string) int {
 		if addr, ok := loadLocalConfig().ResolveDeviceAlias(opts.dest); ok {
 			opts.dest = addr
 		} else {
+			name := opts.dest
 			fmt.Fprintf(a.stderr, "Looking for %q on the local network...\n", opts.dest)
 			pi, derr := lanshare.Discover(ctx, opts.dest, 4*time.Second)
 			if derr != nil {
 				fmt.Fprintf(a.stderr, "%v (not an IP, a saved alias, or discoverable). Use --dest=<ip> or a pairing string.\n", derr)
 				return 1
+			}
+			// Compatibility: refuse an incompatible receiver before sending, and
+			// flag a merely-older one. Unknown (no advertised version) never blocks.
+			switch lanshare.CompatWith(clicore.FullVersion(), pi.AppVersion, pi.MinPeer) {
+			case lanshare.CompatIncompatible:
+				fmt.Fprintf(a.stderr, "Cannot send: %q is on an incompatible Share2Us version (theirs v%s, yours v%s). Update both devices to the same version.\n", name, pi.AppVersion, clicore.FullVersion())
+				return 1
+			case lanshare.CompatOlder:
+				fmt.Fprintf(a.stderr, "Note: %q is on an older Share2Us version (v%s); sending anyway.\n", name, pi.AppVersion)
 			}
 			opts.dest = pi.Addr()
 			if opts.pin == "" {
