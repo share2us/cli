@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008101506] - 2026-10-08
+
 ### Fixed
 
 - LAN transfers no longer fail with "peer certificate fingerprint mismatch
