@@ -41,6 +41,7 @@ type Options struct {
 	LANDiscoverable bool   // run the background LAN receiver
 	RunInbox        bool   // run the account-inbox poll (false under a PAT)
 	Notify          bool   // post desktop notifications
+	WarnTab         bool   // open a loud zellij tab when a bound pane can't be located for a waiting prompt
 	Instance        string // mDNS advertised name ("" = hostname)
 	Bind            string // LAN bind address ("" = all interfaces)
 	Port            int    // LAN port (0 = auto)
@@ -105,6 +106,7 @@ type Runtime struct {
 	startedAt time.Time
 	ownsLAN   bool
 	ownsInbox bool
+	warnTab   bool
 	stop      context.CancelFunc
 	// hopRunning is set while a hop's agent run is in progress, so `s2u update`
 	// can leave the daemon alone rather than kill the run by restarting it.
@@ -183,6 +185,7 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 		startedAt: time.Now().UTC(),
 		ownsLAN:   opts.LANDiscoverable,
 		ownsInbox: opts.RunInbox,
+		warnTab:   opts.WarnTab,
 		stop:      cancel,
 	}
 

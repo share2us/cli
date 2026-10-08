@@ -121,6 +121,51 @@ func setSession(project, tool, sessionID string, pane *ZellijPane, created bool)
 	return Binding{}, false, os.ErrNotExist
 }
 
+// ReconcileZellij refreshes the terminal-pane hint for the binding whose current
+// session is sessionID, when that session's process has moved to a different pane
+// (e.g. the zellij session was recreated, or tabs were added/removed, shifting the
+// pane ids). It updates the stored pane in place so delivery resolves again WITHOUT
+// a manual `s2u agent bind`.
+//
+// Keyed on sessionID, not the zellij session name, so it tracks the SAME session to
+// its current pane and never retargets a different one — the caller supplies the
+// pane read from that session's own process (ProcessZellijPane / the terminal-guard
+// proof), exactly as `agent bind` does. Returns (changed, error); a no-op when the
+// pane already matches or the session is not bound.
+func ReconcileZellij(sessionID string, pane *ZellijPane) (bool, error) {
+	if sessionID == "" || pane == nil {
+		return false, nil
+	}
+	list, err := LoadBindings()
+	if err != nil {
+		return false, err
+	}
+	for i := range list {
+		if list[i].SessionID != sessionID {
+			continue
+		}
+		// Only refresh a binding that was ALREADY bound in zellij. A binding with no
+		// pane was bound outside zellij (or its hint was deliberately cleared), and
+		// auto-adding one would make it eligible for typing it never opted into.
+		if list[i].Zellij == nil {
+			return false, nil
+		}
+		if samePane(list[i].Zellij, pane) {
+			return false, nil
+		}
+		list[i].Zellij = pane
+		return true, saveBindings(list)
+	}
+	return false, nil
+}
+
+func samePane(a, b *ZellijPane) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Session == b.Session && a.Pane == b.Pane
+}
+
 // SetTypedDelivery lets the owner disable or re-enable automatic terminal
 // typing for an existing Claude binding without changing its identity.
 func SetTypedDelivery(project string, enabled bool) (Binding, error) {

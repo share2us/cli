@@ -12,6 +12,23 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- The agent daemon now keeps a Zellij-bound session's pane up to date on its own.
+  When a Zellij session is recreated or its tabs are rearranged, the agent's pane id
+  shifts; the daemon now re-detects where the session actually is (every ~30s, and
+  before each delivery) and refreshes the binding, so a shared prompt delivers
+  without a manual `s2u agent bind`. It only ever follows the same session to its new
+  pane, never retargets a different one.
+
+### Added
+
+- When the daemon genuinely cannot locate a bound session's pane while a prompt is
+  waiting (the agent exited, or its window is gone), it now opens a loud Zellij tab
+  titled `⚠ SHARE2US: re-bind <agent> — prompt waiting` in that session, in addition
+  to the desktop notification, so a stuck prompt is impossible to miss. Opt out with
+  `s2u daemon run --no-warn-tab`.
+
 ## [20261008122107] - 2026-10-08
 
 ### Added

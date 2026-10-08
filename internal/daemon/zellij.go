@@ -28,6 +28,9 @@ type zellijDriver interface {
 	Dump(context.Context, string, string) (string, error)
 	Paste(context.Context, string, string, string) error
 	Enter(context.Context, string, string) error
+	// NewTab opens a new, named tab in a session. Used only to surface a loud
+	// foreground warning when a bound pane cannot be located for a waiting prompt.
+	NewTab(ctx context.Context, session, name string) error
 }
 
 type zellijPaneInfo struct {
@@ -144,6 +147,11 @@ func (z *systemZellij) Paste(ctx context.Context, session, pane, text string) er
 
 func (z *systemZellij) Enter(ctx context.Context, session, pane string) error {
 	_, err := z.run(ctx, "--session", session, "action", "send-keys", "--pane-id", "terminal_"+pane, "Enter")
+	return err
+}
+
+func (z *systemZellij) NewTab(ctx context.Context, session, name string) error {
+	_, err := z.run(ctx, "--session", session, "action", "new-tab", "--name", name)
 	return err
 }
 
