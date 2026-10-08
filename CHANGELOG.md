@@ -12,6 +12,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- The transfer progress line (sending, receiving, and downloading) now shows a
+  progress bar, the percentage, bytes moved out of the total, a smoothed speed, an
+  estimated time remaining, and the elapsed time. When a transfer finishes it
+  prints a one-line summary: how much moved, how long it took, and the average
+  speed.
+
 ## [20261008105756] - 2026-10-08
 
 ### Added

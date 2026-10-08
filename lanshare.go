@@ -1463,13 +1463,20 @@ func humanBytes(n int64) string {
 }
 
 // progressPrinter renders a throttled single-line transfer progress bar to a
-// writer (stderr). It is a no-op when the writer is not provided.
+// writer (stderr): a bar, percentage, bytes done/total, a smoothed transfer
+// speed, the estimated time remaining, and the elapsed time. It is a no-op when
+// the writer is not provided. finish() prints a one-line summary (total moved,
+// how long it took, the average speed) so the terminal shows how the transfer
+// ended, not just a bare newline.
 type progressPrinter struct {
-	w        io.Writer
-	label    string
-	start    time.Time
-	lastDraw time.Time
-	drawn    bool
+	w         io.Writer
+	label     string
+	start     time.Time
+	lastDraw  time.Time
+	lastDone  int64
+	emaBps    float64 // smoothed speed, bytes/sec; 0 until the first interval
+	lastDone2 int64   // bytes at the previous draw, for the instantaneous rate
+	drawn     bool
 }
 
 func newProgressPrinter(w io.Writer, label string) *progressPrinter {
@@ -1481,29 +1488,94 @@ func (p *progressPrinter) update(done, total int64) {
 		return
 	}
 	now := time.Now()
+	// Always draw the final frame, so the bar reaches 100% before the summary.
 	if p.drawn && now.Sub(p.lastDraw) < 100*time.Millisecond && done != total {
 		return
 	}
-	p.lastDraw = now
-	p.drawn = true
-	elapsed := now.Sub(p.start).Seconds()
-	var speed float64
-	if elapsed > 0 {
-		speed = float64(done) / elapsed
+	// Instantaneous rate over this interval, smoothed into an EMA so the figure
+	// does not jump around with every burst. The average-since-start rate would
+	// lag badly on a transfer that speeds up or stalls partway.
+	if p.drawn {
+		dt := now.Sub(p.lastDraw).Seconds()
+		if dt > 0 {
+			inst := float64(done-p.lastDone2) / dt
+			if p.emaBps == 0 {
+				p.emaBps = inst
+			} else {
+				p.emaBps = 0.3*inst + 0.7*p.emaBps
+			}
+		}
 	}
+	p.lastDone2 = done
+	p.lastDraw = now
+	p.lastDone = done
+	p.drawn = true
+
+	speed := p.emaBps
+	if speed <= 0 { // before the first interval, fall back to the average
+		if el := now.Sub(p.start).Seconds(); el > 0 {
+			speed = float64(done) / el
+		}
+	}
+	elapsed := now.Sub(p.start)
 	if total > 0 {
 		pct := int(float64(done) / float64(total) * 100)
-		fmt.Fprintf(p.w, "\r%s %s / %s (%d%%) %s/s      ",
-			p.label, humanBytes(done), humanBytes(total), pct, humanBytes(int64(speed)))
+		eta := "--:--"
+		if speed > 0 && done < total {
+			eta = fmtDur(time.Duration(float64(total-done)/speed) * time.Second)
+		} else if done >= total {
+			eta = "00:00"
+		}
+		fmt.Fprintf(p.w, "\r%s %s %d%%  %s / %s  %s/s  ETA %s  (%s)   ",
+			p.label, progressBar(done, total, 24), pct,
+			humanBytes(done), humanBytes(total), humanBytes(int64(speed)), eta, fmtDur(elapsed))
 	} else {
-		fmt.Fprintf(p.w, "\r%s %s %s/s      ", p.label, humanBytes(done), humanBytes(int64(speed)))
+		// Unknown size (streamed): no bar or ETA, but still bytes, speed, elapsed.
+		fmt.Fprintf(p.w, "\r%s %s  %s/s  (%s)   ",
+			p.label, humanBytes(done), humanBytes(int64(speed)), fmtDur(elapsed))
 	}
 }
 
 func (p *progressPrinter) finish() {
-	if p != nil && p.w != nil && p.drawn {
-		fmt.Fprintln(p.w)
+	if p == nil || p.w == nil || !p.drawn {
+		return
 	}
+	elapsed := time.Since(p.start)
+	var avg int64
+	if s := elapsed.Seconds(); s > 0 {
+		avg = int64(float64(p.lastDone) / s)
+	}
+	// Overwrite the in-place line with a clean, final summary.
+	fmt.Fprintf(p.w, "\r%s done: %s in %s (avg %s/s)%s\n",
+		p.label, humanBytes(p.lastDone), fmtDur(elapsed), humanBytes(avg), strings.Repeat(" ", 10))
+}
+
+// progressBar renders a fixed-width [####----] bar for done/total.
+func progressBar(done, total int64, width int) string {
+	if total <= 0 || width <= 0 {
+		return ""
+	}
+	filled := int(float64(done) / float64(total) * float64(width))
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
+	return "[" + strings.Repeat("#", filled) + strings.Repeat("-", width-filled) + "]"
+}
+
+// fmtDur formats a duration as mm:ss, or h:mm:ss once it passes an hour.
+func fmtDur(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	total := int(d.Seconds() + 0.5)
+	h, m, s := total/3600, (total%3600)/60, total%60
+	if h > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
+	}
+	return fmt.Sprintf("%02d:%02d", m, s)
 }
 
 // ---- broadcast (offer a file/folder for pull) ----
