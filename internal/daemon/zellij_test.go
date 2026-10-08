@@ -19,6 +19,7 @@ type fakeZellij struct {
 	pasted   []string
 	entered  int
 	onPaste  func()
+	newTabs  []string // tab names opened via NewTab
 }
 
 func claudeFixture(input string) string {
@@ -49,6 +50,10 @@ func (f *fakeZellij) Paste(_ context.Context, _, _, text string) error {
 	return nil
 }
 func (f *fakeZellij) Enter(context.Context, string, string) error { f.entered++; return nil }
+func (f *fakeZellij) NewTab(_ context.Context, _, name string) error {
+	f.newTabs = append(f.newTabs, name)
+	return nil
+}
 
 func TestParseClaudeScreen(t *testing.T) {
 	tests := []struct {

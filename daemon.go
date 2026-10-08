@@ -62,7 +62,7 @@ func (a app) daemon(ctx context.Context, args []string) int {
 
 func (a app) daemonUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s daemon <run|status|start|stop|install|uninstall|logs>\n", commandName)
-	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify] [--no-agent-bridge] [--agent-strict]  run the receiver\n")
+	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify] [--no-warn-tab] [--no-agent-bridge] [--agent-strict]  run the receiver\n")
 	fmt.Fprintf(a.stderr, "                                               (the agent bridge is on by default and stays idle\n")
 	fmt.Fprintf(a.stderr, "                                                until a session is bound)\n")
 	fmt.Fprintf(a.stderr, "  install [--dest DIR]                         install + start the per-user service\n")
@@ -98,6 +98,7 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		DestDir:            destDir,
 		LANDiscoverable:    settings.LANDiscoverable && !opts.noLAN,
 		Notify:             settings.Notify && !opts.noNotify,
+		WarnTab:            !opts.noWarnTab,
 		ApprovalPolicy:     settings.ApprovalPolicy,
 		IsTrustedSender:    trustedSender,
 		IsOwnAccountDevice: ownDevices.contains,
@@ -393,6 +394,7 @@ type daemonRunOpts struct {
 	dest          string
 	noLAN         bool
 	noNotify      bool
+	noWarnTab     bool
 	agentBridge   bool
 	noAgentBridge bool
 	agentStrict   bool
@@ -415,6 +417,8 @@ func parseDaemonRunArgs(args []string) (daemonRunOpts, error) {
 			o.noLAN = true
 		case arg == "--no-notify":
 			o.noNotify = true
+		case arg == "--no-warn-tab":
+			o.noWarnTab = true
 		case arg == "--agent-bridge":
 			o.agentBridge = true
 		case arg == "--no-agent-bridge":

@@ -162,6 +162,76 @@ func (o *onceLogger) log(format string, args ...any) {
 
 // agentRegisterLoop discovers local sessions and registers/heartbeats them,
 // deregistering ones that have gone away.
+// reconcileBindingPane refreshes a bound session's stored zellij pane when its
+// process has moved to a different pane (the zellij session was recreated, or tabs
+// were added/removed). It reads the pane from the session's OWN process — the same
+// source `s2u agent bind` uses — so it tracks the same session, never a different
+// one, and only updates a binding already bound in zellij (ReconcileZellij gates
+// that). This is the self-heal that removes the manual re-bind step.
+func (rt *Runtime) reconcileBindingPane(s DiscoveredSession, deps Deps) {
+	if s.SessionID == "" || s.PID <= 1 {
+		return
+	}
+	want := rt.processZellijPane(s.PID)
+	if want == nil {
+		want = TerminalHookPane(s.SessionID, s.PID)
+	}
+	if want == nil {
+		return
+	}
+	changed, err := ReconcileZellij(s.SessionID, want)
+	if err != nil {
+		deps.logf("agent-bridge: pane reconcile for %s failed: %v", s.SessionID, err)
+		return
+	}
+	if changed {
+		deps.logf("agent-bridge: refreshed zellij pane for %s -> %s/%s", s.SessionID, want.Session, want.Pane)
+	}
+}
+
+// openRebindWarningTab surfaces a loud, foreground warning that a prompt is stuck
+// because the bound session's pane can't be located — a new zellij tab whose title
+// says to re-bind. It is best-effort and deduped by the caller (rebindReported), so
+// it fires once per stuck episode, never on every poll. If the zellij session is
+// gone (or warn-tab is off), the already-sent desktop notification is the signal.
+func (rt *Runtime) openRebindWarningTab(ctx context.Context, req clicore.AgentRequest, deps Deps) {
+	if !rt.warnTab {
+		return
+	}
+	list, err := LoadBindings()
+	if err != nil {
+		return
+	}
+	binding, ok := BindingForSession(list, req.TargetSessionID)
+	if !ok || binding.Zellij == nil || binding.Zellij.Session == "" {
+		return // bound outside zellij: nothing to open a tab in
+	}
+	z := rt.paneDriver()
+	sessions, err := z.Sessions(ctx)
+	if err != nil {
+		return
+	}
+	target := binding.Zellij.Session
+	live := false
+	for _, s := range sessions {
+		if s == target {
+			live = true
+			break
+		}
+	}
+	if !live {
+		return // the whole zellij session is gone; the desktop notification stands
+	}
+	label := binding.Label
+	if label == "" {
+		label = req.TargetSessionID
+	}
+	title := "⚠ SHARE2US: re-bind " + label + " — prompt waiting"
+	if err := z.NewTab(ctx, target, title); err != nil {
+		deps.logf("agent-bridge: could not open re-bind warning tab in %s: %v", target, err)
+	}
+}
+
 func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, runners []AgentRunner, deps Deps) {
 	rt.retireUnboundSessions(ctx, client, deps)
 	known := map[string]bool{}
@@ -218,6 +288,10 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 				continue
 			}
 			seen[s.SessionID] = true
+			// Keep the bound zellij pane in step with where the session's process
+			// actually lives, so a recreated/rearranged zellij session recovers
+			// without a manual `s2u agent bind` (ADR-041 §1).
+			rt.reconcileBindingPane(s, deps)
 			// The binding's agent id rides with every registration, so the server
 			// can tell that a recreated session is still the same agent.
 			if err := client.RegisterAgentSession(ctx, clicore.AgentRegisterInput{
@@ -587,6 +661,7 @@ func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runn
 					rebindReported = true
 					deps.logf("agent-bridge: inject %s needs re-bind: target %s bound pane unverifiable", req.ID, req.TargetSessionID)
 					rt.notify("Share2Us", "A prompt can't reach your "+req.Tool+" session: re-bind it with `s2u agent bind`.")
+					rt.openRebindWarningTab(ctx, req, deps)
 					_ = client.AgentReportResult(ctx, req.ID, "waiting", AgentNeedsRebindMarker+"this agent's session cannot receive the prompt: its bound window could not be verified (its Zellij pane changed, or the session was not re-bound after a restart). Re-bind it by running `s2u agent bind "+req.TargetSessionID+"` in that session; the prompt then delivers on its own, no re-send needed. Any attached file is already in the session's inbox.")
 				}
 			} else {
