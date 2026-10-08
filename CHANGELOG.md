@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008112800] - 2026-10-08
+
 ### Changed
 
 - The transfer progress line (sending, receiving, and downloading) now shows a
