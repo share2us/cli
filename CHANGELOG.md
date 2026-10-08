@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261008143906] - 2026-10-08
+
 ### Changed
 
 - The agent daemon now keeps a Zellij-bound session's pane up to date on its own.
