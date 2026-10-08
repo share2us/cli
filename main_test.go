@@ -339,11 +339,12 @@ func TestLoginHostPersistsConfig(t *testing.T) {
 	t.Setenv("SHARE2US_API_BASE", "")
 	t.Setenv("SHARE2US_DEVICE_NAME", "Env Device")
 	var deviceRequest struct {
-		DeviceName    string `json:"device_name"`
-		MachineID     string `json:"machine_id"`
-		OS            string `json:"os"`
-		Arch          string `json:"arch"`
-		ClientVersion string `json:"client_version"`
+		SigningPublicKey string `json:"signing_public_key"`
+		DeviceName       string `json:"device_name"`
+		MachineID        string `json:"machine_id"`
+		OS               string `json:"os"`
+		Arch             string `json:"arch"`
+		ClientVersion    string `json:"client_version"`
 	}
 	withMockAPI(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -415,11 +416,34 @@ func TestLoginHostPersistsConfig(t *testing.T) {
 	if credential.APIBase != "https://api.login.example.test" {
 		t.Fatalf("credential APIBase = %q", credential.APIBase)
 	}
+	if deviceRequest.SigningPublicKey == "" || credential.DeviceSigningPublicKey != deviceRequest.SigningPublicKey || credential.DeviceSigningPrivateKey == "" {
+		t.Fatal("login did not send and preserve its signing identity")
+	}
 	if deviceRequest.DeviceName != "Flag Device" || deviceRequest.MachineID == "" || deviceRequest.OS == "" || deviceRequest.Arch == "" {
 		t.Fatalf("device request = %+v", deviceRequest)
 	}
 	if deviceRequest.ClientVersion != clicore.FullVersion() {
 		t.Fatalf("client version = %q", deviceRequest.ClientVersion)
+	}
+	oldPublic, encryptionPrivate := credential.DeviceSigningPublicKey, credential.DevicePrivateKey
+	credential.DeviceSigningPrivateKey = ""
+	if err := clicore.SaveCredential(credential); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"login", "--no-browser"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("recovery login failed: %s", stderr.String())
+	}
+	credential, err = clicore.LoadCredential()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if credential.DeviceSigningPublicKey == oldPublic || credential.DeviceSigningPublicKey != deviceRequest.SigningPublicKey || credential.DeviceSigningPrivateKey == "" {
+		t.Fatal("plain login did not recover and preserve a replacement signing identity")
+	}
+	if credential.DevicePrivateKey != encryptionPrivate {
+		t.Fatal("signing recovery changed encryption identity")
 	}
 }
 
