@@ -12,6 +12,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u discover` now shows each nearby device's Share2Us version in a VERSION
+  column (interactive table and `--plain`), and this build advertises its own
+  version on the LAN, so you can see which build is on the other end before
+  sending. A device running an older build that does not announce its version
+  shows `-`. (cli-core v0.60.0)
+
 ## [20261008101506] - 2026-10-08
 
 ### Fixed

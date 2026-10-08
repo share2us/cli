@@ -231,7 +231,7 @@ func (a app) printPeers(peers []lanshare.Peer) {
 		fmt.Fprintln(a.stdout, "No nearby devices found.")
 		return
 	}
-	fmt.Fprintf(a.stdout, "%-20s %-21s %-9s %-24s %s\n", "NAME", "ADDRESS", "KIND", "FILE", "SIZE")
+	fmt.Fprintf(a.stdout, "%-20s %-21s %-9s %-24s %-11s %s\n", "NAME", "ADDRESS", "KIND", "FILE", "SIZE", "VERSION")
 	for _, p := range peers {
 		kind := "receiver"
 		file, size := "-", "-"
@@ -240,8 +240,12 @@ func (a app) printPeers(peers []lanshare.Peer) {
 			file = p.FileName
 			size = humanBytes(p.FileSize)
 		}
-		fmt.Fprintf(a.stdout, "%-20s %-21s %-9s %-24s %s\n",
-			truncate(p.Name, 20), net.JoinHostPort(p.Host, strconv.Itoa(p.Port)), kind, truncate(file, 24), size)
+		ver := "-"
+		if p.AppVersion != "" {
+			ver = "v" + p.AppVersion
+		}
+		fmt.Fprintf(a.stdout, "%-20s %-21s %-9s %-24s %-11s %s\n",
+			truncate(p.Name, 20), net.JoinHostPort(p.Host, strconv.Itoa(p.Port)), kind, truncate(file, 24), size, ver)
 	}
 	fmt.Fprintln(a.stderr, "\nPull an offer with: s2u discover --download <file>")
 }
@@ -328,6 +332,7 @@ func (a app) discoverTUI(ctx context.Context, opts discoverOpts) int {
 		{Title: "Kind", Width: 8},
 		{Title: "File", Width: 22},
 		{Title: "Size", Width: 9},
+		{Title: "Version", Width: 11},
 	}
 	t := table.New(table.WithColumns(cols), table.WithFocused(true), table.WithHeight(12))
 	interval := opts.interval
@@ -435,8 +440,12 @@ func peerRows(peers []lanshare.Peer) []table.Row {
 		if p.IsBroadcast {
 			kind, file, size = "offer", p.FileName, humanBytes(p.FileSize)
 		}
+		ver := "-"
+		if p.AppVersion != "" {
+			ver = "v" + p.AppVersion
+		}
 		rows = append(rows, table.Row{
-			truncate(p.Name, 18), net.JoinHostPort(p.Host, strconv.Itoa(p.Port)), kind, truncate(file, 22), size,
+			truncate(p.Name, 18), net.JoinHostPort(p.Host, strconv.Itoa(p.Port)), kind, truncate(file, 22), size, ver,
 		})
 	}
 	return rows
