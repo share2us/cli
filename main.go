@@ -2241,7 +2241,7 @@ func (a app) upload(ctx context.Context, args []string) int {
 		}
 		fmt.Fprintf(a.stdout, "Expires: %s\n", expiryDisplay(expiresAt))
 		if len(opts.recipients) > 0 {
-			fmt.Fprintf(a.stdout, "Shared with %d recipient(s). They can only open it after signing in as that email - the link is safe to send directly.\n", len(opts.recipients))
+			fmt.Fprintf(a.stdout, "Shared with %d recipient(s). Each must verify as that email (a one-time code we email them, or Google sign-in) before opening, so the link is safe to send directly.\n", len(opts.recipients))
 			if created.EmailSharesRemaining != nil {
 				fmt.Fprintf(a.stdout, "%d email-shares left this period\n", *created.EmailSharesRemaining)
 			}
@@ -2563,6 +2563,27 @@ func parsePositiveUint(raw, flag string) (uint64, error) {
 
 func (a app) runSecretPreflight(path string, opts uploadOptions) int {
 	if opts.noScan {
+		// --no-scan must not silently wave through an obvious credential file
+		// (service-account keys, private keys, .env, etc). Sharing one of these
+		// is almost always a mistake, so require an explicit override even with
+		// --no-scan set.
+		if reason := credentialFileReason(path); reason != "" {
+			fmt.Fprintf(a.stderr, "WARNING: %s looks like a credential (%s); --no-scan will not skip it.\n", filepath.Base(path), reason)
+			if opts.allowSecrets {
+				fmt.Fprintln(a.stderr, "proceeding because --allow-secrets was set")
+				return 0
+			}
+			if !a.inputIsTTY() {
+				fmt.Fprintln(a.stderr, "share cancelled; rerun with --allow-secrets if you really mean to share this credential")
+				return 1
+			}
+			fmt.Fprint(a.stderr, "share this credential anyway? [y/N] ")
+			if a.readYesNo() {
+				return 0
+			}
+			fmt.Fprintln(a.stderr, "share cancelled")
+			return 1
+		}
 		fmt.Fprintln(a.stderr, "secret scan skipped by --no-scan")
 		return 0
 	}
@@ -2601,6 +2622,65 @@ func (a app) runSecretPreflight(path string, opts uploadOptions) int {
 	}
 	fmt.Fprintf(a.stderr, "%v\n", clicore.SecretFindingsError(len(result.Findings)))
 	return 1
+}
+
+// credentialFileReason returns a short human reason when path looks like an
+// obvious credential (by name or by a quick content sniff), or "" otherwise.
+// It is deliberately conservative: a few high-signal filename patterns plus a
+// cheap peek for private-key / service-account markers. Used to stop --no-scan
+// from silently shipping a secret.
+func credentialFileReason(path string) string {
+	base := strings.ToLower(filepath.Base(path))
+	switch base {
+	case "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", ".env", "credentials.json", "service_account.json":
+		return "credential filename"
+	}
+	suffixes := []struct {
+		suffix string
+		reason string
+	}{
+		{"_sa.json", "service-account key filename"},
+		{"-sa.json", "service-account key filename"},
+		{".pem", "PEM key/cert filename"},
+		{".key", "private-key filename"},
+		{".p12", "PKCS#12 keystore filename"},
+		{".pfx", "PKCS#12 keystore filename"},
+		{".keystore", "keystore filename"},
+		{".jks", "Java keystore filename"},
+		{".env", ".env filename"},
+	}
+	for _, s := range suffixes {
+		if strings.HasSuffix(base, s.suffix) {
+			return s.reason
+		}
+	}
+	if strings.HasPrefix(base, ".env.") || strings.Contains(base, "service_account") || strings.Contains(base, "serviceaccount") {
+		return "credential filename"
+	}
+
+	// Cheap content sniff: only peek at the head of the file.
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() || info.Size() == 0 {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	head := make([]byte, 4096)
+	n, _ := io.ReadFull(f, head)
+	head = head[:n]
+	if bytes.Contains(head, []byte("-----BEGIN")) && bytes.Contains(head, []byte("PRIVATE KEY-----")) {
+		return "PEM private key"
+	}
+	if bytes.Contains(head, []byte(`"private_key"`)) {
+		return "embedded private_key field"
+	}
+	if bytes.Contains(head, []byte(`"type": "service_account"`)) || bytes.Contains(head, []byte(`"type":"service_account"`)) {
+		return "GCP service-account JSON"
+	}
+	return ""
 }
 
 func printSecretFindings(w io.Writer, findings []clicore.SecretFinding) {
