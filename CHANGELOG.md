@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261009164339] - 2026-10-09
+
 ### Changed
 
 - Clearer wording after an email-restricted share. The CLI no longer claims the
