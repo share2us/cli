@@ -1231,9 +1231,12 @@ func TestUploadAllowSecretsProceedsAfterFinding(t *testing.T) {
 }
 
 func TestUploadNoScanSkipsSecretScan(t *testing.T) {
-	withMockAPI(t, uploadHandlerForSize(t, int64(len(fakeSecretFileContent()))))
+	// A non-credential file whose body still trips gitleaks: --no-scan must
+	// bypass the scan here (credential files are handled separately below).
+	content := fakeNonCredentialSecretContent()
+	withMockAPI(t, uploadHandlerForSize(t, int64(len(content))))
 	withCredential(t, "https://api.example.test")
-	file := writeTempFile(t, "secret.txt", fakeSecretFileContent())
+	file := writeTempFile(t, "notes.txt", content)
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -1244,6 +1247,48 @@ func TestUploadNoScanSkipsSecretScan(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "secret scan skipped by --no-scan") {
 		t.Fatalf("stderr missing no-scan note:\n%s", stderr.String())
+	}
+}
+
+// TestUploadNoScanBlocksCredentialFileNonTTY verifies --no-scan does NOT
+// silently ship an obvious credential: without a TTY (and without
+// --allow-secrets) the share is cancelled.
+func TestUploadNoScanBlocksCredentialFileNonTTY(t *testing.T) {
+	withCredential(t, "https://api.example.test")
+	file := writeTempFile(t, "sheets_editor_sa.json", `{"type": "service_account","private_key":"-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n"}`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{file, "--no-scan"}, &stdout, &stderr)
+
+	if code != 1 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "looks like a credential") {
+		t.Fatalf("stderr missing credential warning:\n%s", stderr.String())
+	}
+	if strings.Contains(stderr.String(), "secret scan skipped by --no-scan") {
+		t.Fatalf("credential file must not be silently skipped:\n%s", stderr.String())
+	}
+}
+
+// TestUploadNoScanCredentialFileAllowSecretsProceeds verifies the explicit
+// --allow-secrets override lets --no-scan ship a credential file.
+func TestUploadNoScanCredentialFileAllowSecretsProceeds(t *testing.T) {
+	content := `{"type": "service_account","private_key":"-----BEGIN PRIVATE KEY-----\nx\n-----END PRIVATE KEY-----\n"}`
+	withMockAPI(t, uploadHandlerForSize(t, int64(len(content))))
+	withCredential(t, "https://api.example.test")
+	file := writeTempFile(t, "sheets_editor_sa.json", content)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := run([]string{file, "--no-scan", "--allow-secrets"}, &stdout, &stderr)
+
+	if code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "proceeding because --allow-secrets was set") {
+		t.Fatalf("stderr missing allow-secrets note:\n%s", stderr.String())
 	}
 }
 
@@ -1506,7 +1551,7 @@ func TestUploadRecipientFlags(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Shared with 3 recipient(s).",
-		"They can only open it after signing in as that email",
+		"Each must verify as that email",
 		"17 email-shares left this period",
 		"Tip: if the email doesn't arrive",
 	} {
@@ -2470,6 +2515,12 @@ func fakeSecretFileContent() string {
 
 func fakePrivateKeyMaterial() string {
 	return "MIIEpAIBAAKCAQEA0" + strings.Repeat("testredacted", 4)
+}
+
+// fakeNonCredentialSecretContent trips the gitleaks scan (an AWS access key id)
+// but is not an obvious credential file, so --no-scan should bypass it.
+func fakeNonCredentialSecretContent() string {
+	return "deploy notes\naws_access_key_id = AKIAZ3XYQ7KHT9WPLM4C\n"
 }
 
 func withMockAPI(t *testing.T, handler http.Handler) {

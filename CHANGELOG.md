@@ -12,6 +12,22 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- Clearer wording after an email-restricted share. The CLI no longer claims the
+  link only opens "after signing in as that email"; it now says each recipient
+  must verify as that address (a one-time code we email them, or Google sign-in)
+  before opening. This matches the server, which now requires that verification
+  instead of unlocking on a clicked invite link.
+
+### Security
+
+- `--no-scan` no longer silently ships an obvious credential. When the file looks
+  like a secret (a service-account key, `*.pem`/`*.key`, `id_rsa`, `.env`, a
+  PKCS#12 keystore, or any file whose head contains a PEM private key,
+  `"private_key"`, or a GCP `service_account` type), the CLI warns and asks to
+  confirm on a terminal, or refuses without one, unless you pass `--allow-secrets`.
+
 ## [20261008143906] - 2026-10-08
 
 ### Changed
