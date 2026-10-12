@@ -313,6 +313,8 @@ github.com/share2us/cli-core v0.61.0 h1:QJTh38qOThp8vaHSQqVUi/JMVWcHvbQeCcXUkmbR
 github.com/share2us/cli-core v0.61.0/go.mod h1:QuB4yL7Mo9o00PwjXksVBT2WDkXriUedEkvLUAVQkws=
 github.com/share2us/cli-core v0.63.1-0.20261012063946-c214d8e37587 h1:uI4ErCf+aJIRy9nTvi7VDLX68gHkSozPNZUzUCIBfWM=
 github.com/share2us/cli-core v0.63.1-0.20261012063946-c214d8e37587/go.mod h1:QuB4yL7Mo9o00PwjXksVBT2WDkXriUedEkvLUAVQkws=
+github.com/share2us/cli-core v0.63.1-0.20261012065349-70f8733a5d9c h1:+cQCppuE2k+zWBS5IZE+nns7xdYWl5V4qhzYp9W9PiI=
+github.com/share2us/cli-core v0.63.1-0.20261012065349-70f8733a5d9c/go.mod h1:QuB4yL7Mo9o00PwjXksVBT2WDkXriUedEkvLUAVQkws=
 github.com/share2us/mcp v0.4.0 h1:6jjdFs3x9zYn3jT/znpPJpSTAg8cZ8pdAvqpG+Ebhrc=
 github.com/share2us/mcp v0.4.0/go.mod h1:4dp6t1t6wW4GCmJDuz2RCpTO2oY9mm5zNBzeNyVfGWI=
 github.com/shopspring/decimal v1.4.0 h1:bxl37RwXBklmTi0C79JfXCEBD1cqqHt0bbgBAGFp81k=
