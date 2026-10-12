@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u forms reseal <formId>`: make a form's existing responses readable in the portal.
+  It decrypts each response's content key with this device's key and re-seals it to your
+  portal web key (set up in the portal). Responses submitted before the web key existed are
+  backfilled; already-readable ones are skipped (ADR-046 Phase 2).
+
 ## [20261012072148] - 2026-10-12
 
 ### Added

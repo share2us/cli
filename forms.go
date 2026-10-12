@@ -23,6 +23,8 @@ func (a app) forms(ctx context.Context, args []string) int {
 		return a.formsResponses(ctx, args[1:])
 	case "response", "open", "read":
 		return a.formsResponse(ctx, args[1:])
+	case "reseal":
+		return a.formsReseal(ctx, args[1:])
 	case "help", "-h", "--help":
 		return a.formsUsage()
 	default:
@@ -35,7 +37,89 @@ func (a app) formsUsage() int {
 	fmt.Fprintln(a.stderr, "usage:")
 	fmt.Fprintln(a.stderr, "  s2u forms responses <formId>              list submissions (owner only)")
 	fmt.Fprintln(a.stderr, "  s2u forms response  <formId> <responseId> decrypt and show one submission")
+	fmt.Fprintln(a.stderr, "  s2u forms reseal    <formId>              make existing responses readable in the portal")
 	return 2
+}
+
+// formsReseal makes a form's existing responses readable in the portal (ADR-046 Phase 2):
+// it decrypts each response's content key with this device's key and re-seals it to the
+// owner's portal web key. Responses submitted before the web key existed are not sealed to
+// it; this backfills them. Already-resealed responses are skipped.
+func (a app) formsReseal(ctx context.Context, args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(a.stderr, "usage: s2u forms reseal <formId>")
+		return 2
+	}
+	formID := args[0]
+	client, cred, ok := a.authClient()
+	if !ok {
+		fmt.Fprintln(a.stderr, "sign in first with `share2us login`")
+		return 1
+	}
+	if cred.DevicePrivateKey == "" || cred.DevicePublicKey == "" {
+		fmt.Fprintln(a.stderr, "this login has no device key, so it cannot decrypt responses to re-seal them.")
+		return 1
+	}
+	webKey, ok, err := client.GetAccountWebKey(ctx)
+	if err != nil {
+		return a.fail("get web key", err)
+	}
+	if !ok {
+		fmt.Fprintln(a.stderr, "no portal web key is set up. Set up in-browser reading in the portal first, then re-run this.")
+		return 1
+	}
+
+	var seals []clicore.ResponseWebSeal
+	skipped, failed, offset := 0, 0, 0
+	for {
+		rows, hasMore, err := client.ListFormResponses(ctx, formID, 200, offset)
+		if err != nil {
+			return a.fail("list form responses", err)
+		}
+		for _, row := range rows {
+			payload, err := client.GetFormResponse(ctx, formID, row.ID)
+			if err != nil {
+				failed++
+				continue
+			}
+			if payload.WebSealedKey != "" {
+				skipped++
+				continue
+			}
+			var contentKey []byte
+			for _, sk := range payload.SealedKeys {
+				if ck, err := clicore.OpenSealedContentKey(sk.SealedKey, cred.DevicePublicKey, cred.DevicePrivateKey); err == nil {
+					contentKey = ck
+					break
+				}
+			}
+			if contentKey == nil {
+				failed++
+				continue
+			}
+			webSealed, err := clicore.SealContentKeyForDevice(contentKey, webKey.PublicKey)
+			if err != nil {
+				failed++
+				continue
+			}
+			seals = append(seals, clicore.ResponseWebSeal{ResponseID: row.ID, SealedKey: webSealed})
+		}
+		if !hasMore {
+			break
+		}
+		offset += len(rows)
+	}
+
+	if len(seals) == 0 {
+		fmt.Fprintf(a.stdout, "Nothing to re-seal (%d already readable in the portal, %d could not be decrypted on this device).\n", skipped, failed)
+		return 0
+	}
+	n, err := client.ResealFormResponsesWeb(ctx, formID, seals)
+	if err != nil {
+		return a.fail("re-seal responses", err)
+	}
+	fmt.Fprintf(a.stdout, "Re-sealed %d response(s) to your portal web key (%d already readable, %d could not be decrypted on this device).\n", n, skipped, failed)
+	return 0
 }
 
 func (a app) formsResponses(ctx context.Context, args []string) int {
