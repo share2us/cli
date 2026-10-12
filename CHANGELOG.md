@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261012072148] - 2026-10-12
+
 ### Added
 
 - `s2u forms responses <formId>` and `s2u forms response <formId> <responseId>`: list
