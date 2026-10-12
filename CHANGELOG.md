@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261012111053] - 2026-10-12
+
 ### Added
 
 - `s2u forms web-key [--passphrase <p>]`: set up in-browser reading of form responses from
