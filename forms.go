@@ -25,6 +25,8 @@ func (a app) forms(ctx context.Context, args []string) int {
 		return a.formsResponse(ctx, args[1:])
 	case "reseal":
 		return a.formsReseal(ctx, args[1:])
+	case "web-key", "webkey":
+		return a.formsWebKey(ctx, args[1:])
 	case "help", "-h", "--help":
 		return a.formsUsage()
 	default:
@@ -38,7 +40,95 @@ func (a app) formsUsage() int {
 	fmt.Fprintln(a.stderr, "  s2u forms responses <formId>              list submissions (owner only)")
 	fmt.Fprintln(a.stderr, "  s2u forms response  <formId> <responseId> decrypt and show one submission")
 	fmt.Fprintln(a.stderr, "  s2u forms reseal    <formId>              make existing responses readable in the portal")
+	fmt.Fprintln(a.stderr, "  s2u forms web-key   [--passphrase <p>]     set up in-browser reading (auto-generates a passphrase if omitted)")
 	return 2
+}
+
+// formsWebKey sets up (or rotates with --force) the account's portal web key from the CLI,
+// so the owner can read responses in the browser without doing the setup there (ADR-046
+// Phase 2). The passphrase is auto-generated and printed when --passphrase is not given.
+func (a app) formsWebKey(ctx context.Context, args []string) int {
+	passphrase, force := "", false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--passphrase", "-p":
+			if i+1 >= len(args) {
+				fmt.Fprintln(a.stderr, "--passphrase needs a value")
+				return 2
+			}
+			i++
+			passphrase = args[i]
+		case "--force":
+			force = true
+		default:
+			fmt.Fprintf(a.stderr, "unknown flag %q\n", args[i])
+			return 2
+		}
+	}
+	client, _, ok := a.authClient()
+	if !ok {
+		fmt.Fprintln(a.stderr, "sign in first with `share2us login`")
+		return 1
+	}
+	if _, exists, err := client.GetAccountWebKey(ctx); err != nil {
+		return a.fail("check web key", err)
+	} else if exists && !force {
+		fmt.Fprintln(a.stderr, "a web key already exists. Use --force to replace it.")
+		fmt.Fprintln(a.stderr, "Replacing it makes responses sealed to the old key unreadable in the portal until you run `s2u forms reseal <formId>`.")
+		return 1
+	}
+	generated := passphrase == ""
+	if generated {
+		p, err := clicore.NewWebKeyPassphrase()
+		if err != nil {
+			return a.fail("generate passphrase", err)
+		}
+		passphrase = p
+	}
+	wk, err := clicore.GenerateWebKey(passphrase)
+	if err != nil {
+		return a.fail("generate web key", err)
+	}
+	if err := client.SaveWebKey(ctx, wk); err != nil {
+		return a.fail("save web key", err)
+	}
+	fmt.Fprintln(a.stdout, "In-browser reading is set up.")
+	if generated {
+		fmt.Fprintf(a.stdout, "\n  Decrypt passphrase: %s\n\n", passphrase)
+		fmt.Fprintln(a.stdout, "Save this now. Enter it in the portal to read responses in the browser.")
+		fmt.Fprintln(a.stdout, "It is not stored anywhere and cannot be recovered.")
+	}
+	fmt.Fprintln(a.stdout, "Run `s2u forms reseal <formId>` to make existing responses readable in the portal.")
+	return 0
+}
+
+// ensureWebKeyPublic returns the account's web public key, creating a web key (with an
+// auto-generated passphrase, printed) if none exists yet. Used by reseal so the owner does
+// not have to set the key up separately first.
+func (a app) ensureWebKeyPublic(ctx context.Context, client *clicore.Client) (string, int) {
+	wk, exists, err := client.GetAccountWebKey(ctx)
+	if err != nil {
+		return "", a.fail("get web key", err)
+	}
+	if exists {
+		return wk.PublicKey, 0
+	}
+	passphrase, err := clicore.NewWebKeyPassphrase()
+	if err != nil {
+		return "", a.fail("generate passphrase", err)
+	}
+	created, err := clicore.GenerateWebKey(passphrase)
+	if err != nil {
+		return "", a.fail("generate web key", err)
+	}
+	if err := client.SaveWebKey(ctx, created); err != nil {
+		return "", a.fail("save web key", err)
+	}
+	fmt.Fprintln(a.stdout, "No portal web key was set up, so one was created for you.")
+	fmt.Fprintf(a.stdout, "\n  Decrypt passphrase: %s\n\n", passphrase)
+	fmt.Fprintln(a.stdout, "Save this now. Enter it in the portal to read responses in the browser.")
+	fmt.Fprintln(a.stdout, "It is not stored anywhere and cannot be recovered.")
+	return created.PublicKey, 0
 }
 
 // formsReseal makes a form's existing responses readable in the portal (ADR-046 Phase 2):
@@ -60,13 +150,9 @@ func (a app) formsReseal(ctx context.Context, args []string) int {
 		fmt.Fprintln(a.stderr, "this login has no device key, so it cannot decrypt responses to re-seal them.")
 		return 1
 	}
-	webKey, ok, err := client.GetAccountWebKey(ctx)
-	if err != nil {
-		return a.fail("get web key", err)
-	}
-	if !ok {
-		fmt.Fprintln(a.stderr, "no portal web key is set up. Set up in-browser reading in the portal first, then re-run this.")
-		return 1
+	webPubKey, code := a.ensureWebKeyPublic(ctx, client)
+	if code != 0 {
+		return code
 	}
 
 	var seals []clicore.ResponseWebSeal
@@ -97,7 +183,7 @@ func (a app) formsReseal(ctx context.Context, args []string) int {
 				failed++
 				continue
 			}
-			webSealed, err := clicore.SealContentKeyForDevice(contentKey, webKey.PublicKey)
+			webSealed, err := clicore.SealContentKeyForDevice(contentKey, webPubKey)
 			if err != nil {
 				failed++
 				continue
