@@ -152,7 +152,7 @@ func (a app) maybeShowTip(command string) {
 		return
 	}
 	switch command {
-	case "", "help", "-h", "--help", "version", "-v", "--version", "tui", "mcp", "daemon", "agent", "setup":
+	case "", "help", "-h", "--help", "version", "-v", "--version", "tui", "mcp", "daemon", "agent", "forms", "setup":
 		return
 	}
 	if mrand.Intn(tipEveryN) != 0 {
@@ -252,6 +252,8 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 		return a.daemon(ctx, args[1:])
 	case "agent":
 		return a.agent(ctx, args[1:])
+	case "forms":
+		return a.forms(ctx, args[1:])
 	case "claude":
 		return a.claude(ctx, args[1:])
 	case "setup":
@@ -1190,7 +1192,7 @@ func shouldSkipUpdateCheck(command string) bool {
 		return true
 	}
 	switch command {
-	case "", "help", "-h", "--help", "version", "-v", "--version", "update", "mcp", "tui", "stream", "p2p", "receive", "daemon", "agent", "setup":
+	case "", "help", "-h", "--help", "version", "-v", "--version", "update", "mcp", "tui", "stream", "p2p", "receive", "daemon", "agent", "forms", "setup":
 		return true
 	default:
 		return false

@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u forms responses <formId>` and `s2u forms response <formId> <responseId>`: list
+  and read the responses to a form share. Responses are end-to-end encrypted; the CLI
+  decrypts them locally with this device's key. This is the Phase-1 home for reading
+  form submissions (ADR-046).
+
 ## [20261009164339] - 2026-10-09
 
 ### Changed
