@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u forms web-key [--passphrase <p>]`: set up in-browser reading of form responses from
+  the CLI. If you do not pass `--passphrase`, a strong decrypt passphrase is generated and
+  printed once (save it; you enter it in the portal). `s2u forms reseal <formId>` now also
+  auto-creates a web key when none exists instead of failing (ADR-046 Phase 2).
+
 ## [20261012092331] - 2026-10-12
 
 ### Added
