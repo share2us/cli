@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261012092331] - 2026-10-12
+
 ### Added
 
 - `s2u forms reseal <formId>`: make a form's existing responses readable in the portal.
