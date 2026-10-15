@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261015164602] - 2026-10-15
+
 ### Changed
 - `s2u forms response` now prints a submission's answers directly. Form responses
   are no longer end-to-end encrypted (ADR-046 reversal), so no device key is needed.
