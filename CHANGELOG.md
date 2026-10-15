@@ -12,6 +12,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+- `s2u forms response` now prints a submission's answers directly. Form responses
+  are no longer end-to-end encrypted (ADR-046 reversal), so no device key is needed.
+
+### Removed
+- `s2u forms web-key` and `s2u forms reseal`: the portal passphrase/web-key decrypt
+  flow is gone now that responses are plaintext.
+
 ## [20261012111053] - 2026-10-12
 
 ### Added
