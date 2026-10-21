@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows: `s2u logout` now also removes the pre-2026-07 credential at
+  `%USERPROFILE%\.config`. Previously that copy was left behind and silently
+  restored the login on the next command, so logout appeared not to work and the
+  CLI stayed "signed in" with a stale token. (cli-core v0.68.0)
+
 ## [20261015164602] - 2026-10-15
 
 ### Changed
