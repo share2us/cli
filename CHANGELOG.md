@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261021061820] - 2026-10-21
+
 ### Fixed
 
 - Windows: `s2u logout` now also removes the pre-2026-07 credential at
