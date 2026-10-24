@@ -57,7 +57,7 @@ jobs:
 
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.25"
+          go-version: "1.26"
           check-latest: true
 
       # Windows Smart App Control blocks UNSIGNED executables outright: no per-file
@@ -341,7 +341,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          node-version: "20"
+          node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
       # Tokenless publish via npm Trusted Publishing (OIDC). npm trades the job's
