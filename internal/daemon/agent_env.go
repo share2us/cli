@@ -24,7 +24,8 @@ func SetAgentEnv(cmd *exec.Cmd, dir string) {
 	}
 	env := make([]string, 0, len(base)+1)
 	for _, entry := range base {
-		if !strings.HasPrefix(entry, AgentEnvVar+"=") {
+		// Case-insensitive: Windows environment names are, so s2u_agent_id is the same.
+		if key, _, _ := strings.Cut(entry, "="); !strings.EqualFold(key, AgentEnvVar) {
 			env = append(env, entry)
 		}
 	}

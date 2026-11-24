@@ -42,3 +42,15 @@ func TestSetAgentEnvDropsAnInheritedValue(t *testing.T) {
 		t.Fatalf("unbound directory still carries %s: %v", AgentEnvVar, cmd.Env)
 	}
 }
+
+func TestSetAgentEnvDropsAnyCaseVariant(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	cmd := exec.Command("true")
+	cmd.Env = []string{"PATH=/bin", "s2u_agent_id=agt_lowercase_inherited_x"}
+	SetAgentEnv(cmd, "")
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(strings.ToLower(e), "s2u_agent_id=") {
+			t.Fatalf("case variant survived: %v", cmd.Env)
+		}
+	}
+}

@@ -192,8 +192,8 @@ func RunCodexInject(ctx context.Context, sessionID, cwd, prompt string, forceRes
 	cmd := exec.CommandContext(cctx, "codex", buildCodexInjectArgs(sessionID, prompt, codexSandbox(priv))...)
 	if cwd != "" {
 		cmd.Dir = cwd
-		SetAgentEnv(cmd, cwd)
 	}
+	SetAgentEnv(cmd, cwd) // also strips an inherited value when cwd is empty
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
