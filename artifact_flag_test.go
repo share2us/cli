@@ -38,7 +38,7 @@ func TestArtifactFlagSendsTheArtifactClass(t *testing.T) {
 	if code := run([]string{file, "--artifact"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("code = %d stderr=%s", code, stderr.String())
 	}
-	if !seen || got.ContentClass != "artifact" || got.ContentType != "text/html" || got.Encrypted {
+	if !seen || got.ContentClass != "artifact" || got.ContentType != "text/html" || got.Encrypted || got.SourceRef != "" {
 		t.Fatalf("create request = %+v", got)
 	}
 	if !strings.Contains(stdout.String(), "Interactive artifact") {
@@ -58,7 +58,7 @@ func TestHTMLWithoutTheFlagIsNotAnArtifact(t *testing.T) {
 	if code := run([]string{file}, &stdout, &stderr); code != 0 {
 		t.Fatalf("code = %d stderr=%s", code, stderr.String())
 	}
-	if got.ContentClass == "artifact" || strings.Contains(stdout.String(), "Interactive artifact") {
+	if !seen || got.ContentClass == "artifact" || strings.Contains(stdout.String(), "Interactive artifact") {
 		t.Fatalf("plain .html became an artifact: %+v", got)
 	}
 }
@@ -102,5 +102,26 @@ func TestArtifactFlagAllowsPrivateAndRecipientLinks(t *testing.T) {
 	}
 	if !cfg.artifact || !cfg.private || len(cfg.recipients) != 1 || cfg.encrypt {
 		t.Fatalf("opts = %+v", cfg)
+	}
+}
+
+// A standing `config set-default encrypt true` describes ordinary link shares; it is
+// dropped for an artifact rather than making every artifact upload fail.
+func TestArtifactDropsAStandingEncryptDefault(t *testing.T) {
+	var got clicore.UploadCreateRequest
+	var seen bool
+	withMockAPI(t, captureCreate(t, &got, &seen))
+	withCredential(t, "https://api.example.test")
+	var out, errb bytes.Buffer
+	if code := run([]string{"config", "set-default", "encrypt", "true"}, &out, &errb); code != 0 {
+		t.Fatalf("set-default: %d %s", code, errb.String())
+	}
+	file := writeTempFile(t, "chart.html", "hello")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{file, "--artifact"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	if !seen || got.Encrypted || got.ContentClass != "artifact" {
+		t.Fatalf("create request = %+v", got)
 	}
 }

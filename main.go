@@ -1856,6 +1856,9 @@ func (a app) upload(ctx context.Context, args []string) int {
 		requestedContentClass = clicore.ContentClassFolder
 	}
 	if opts.artifact {
+		// The server never dedups or replaces an artifact by source_ref (a replace would
+		// skip the scan), so don't send one: every artifact upload is a new share.
+		sourceRef = ""
 		if folderUpload || !isHTMLFileName(fileName) {
 			fmt.Fprintln(a.stderr, "--artifact needs a single .html or .htm file (name it with --name page.html when reading stdin)")
 			return 2
@@ -2500,7 +2503,7 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 		return uploadOptions{}, errors.New("--restrict and --unrestrict cannot be combined")
 	}
 	if opts.artifact {
-		if err := artifactConflicts(args); err != nil {
+		if err := artifactConflicts(args, opts); err != nil {
 			return uploadOptions{}, err
 		}
 		// A standing encrypt default describes ordinary link shares; an artifact is
@@ -2519,31 +2522,30 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 	return opts, nil
 }
 
-// artifactConflicts refuses flags that cannot apply to an interactive artifact. The
-// server refuses them too; failing here saves an upload round trip and says why.
-func artifactConflicts(args []string) error {
-	reasons := map[string]string{
-		"--password": "use --private or --to instead: a password unlock only downloads the file, it never runs",
-		"--encrypt":  "the server must scan it and serve it to whoever opens the link",
-		"-e":         "the server must scan it and serve it to whoever opens the link",
-		"--device":   "an artifact is shared as a link, not sent to a device",
-		"--contact":  "an artifact is shared as a link, not sent to a contact",
-		"--teammate": "an artifact is shared as a link, not sent to a contact",
-		"--live":     "new content would skip the scan that runs before it is published",
-		"-l":         "new content would skip the scan that runs before it is published",
-		"--watch":    "new content would skip the scan that runs before it is published",
-		"-w":         "new content would skip the scan that runs before it is published",
-		"--sharenet": "an artifact can't be posted into a sharenet",
-		"--project":  "an artifact can't be posted into a project",
-	}
+// artifactConflicts refuses options that cannot apply to an interactive artifact. The
+// server refuses them too; failing here saves an upload round trip and says why. It
+// reads the PARSED options, not flag spellings, so aliases (-d, --keep-updated, ...)
+// can't slip past. Encryption is the exception: an explicit -e/--encrypt is checked in
+// args because a standing encrypt default is dropped rather than refused.
+func artifactConflicts(args []string, opts uploadOptions) error {
 	for _, a := range args {
-		name := a
-		if i := strings.IndexByte(a, '='); i > 0 {
-			name = a[:i]
+		if a == "--encrypt" || a == "-e" {
+			return fmt.Errorf("--artifact can't be combined with %s: the server must scan it and serve it to whoever opens the link", a)
 		}
-		if why, bad := reasons[name]; bad {
-			return fmt.Errorf("--artifact can't be combined with %s: %s", name, why)
-		}
+	}
+	switch {
+	case opts.password != "" || opts.promptPassword:
+		return errors.New("--artifact can't be combined with --password: use --private or --to instead; a password unlock only downloads the file, it never runs")
+	case opts.device != "":
+		return errors.New("--artifact can't be combined with --device: an artifact is shared as a link, not sent to a device")
+	case opts.teammate != "":
+		return errors.New("--artifact can't be combined with --contact: an artifact is shared as a link, not sent to a contact")
+	case opts.live || opts.watch:
+		return errors.New("--artifact can't be combined with --live/--watch/--keep-updated: new content would skip the scan that runs before it is published")
+	case opts.sharenet != "":
+		return errors.New("--artifact can't be combined with --sharenet: an artifact can't be posted into a sharenet")
+	case opts.project != "":
+		return errors.New("--artifact can't be combined with --project: an artifact can't be posted into a project")
 	}
 	return nil
 }
