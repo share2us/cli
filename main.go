@@ -1855,6 +1855,14 @@ func (a app) upload(ctx context.Context, args []string) int {
 		contentType = "application/zip"
 		requestedContentClass = clicore.ContentClassFolder
 	}
+	if opts.artifact {
+		if folderUpload || !isHTMLFileName(fileName) {
+			fmt.Fprintln(a.stderr, "--artifact needs a single .html or .htm file (name it with --name page.html when reading stdin)")
+			return 2
+		}
+		contentType = "text/html"
+		requestedContentClass = "artifact"
+	}
 	var dataKey []byte
 	if opts.live || opts.watch {
 		if opts.encrypt {
@@ -2217,6 +2225,9 @@ func (a app) upload(ctx context.Context, args []string) int {
 		if created.EmailSharesRemaining != nil {
 			out["email_shares_remaining"] = *created.EmailSharesRemaining
 		}
+		if opts.artifact {
+			out["artifact"] = true
+		}
 		writeJSON(a.stdout, out)
 		if !opts.live && !opts.watch {
 			return 0
@@ -2240,6 +2251,12 @@ func (a app) upload(ctx context.Context, args []string) int {
 		}
 		if opts.encrypt {
 			fmt.Fprintln(a.stdout, "Encryption key is only in the URL fragment and was never sent to the server.")
+		}
+		if opts.artifact {
+			fmt.Fprintln(a.stdout, "Interactive artifact: it runs for whoever opens the link, in an isolated sandbox (no network, no forms, no storage).")
+			if completed.Status == "scanning" {
+				fmt.Fprintln(a.stdout, "It is being malware-scanned and the link opens once the scan passes, usually within seconds.")
+			}
 		}
 		fmt.Fprintf(a.stdout, "Expires: %s\n", expiryDisplay(expiresAt))
 		if len(opts.recipients) > 0 {
@@ -2289,6 +2306,10 @@ type uploadOptions struct {
 	unrestrict     bool
 	private        bool
 	fromStdin      bool
+	// artifact publishes an .html file as an interactive artifact (ADR-049): it RUNS
+	// for whoever opens the link, in a sandbox on share2us.site. Never inferred from
+	// the extension: a plain .html upload stays a text file.
+	artifact bool
 	// Post into a sharenet, or one of its projects (server decisions-summary 9.23
 	// #8): stored under the sharenet owner's account, members only, kept until
 	// deleted.
@@ -2359,6 +2380,8 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 			opts.note = strings.TrimPrefix(arg, "--note=")
 		case arg == "--one-time":
 			opts.oneTime = true
+		case arg == "--artifact":
+			opts.artifact = true
 		case arg == "--encrypt" || arg == "-e":
 			opts.encrypt = true
 		case arg == "--no-encrypt":
@@ -2476,6 +2499,14 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 	if opts.restrict && opts.unrestrict {
 		return uploadOptions{}, errors.New("--restrict and --unrestrict cannot be combined")
 	}
+	if opts.artifact {
+		if err := artifactConflicts(args); err != nil {
+			return uploadOptions{}, err
+		}
+		// A standing encrypt default describes ordinary link shares; an artifact is
+		// scanned and served by the server, so it can't be end-to-end encrypted.
+		opts.encrypt = false
+	}
 	if opts.sharenet != "" || opts.project != "" {
 		if err := sharenetPostConflicts(args); err != nil {
 			return uploadOptions{}, err
@@ -2486,6 +2517,40 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 		opts.encrypt, opts.maxViews, opts.allowedDomains, opts.deniedDomains = false, 0, nil, nil
 	}
 	return opts, nil
+}
+
+// artifactConflicts refuses flags that cannot apply to an interactive artifact. The
+// server refuses them too; failing here saves an upload round trip and says why.
+func artifactConflicts(args []string) error {
+	reasons := map[string]string{
+		"--password": "use --private or --to instead: a password unlock only downloads the file, it never runs",
+		"--encrypt":  "the server must scan it and serve it to whoever opens the link",
+		"-e":         "the server must scan it and serve it to whoever opens the link",
+		"--device":   "an artifact is shared as a link, not sent to a device",
+		"--contact":  "an artifact is shared as a link, not sent to a contact",
+		"--teammate": "an artifact is shared as a link, not sent to a contact",
+		"--live":     "new content would skip the scan that runs before it is published",
+		"-l":         "new content would skip the scan that runs before it is published",
+		"--watch":    "new content would skip the scan that runs before it is published",
+		"-w":         "new content would skip the scan that runs before it is published",
+		"--sharenet": "an artifact can't be posted into a sharenet",
+		"--project":  "an artifact can't be posted into a project",
+	}
+	for _, a := range args {
+		name := a
+		if i := strings.IndexByte(a, '='); i > 0 {
+			name = a[:i]
+		}
+		if why, bad := reasons[name]; bad {
+			return fmt.Errorf("--artifact can't be combined with %s: %s", name, why)
+		}
+	}
+	return nil
+}
+
+func isHTMLFileName(name string) bool {
+	n := strings.ToLower(strings.TrimSpace(name))
+	return strings.HasSuffix(n, ".html") || strings.HasSuffix(n, ".htm")
 }
 
 // sharenetPostConflicts refuses flags that cannot apply to a sharenet file.

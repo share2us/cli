@@ -1,0 +1,106 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"io"
+	"net/http"
+	"strings"
+	"testing"
+
+	clicore "github.com/share2us/cli-core"
+)
+
+// captureCreate wraps the mock upload API and records the create request.
+func captureCreate(t *testing.T, got *clicore.UploadCreateRequest, seen *bool) http.Handler {
+	t.Helper()
+	inner := uploadHandler(t)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/uploads" {
+			if err := json.NewDecoder(r.Body).Decode(got); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			*seen = true
+			r.Body = io.NopCloser(bytes.NewReader(mustMarshal(t, *got)))
+		}
+		inner.ServeHTTP(w, r)
+	})
+}
+
+func TestArtifactFlagSendsTheArtifactClass(t *testing.T) {
+	var got clicore.UploadCreateRequest
+	var seen bool
+	withMockAPI(t, captureCreate(t, &got, &seen))
+	withCredential(t, "https://api.example.test")
+	file := writeTempFile(t, "chart.html", "hello")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{file, "--artifact"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	if !seen || got.ContentClass != "artifact" || got.ContentType != "text/html" || got.Encrypted {
+		t.Fatalf("create request = %+v", got)
+	}
+	if !strings.Contains(stdout.String(), "Interactive artifact") {
+		t.Fatalf("stdout lacks the artifact notice:\n%s", stdout.String())
+	}
+}
+
+// Without --artifact an .html file is just a file: nothing about it runs.
+func TestHTMLWithoutTheFlagIsNotAnArtifact(t *testing.T) {
+	var got clicore.UploadCreateRequest
+	var seen bool
+	withMockAPI(t, captureCreate(t, &got, &seen))
+	withCredential(t, "https://api.example.test")
+	file := writeTempFile(t, "chart.html", "hello")
+
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{file}, &stdout, &stderr); code != 0 {
+		t.Fatalf("code = %d stderr=%s", code, stderr.String())
+	}
+	if got.ContentClass == "artifact" || strings.Contains(stdout.String(), "Interactive artifact") {
+		t.Fatalf("plain .html became an artifact: %+v", got)
+	}
+}
+
+func TestArtifactFlagRefusesWhatCannotRun(t *testing.T) {
+	cases := map[string][]string{
+		"not html":  {"notes.txt"},
+		"password":  {"chart.html", "--password"},
+		"password=": {"chart.html", "--password=x"},
+		"encrypt":   {"chart.html", "-e"},
+		"device":    {"chart.html", "--device", "laptop"},
+		"contact":   {"chart.html", "--contact=a@example.com"},
+		"live":      {"chart.html", "--live"},
+		"sharenet":  {"chart.html", "--sharenet", "sn_1"},
+		"project":   {"chart.html", "--project=p_1"},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			var got clicore.UploadCreateRequest
+			var seen bool
+			withMockAPI(t, captureCreate(t, &got, &seen))
+			withCredential(t, "https://api.example.test")
+			file := writeTempFile(t, args[0], "hello")
+			var stdout, stderr bytes.Buffer
+			code := run(append([]string{file, "--artifact"}, args[1:]...), &stdout, &stderr)
+			if code == 0 || seen {
+				t.Fatalf("code = %d, create sent = %v; stderr=%s", code, seen, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "artifact") {
+				t.Fatalf("stderr does not explain: %s", stderr.String())
+			}
+		})
+	}
+}
+
+// Recipient links and "only me" links are fine: the gateway gates decide who opens it.
+func TestArtifactFlagAllowsPrivateAndRecipientLinks(t *testing.T) {
+	cfg, err := parseUploadArgs([]string{"chart.html", "--artifact", "--private", "--to", "a@example.com", "--max-views", "3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.artifact || !cfg.private || len(cfg.recipients) != 1 || cfg.encrypt {
+		t.Fatalf("opts = %+v", cfg)
+	}
+}
