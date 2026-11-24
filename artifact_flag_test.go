@@ -125,3 +125,34 @@ func TestArtifactDropsAStandingEncryptDefault(t *testing.T) {
 		t.Fatalf("create request = %+v", got)
 	}
 }
+
+// ADR-050: inside an agent's process, a sharenet project post says which agent is
+// posting; a human's (no S2U_AGENT_ID) and any non-sharenet upload say nothing.
+func TestSharenetPostCarriesTheAgentID(t *testing.T) {
+	for name, tc := range map[string]struct {
+		env  string
+		args []string
+		want string
+	}{
+		"agent project post": {"agt_abcdefghijklmnop", []string{"--project", "11111111-1111-1111-1111-111111111111"}, "agt_abcdefghijklmnop"},
+		"human project post": {"", []string{"--project", "11111111-1111-1111-1111-111111111111"}, ""},
+		"agent plain upload": {"agt_abcdefghijklmnop", nil, ""},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("S2U_AGENT_ID", tc.env)
+			var got clicore.UploadCreateRequest
+			var seen bool
+			withMockAPI(t, captureCreate(t, &got, &seen))
+			withCredential(t, "https://api.example.test")
+			file := writeTempFile(t, "notes.txt", "hello")
+			var stdout, stderr bytes.Buffer
+			run(append([]string{file}, tc.args...), &stdout, &stderr)
+			if !seen {
+				t.Fatalf("no create sent; stderr=%s", stderr.String())
+			}
+			if got.AgentID != tc.want {
+				t.Fatalf("agent_id = %q, want %q", got.AgentID, tc.want)
+			}
+		})
+	}
+}

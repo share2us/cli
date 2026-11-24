@@ -154,6 +154,7 @@ func RunClaudeInject(ctx context.Context, sessionID, cwd, prompt string, forceRe
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	SetAgentEnv(cmd, cwd)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -178,6 +179,7 @@ func RunClaudeInjectSession(ctx context.Context, sessionID, cwd, prompt string, 
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
+	SetAgentEnv(cmd, cwd)
 	raw, err := cmd.CombinedOutput()
 	if err != nil && claudeRefusedHeld(raw) {
 		return "", "", ErrSessionHeld

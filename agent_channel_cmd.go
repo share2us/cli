@@ -238,6 +238,11 @@ func (a app) claude(ctx context.Context, args []string) int {
 	}
 	cmd := exec.CommandContext(ctx, "claude", append(daemon.ClaudeChannelArgs(mcp, settings), args...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	// The agent bound to this directory knows who it is, so its posts into a
+	// sharenet project are held to its owner's grant (ADR-050).
+	if cwd, err := os.Getwd(); err == nil {
+		daemon.SetAgentEnv(cmd, cwd)
+	}
 	// Ctrl-C belongs to Claude; this wrapper only waits for it.
 	signal.Ignore(os.Interrupt)
 	if err := cmd.Run(); err != nil {
