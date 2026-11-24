@@ -17,6 +17,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/share2us/cli/internal/daemon"
 	"hash/crc32"
 	"io"
 	mrand "math/rand"
@@ -2050,6 +2051,14 @@ func (a app) upload(ctx context.Context, args []string) int {
 		SHA256:      sum,
 		SourceRef:   sourceRef,
 		New:         opts.newShare,
+		// ADR-050: inside an agent's process (s2u claude / a daemon run), a sharenet
+		// post says which agent is posting; the server enforces the owner's grant.
+		AgentID: func() string {
+			if opts.sharenet == "" && opts.project == "" {
+				return ""
+			}
+			return strings.TrimSpace(os.Getenv(daemon.AgentEnvVar))
+		}(),
 		ContentClass: func() string {
 			if opts.live {
 				return "text"

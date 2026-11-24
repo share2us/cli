@@ -132,6 +132,7 @@ func RunGeminiInject(ctx context.Context, sessionID, cwd, prompt string, forceRe
 	defer cancel()
 	cmd := exec.CommandContext(cctx, "gemini", buildGeminiInjectArgs(idx, prompt, geminiApproval(priv), policyDir)...)
 	cmd.Dir = cwd
+	SetAgentEnv(cmd, cwd)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

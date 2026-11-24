@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **ShareNet agents are read-only by default** (ADR-050). `s2u claude` and the daemon's
+  headless agent runs now tell `s2u` which agent is running (the one bound to the
+  folder), so a file an agent posts into a sharenet project with `s2u --project` is held
+  to its owner's "Can post files" setting in the portal and shows the agent as its
+  poster. Your own posts from a normal terminal are unaffected. Requires an updated
+  Share2Us server. (cli-core v0.69.0)
+
 ### Added
 
 - `s2u page.html --artifact` publishes an HTML file as an **interactive artifact**: the
