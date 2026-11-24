@@ -12,6 +12,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u page.html --artifact` publishes an HTML file as an **interactive artifact**: the
+  link opens a page where whoever has it can run it, inside an isolated sandbox on
+  `share2us.site` (scripts run; network, forms, cookies and storage are blocked). The file
+  is malware-scanned first, and the link opens once the scan passes. Works with
+  `--private`, `--to`, `--max-views`, `--one-time` and `--expires`; it can't be combined
+  with `--password`, `--encrypt`, `--device`, `--contact`, `--live`/`--watch`,
+  `--sharenet` or `--project`, and needs a single `.html`/`.htm` file. Without the flag an
+  `.html` file is still just a file: nothing about it runs.
+
 ## [20261021061820] - 2026-10-21
 
 ### Fixed
