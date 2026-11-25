@@ -52,7 +52,31 @@ type hookInput struct {
 	ToolName       string         `json:"tool_name"`
 	ToolUseID      string         `json:"tool_use_id"`
 	ToolInput      map[string]any `json:"tool_input"`
+	// LastAssistantMessage: newer Claude Code passes the turn's final text to Stop hooks.
+	LastAssistantMessage string `json:"last_assistant_message"`
 }
+
+// stopHookReply is a typed request's reply for its sender. Claude can run the Stop hook
+// before the final message reaches the transcript file, which returned "no report" for a
+// turn that did answer (2026-11-26), so the transcript is re-read briefly, then the
+// hook's own last-message field is used.
+func stopHookReply(in hookInput, request string) string {
+	if request == "" {
+		return ""
+	}
+	for i := 0; i < stopReplyTries; i++ {
+		if r := daemon.TranscriptLastReply(in.TranscriptPath, request); r != "" {
+			return r
+		}
+		time.Sleep(stopReplyWait)
+	}
+	return strings.TrimSpace(in.LastAssistantMessage)
+}
+
+var (
+	stopReplyTries = 12
+	stopReplyWait  = 250 * time.Millisecond
+)
 
 // agentHook is `s2u agent hook <event>`, run by Claude in an `s2u claude`
 // session. SessionStart proves the guard settings loaded; PreToolUse applies a
@@ -77,8 +101,11 @@ func (a app) agentHook(args []string) int {
 		return 0
 	}
 	switch args[0] {
-	case "session-start":
+	case "session-start", daemon.SessionStartHookV2:
 		a.proveTerminalHook(in.SessionID)
+		if args[0] == daemon.SessionStartHookV2 {
+			a.proveTerminalPromptHook(in.SessionID)
+		}
 		markChannelGuardReady(in.SessionID, daemonctl.Call, time.Sleep)
 	case "user-prompt-submit":
 		// A just-started Claude process may not appear in `claude agents` at
@@ -137,7 +164,7 @@ func (a app) agentHook(args []string) int {
 				}
 			}
 		}
-		completeHookTurn(in.SessionID, request, daemon.TranscriptLastReply(in.TranscriptPath, request), daemonctl.Call)
+		completeHookTurn(in.SessionID, request, stopHookReply(in, request), daemonctl.Call)
 	case "session-end":
 		a.endTerminalSession(in.SessionID)
 	}

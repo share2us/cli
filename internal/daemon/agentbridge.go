@@ -113,7 +113,7 @@ type sessionRunner interface {
 // headlessly in a session a running process holds, and forking it is not
 // allowed, so the hop waits until the window lets the session go.
 var (
-	injectHoldPoll = 20 * time.Second
+	injectHoldPoll = 3 * time.Second // one check: `claude agents` (~0.2 s) + a screen read
 	injectHoldMax  = 24 * time.Hour
 	// injectPaneRebindTimeout: how long a hop may sit undeliverable because the
 	// target session's bound Zellij pane can no longer be verified before the

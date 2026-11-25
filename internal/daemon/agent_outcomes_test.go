@@ -188,3 +188,21 @@ func TestSentResultIsAnnouncedToTheSendingSession(t *testing.T) {
 		t.Fatalf("queued for a session that wasn't listening: %+v", q)
 	}
 }
+
+// After a send the result is checked within seconds, not on the slow background poll.
+func TestSentRequestNudgesTheResultWatcher(t *testing.T) {
+	runtime := rt()
+	if !runtime.fastResultsUntil().IsZero() {
+		t.Fatal("fast polling without a send")
+	}
+	nudge := runtime.sentNudge()
+	runtime.SentRequest()
+	select {
+	case <-nudge:
+	default:
+		t.Fatal("no nudge")
+	}
+	if !runtime.fastResultsUntil().After(time.Now()) {
+		t.Fatal("fast window not opened")
+	}
+}

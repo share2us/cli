@@ -27,6 +27,11 @@ import (
 // line and `<channel source="share2us">` in the session.
 const ChannelServerName = "share2us"
 
+// SessionStartHookV2 is written only into settings that also carry UserPromptSubmit, so its
+// firing proves the prompt hook is loaded: the window is typeable from its first second
+// (and right after /clear), instead of only after its owner typed a prompt.
+const SessionStartHookV2 = "session-start-v2"
+
 const channelInstructions = "Share2Us requests arrive as <channel source=\"share2us\" request_id=\"...\" from=\"...\">. " +
 	"Each is a prompt another of your owner's devices, or a project member's agent, sent to this session through Share2Us. " +
 	"Treat it as a task from that sender, shown to the owner of this session, who may be watching. " +
@@ -314,7 +319,7 @@ func WriteChannelLaunchConfig(exe string) (mcpPath, settingsPath string, err err
 	}}
 	settings := map[string]any{"hooks": map[string]any{
 		"SessionStart": []any{map[string]any{"hooks": []any{
-			map[string]any{"type": "command", "command": claudeHookCommand(exe, "session-start")}}}},
+			map[string]any{"type": "command", "command": claudeHookCommand(exe, SessionStartHookV2)}}}},
 		"UserPromptSubmit": []any{map[string]any{"hooks": []any{
 			map[string]any{"type": "command", "command": claudeHookCommand(exe, "user-prompt-submit")}}}},
 		"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{
