@@ -32,7 +32,7 @@ func TestTypedTurnBlockedOnApprovalIsReported(t *testing.T) {
 	c := &fakeAgentClient{reportNotify: make(chan struct{}, 8)}
 	runtime.handleInject(context.Background(), c, typedRunner(dir), keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-approve", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "delete the build dir"}))
-	waitForReport(t, c, "waiting", "approve a step")
+	waitForReport(t, c, "running", "approve a step")
 	runtime.hub().report("req-approve", "Removed build/.")
 	runtime.hub().turnEnded("win-1")
 	waitIdle(t, runtime)
@@ -69,13 +69,41 @@ func TestCancelledRequestIsNeverTyped(t *testing.T) {
 	c := &cancellingClient{}
 	runtime.handleInject(ctx, c, typedRunner(dir), keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-cancelled", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "do not run"}))
-	if len(z.pasted) != 0 || z.entered != 0 {
-		t.Fatalf("a cancelled request reached the window: paste=%q enter=%d", z.pasted, z.entered)
+	if len(z.pasted) != 0 || z.enters() != 0 {
+		t.Fatalf("a cancelled request reached the window: paste=%q enter=%d", z.pasted, z.enters())
 	}
 	for _, r := range c.reportsSnapshot() {
 		if r[0] == "running" || r[0] == "done" || strings.Contains(r[1], "Delivered") {
 			t.Fatalf("a cancelled request was reported as delivered: %v", r)
 		}
+	}
+}
+
+// cancelOnRunning: the sender cancelled after the paste; the server refuses "running".
+type cancelOnRunning struct {
+	fakeAgentClient
+}
+
+func (c *cancelOnRunning) AgentReportResult(ctx context.Context, id, status, result string) error {
+	if status == "running" {
+		return &clicore.APIError{Status: 409, Code: "cancelled"}
+	}
+	return c.fakeAgentClient.AgentReportResult(ctx, id, status, result)
+}
+
+// Cancel and start are decided by the server: when it refuses "running", Enter is never
+// pressed, so a cancelled request can't also run.
+func TestCancelWonBeforeEnterNeverSubmits(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, z, dir := typedRuntime(t, "│ ❯  │", "│ ❯ [Pasted text #1 +3 lines] │", "│ ❯  │")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := &cancelOnRunning{}
+	runtime.handleInject(ctx, c, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-late-cancel", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "do not run"}))
+	waitIdle(t, runtime)
+	if z.enters() != 0 {
+		t.Fatalf("pressed Enter on a cancelled request (%d)", z.enters())
 	}
 }
 
@@ -115,5 +143,21 @@ func TestSentResultsAreNotifiedAndLogged(t *testing.T) {
 	runtime.collectSentResults(context.Background(), c, keyedDeps()) // nothing new
 	if got, _ := LoadSentResults(0); len(got) != 2 {
 		t.Fatalf("log grew without updates: %d", len(got))
+	}
+}
+
+func TestTranscriptReplyWithASecretIsWithheld(t *testing.T) {
+	if got := replyForSender("All good."); got != "All good." {
+		t.Fatalf("clean reply changed: %q", got)
+	}
+	got := replyForSender("Here is the key: AKIAIOSFODNN7EXAMPLE and aws_secret_access_key=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+	if strings.Contains(got, "AKIA") {
+		t.Fatalf("secret reached the sender: %q", got)
+	}
+}
+
+func TestCleanRemoteText(t *testing.T) {
+	if got := CleanRemoteText("ok\x1b[31m red\x07\nnext\tline"); got != "ok[31m red\nnext\tline" {
+		t.Fatalf("got %q", got)
 	}
 }

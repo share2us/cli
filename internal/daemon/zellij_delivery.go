@@ -5,7 +5,10 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -115,7 +118,9 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 			}})
 		return true
 	}
-	if cancelledBySender(ctx, client, req.ID) {
+	// Claim "running" BEFORE Enter: the server refuses it once the sender cancelled, and
+	// refuses a cancel once it is running, so the two can never both win.
+	if isCancelledErr(client.AgentReportResult(ctx, req.ID, "running", typedDeliveredMsg(req.Tool))) {
 		rt.dropCancelledPaste(req, deps)
 		return true
 	}
@@ -186,7 +191,6 @@ func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, de
 	go func() {
 		defer rt.holding.Add(-1)
 		deps.logf("agent-bridge: typed inject %s into open session %s", req.ID, req.TargetSessionID)
-		_ = client.AgentReportResult(ctx, req.ID, "running", typedDeliveredMsg(req.Tool))
 		hop := HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 			Target: req.TargetSessionID, RanIn: req.TargetSessionID, Mode: "typed", Prompt: shown}
 		if waited > 0 {
@@ -252,7 +256,8 @@ func (w *approvalWatch) check(ctx context.Context, rt *Runtime, client AgentClie
 	switch {
 	case dialog && !w.showing:
 		w.showing, w.seen = true, true
-		_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: the "+req.Tool+" session is asking its owner to approve a step. The request continues once they answer.")
+		// "running", not "waiting": the turn has started, so it must not look cancellable.
+		_ = client.AgentReportResult(ctx, req.ID, "running", "Waiting on approval: the "+req.Tool+" session is asking its owner to approve a step. The request continues once they answer.")
 	case !dialog && w.showing:
 		w.showing = false
 		_ = client.AgentReportResult(ctx, req.ID, "running", typedDeliveredMsg(req.Tool))
@@ -301,12 +306,20 @@ type unverifiedPaste struct {
 // stays active until the turn ends, the owner clears the input, or the request expires.
 func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, pane resolvedZellijPane, result <-chan string, aborted <-chan struct{}, waited time.Duration, u unverifiedPaste) {
 	rt.holding.Add(1)
-	_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: the text reached the Claude input but could not be confirmed yet. Share2Us presses Enter only if the input holds exactly this request.")
+	if u.allowEnter {
+		_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: the text reached the Claude input but could not be confirmed yet. Share2Us presses Enter only if the input holds exactly this request.")
+	} else {
+		// Enter may already have reached the window, so this may be running: never offer
+		// it as cancellable ("waiting" is).
+		_ = client.AgentReportResult(ctx, req.ID, "running", "Typed into the open "+req.Tool+" window; Share2Us could not confirm the Enter key, so it will not press it again.")
+	}
 	recheck, holdPoll := append([]time.Duration(nil), unverifiedRecheck...), injectHoldPoll
 	go func() {
 		defer rt.holding.Add(-1)
 		deadline := requestDeadline(req)
-		checks, unclean, entered, stuckReported := 0, 0, !u.allowEnter, false
+		// entered: Enter can no longer be pressed by us. pressed: WE pressed it here (a
+		// cleared input then means the turn ran, not that the owner discarded our text).
+		checks, unclean, entered, pressed, stuckReported := 0, 0, !u.allowEnter, false, false
 		approvals := approvalWatch{}
 		next := func() time.Duration {
 			if checks < len(recheck) {
@@ -354,7 +367,7 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 				if err == nil {
 					state := parseClaudeScreen(screen)
 					switch {
-					case !entered && u.visible != "" && pastedClaudeInput(screen, u.visible):
+					case !entered && u.visible != "" && ourInputExactly(screen, u.visible, checks <= len(recheck)):
 						// Exactly our text and nothing else: safe to submit, once.
 						if u.current != nil {
 							if cur, cerr := u.current(); cerr != nil || cur != pane {
@@ -362,13 +375,18 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 							}
 						}
 						entered = true
-						if rt.paneDriver().Enter(ctx, pane.Session, pane.Pane) == nil {
-							deps.logf("agent-bridge: typed inject %s submitted after re-check", req.ID)
-							_ = client.AgentReportResult(ctx, req.ID, "running", typedDeliveredMsg(req.Tool))
+						if isCancelledErr(client.AgentReportResult(ctx, req.ID, "running", typedDeliveredMsg(req.Tool))) {
+							rt.dropCancelledPaste(req, deps)
+							return
 						}
-					case !entered && !state.Busy && state.InputEmpty:
-						// The owner cleared the unsubmitted text. Release the guard and
-						// return to the ordinary wait/retry path.
+						if rt.paneDriver().Enter(ctx, pane.Session, pane.Pane) == nil {
+							pressed = true
+							deps.logf("agent-bridge: typed inject %s submitted after re-check", req.ID)
+						}
+					case !pressed && !state.Busy && state.InputEmpty:
+						// The owner cleared the unsubmitted text (or, after an uncertain
+						// Enter, nothing is pending). Release the guard and return to the
+						// ordinary wait/retry path.
 						rt.hub().withdraw(req.TargetSessionID, req.ID)
 						_ = EndTypedGuard(req.TargetSessionID, req.ID)
 						rt.holdInject(ctx, client, runner, deps, req, shown, prompt, senderName, cwd)
@@ -406,6 +424,39 @@ func (rt *Runtime) dropCancelledPaste(req clicore.AgentRequest, deps Deps) {
 	rt.notify("Share2Us", "A prompt in your "+req.Tool+" input was cancelled by its sender and was NOT submitted. You can clear it.")
 	_ = AppendHop(HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 		Target: req.TargetSessionID, Mode: "typed", Status: "cancelled"})
+}
+
+// foldedPasteLines reads Claude's "[Pasted text #N +L lines]" marker.
+var foldedPasteLines = regexp.MustCompile(`^\[Pasted text[^]]*\+(\d+) lines\]$`)
+
+// ourInputExactly: the Claude input holds exactly the text Share2Us typed. Claude may show
+// a long paste as a folded marker; that counts only early (right after our paste, before
+// the owner could plausibly replace it) and only when its line count is ours, because any
+// later paste by the owner folds into the same kind of marker.
+func ourInputExactly(screen, visible string, early bool) bool {
+	s := parseClaudeScreen(screen)
+	if !claudeUIReady(screen) || s.Busy || s.Dialog || s.Input == "" {
+		return false
+	}
+	if withoutWhitespace(s.Input) == withoutWhitespace(visible) {
+		return true
+	}
+	if !early {
+		return false
+	}
+	m := foldedPasteLines.FindStringSubmatch(strings.TrimSpace(s.Input))
+	if m == nil {
+		return false
+	}
+	n, err := strconv.Atoi(m[1])
+	lines := strings.Count(visible, "\n") + 1
+	return err == nil && (n == lines || n == lines-1)
+}
+
+// isCancelledErr: the server refused a report because the sender cancelled the request.
+func isCancelledErr(err error) bool {
+	var apiErr *clicore.APIError
+	return errors.As(err, &apiErr) && apiErr.Status == 409 && apiErr.Code == "cancelled"
 }
 
 func typedDeliveredMsg(tool string) string {

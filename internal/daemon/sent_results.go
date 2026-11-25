@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	clicore "github.com/share2us/cli-core"
 )
@@ -135,7 +136,7 @@ func (rt *Runtime) collectSentResults(ctx context.Context, uc agentUpdatesClient
 	}
 	recs := make([]SentResult, 0, len(updates))
 	for _, u := range updates {
-		recs = append(recs, SentResult{Time: time.Now().UTC(), RequestID: u.ID, Status: u.Status, Result: u.Result,
+		recs = append(recs, SentResult{Time: time.Now().UTC(), RequestID: u.ID, Status: u.Status, Result: CleanRemoteText(u.Result),
 			Tool: u.Tool, TargetSession: u.TargetSessionID, SenderSession: u.SenderSessionID})
 		rt.notify("Share2Us agent request "+u.Status, sentResultSummary(u))
 	}
@@ -150,7 +151,7 @@ func sentResultSummary(u clicore.AgentUpdate) string {
 	if len(id) > 8 {
 		id = id[:8]
 	}
-	first := strings.TrimSpace(strings.SplitN(strings.TrimSpace(u.Result), "\n", 2)[0])
+	first := strings.TrimSpace(strings.SplitN(strings.TrimSpace(CleanRemoteText(u.Result)), "\n", 2)[0])
 	if r := []rune(first); len(r) > 140 {
 		first = string(r[:140]) + "…"
 	}
@@ -158,4 +159,15 @@ func sentResultSummary(u clicore.AgentUpdate) string {
 		return "Request " + id + " is " + u.Status + "."
 	}
 	return "Request " + id + " (" + u.Status + "): " + first
+}
+
+// CleanRemoteText drops control characters (ANSI escapes included) from text another
+// device wrote, before it reaches a terminal or a desktop notification.
+func CleanRemoteText(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
+			return r
+		}
+		return -1
+	}, s)
 }

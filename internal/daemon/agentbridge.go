@@ -796,7 +796,10 @@ func (rt *Runtime) runInject(ctx context.Context, client AgentClient, runner Age
 	defer rt.hopMu.Unlock()
 	rt.notify("Share2Us", "Running a prompt in your "+req.Tool+" session")
 	deps.logf("agent-bridge: running inject %s in session %s (cwd %s)", req.ID, req.TargetSessionID, cwd)
-	_ = client.AgentReportResult(ctx, req.ID, "running", "Running headless in the "+req.Tool+" session (no window open).")
+	if isCancelledErr(client.AgentReportResult(ctx, req.ID, "running", "Running headless in the "+req.Tool+" session (no window open).")) {
+		deps.logf("agent-bridge: inject %s cancelled by its sender before it ran", req.ID)
+		return
+	}
 	var out string
 	var err error
 	rt.hopRunning.Store(true)

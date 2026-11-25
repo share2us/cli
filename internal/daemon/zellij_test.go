@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -17,6 +18,7 @@ type fakeZellij struct {
 	panes    map[string][]zellijPaneInfo
 	screens  []string
 	pasted   []string
+	mu       sync.Mutex
 	entered  int
 	onPaste  func()
 	newTabs  []string // tab names opened via NewTab
@@ -49,7 +51,18 @@ func (f *fakeZellij) Paste(_ context.Context, _, _, text string) error {
 	}
 	return nil
 }
-func (f *fakeZellij) Enter(context.Context, string, string) error { f.entered++; return nil }
+func (f *fakeZellij) Enter(context.Context, string, string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.entered++
+	return nil
+}
+
+func (f *fakeZellij) enters() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.entered
+}
 func (f *fakeZellij) NewTab(_ context.Context, _, name string) error {
 	f.newTabs = append(f.newTabs, name)
 	return nil

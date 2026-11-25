@@ -50,8 +50,9 @@ func TestUnconfirmedPasteIsSubmittedWhenTheInputIsExactlyOurs(t *testing.T) {
 	runtime.handleInject(ctx, c, typedRunner(dir), keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-recheck", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "remote text"}))
 	waitForReport(t, c, "running", "Delivered")
-	if z.entered != 1 || len(z.pasted) != 1 {
-		t.Fatalf("enter=%d paste=%d, want one Enter after the re-check and no second paste", z.entered, len(z.pasted))
+	waitFor(t, func() bool { return z.enters() == 1 })
+	if len(z.pasted) != 1 {
+		t.Fatalf("paste=%d, want no second paste", len(z.pasted))
 	}
 }
 
@@ -73,11 +74,49 @@ func TestForeignInputIsNeverSubmittedAndReportsStuck(t *testing.T) {
 	runtime.handleInject(ctx, c, typedRunner(dir), keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-stuck", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "remote text"}))
 	waitForReport(t, c, "waiting", "Stuck: input not clean")
-	if z.entered != 0 {
-		t.Fatalf("pressed Enter on someone else's text (%d)", z.entered)
+	if z.enters() != 0 {
+		t.Fatalf("pressed Enter on someone else's text (%d)", z.enters())
 	}
 	if active, _ := runtime.hub().guarded("win-1"); !active {
 		t.Fatal("guard dropped while remote text may still be in the input")
+	}
+}
+
+func waitFor(t *testing.T, ok func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !ok() {
+		if time.Now().After(deadline) {
+			t.Fatal("condition not met in time")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// A folded paste marker proves nothing once the owner could have pasted their own text:
+// it counts only during the first re-checks, and only with our line count.
+func TestOurInputExactly(t *testing.T) {
+	visible := "line one\nline two\nline three"
+	tests := []struct {
+		name  string
+		input string
+		early bool
+		want  bool
+	}{
+		{"exact text", "line one line two line three", false, true},
+		{"marker early, our count", "[Pasted text #1 +3 lines]", true, true},
+		{"marker early, count minus one", "[Pasted text +2 lines]", true, true},
+		{"marker late", "[Pasted text +3 lines]", false, false},
+		{"marker with other count", "[Pasted text +9 lines]", true, false},
+		{"marker plus owner text", "hi [Pasted text +3 lines]", true, false},
+		{"owner text", "something else", true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ourInputExactly(claudeFixture("│ ❯ "+tt.input+" │"), visible, tt.early); got != tt.want {
+				t.Fatalf("got %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"encoding/json"
+	clicore "github.com/share2us/cli-core"
 	"strings"
 	"sync"
 	"time"
@@ -277,7 +278,7 @@ func (h *channelHub) turnEndedForCaller(session, requestID string, verifyTyped b
 			continue // an unrelated owner turn is not this request's report
 		}
 		if !reported && id == requestID && reply != "" {
-			out = reply
+			out = replyForSender(reply)
 		}
 		if r, ok := h.result[id]; ok {
 			r <- out
@@ -390,4 +391,14 @@ func (h *channelHub) channelControl(req daemonctl.Request, callerSessionPID func
 		return daemonctl.Response{OK: active, Data: b}, true
 	}
 	return daemonctl.Response{}, false
+}
+
+// replyForSender keeps a transcript reply from carrying a secret off this device: the
+// agent never chose to send it (unlike a channel report), so a hit withholds it whole.
+func replyForSender(reply string) string {
+	res, err := clicore.ScanBytesForSecrets([]byte(reply), clicore.SecretScanOptions{})
+	if err != nil || len(res.Findings) > 0 {
+		return "The session finished, but its reply was withheld because it looks like it contains a secret. Ask its owner for the result."
+	}
+	return reply
 }

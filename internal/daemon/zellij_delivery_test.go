@@ -66,8 +66,8 @@ func TestLiveS2UClaudeHopIsTypedAndReported(t *testing.T) {
 	if len(z.pasted) != 1 || !strings.Contains(z.pasted[0], `[Share2Us] from device "jarvis" (`+bridgeSender.id+`), request req-typed:`) || !strings.Contains(z.pasted[0], "inspect the file") {
 		t.Fatalf("pasted = %q", z.pasted)
 	}
-	if z.entered != 1 || r.ran != 0 {
-		t.Fatalf("Enter=%d headless runs=%d", z.entered, r.ran)
+	if z.enters() != 1 || r.ran != 0 {
+		t.Fatalf("Enter=%d headless runs=%d", z.enters(), r.ran)
 	}
 	if len(notice.msgs) != 1 || !strings.Contains(notice.msgs[0], "1/3 typed deliveries this hour") {
 		t.Fatalf("desktop typed-delivery count notice = %v", notice.msgs)
@@ -153,8 +153,8 @@ func TestPlainClaudeIsNeverTypedInto(t *testing.T) {
 	runtime.handleInject(ctx, &fakeAgentClient{}, r, keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-plain", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "do it"}))
 	cancel()
-	if len(z.pasted) != 0 || z.entered != 0 {
-		t.Fatalf("plain Claude received paste=%q enter=%d", z.pasted, z.entered)
+	if len(z.pasted) != 0 || z.enters() != 0 {
+		t.Fatalf("plain Claude received paste=%q enter=%d", z.pasted, z.enters())
 	}
 }
 
@@ -169,8 +169,8 @@ func TestOldWrapperWithoutPromptSubmitHookTypesNothing(t *testing.T) {
 	defer cancel()
 	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-old-wrapper", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
-	if len(z.pasted) != 0 || z.entered != 0 {
-		t.Fatalf("old wrapper received paste=%q enter=%d", z.pasted, z.entered)
+	if len(z.pasted) != 0 || z.enters() != 0 {
+		t.Fatalf("old wrapper received paste=%q enter=%d", z.pasted, z.enters())
 	}
 }
 
@@ -182,8 +182,8 @@ func TestZellijFallbackUsesHookPaneWhenServiceCannotReadProcessEnvironment(t *te
 	defer cancel()
 	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-hook-pane", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
-	if len(z.pasted) != 1 || z.entered != 1 {
-		t.Fatalf("hook-proven pane: paste=%q enter=%d", z.pasted, z.entered)
+	if len(z.pasted) != 1 || z.enters() != 1 {
+		t.Fatalf("hook-proven pane: paste=%q enter=%d", z.pasted, z.enters())
 	}
 }
 
@@ -198,8 +198,8 @@ func TestZellijFallbackRejectsWrongHookPaneWhenServiceCannotReadProcessEnvironme
 	defer cancel()
 	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-wrong-hook-pane", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
-	if len(z.pasted) != 0 || z.entered != 0 {
-		t.Fatalf("wrong hook pane received paste=%q enter=%d", z.pasted, z.entered)
+	if len(z.pasted) != 0 || z.enters() != 0 {
+		t.Fatalf("wrong hook pane received paste=%q enter=%d", z.pasted, z.enters())
 	}
 }
 
@@ -211,8 +211,8 @@ func TestTerminalControlTextNeverReachesZellij(t *testing.T) {
 		runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
 			signedReq(t, clicore.AgentRequest{ID: "req-controls", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: prompt}))
 		cancel()
-		if len(z.pasted) != 0 || z.entered != 0 {
-			t.Fatalf("control-bearing prompt reached Zellij: paste=%q enter=%d", z.pasted, z.entered)
+		if len(z.pasted) != 0 || z.enters() != 0 {
+			t.Fatalf("control-bearing prompt reached Zellij: paste=%q enter=%d", z.pasted, z.enters())
 		}
 	}
 	clean, ok := safeTerminalText("a\rb\a\n\tc")
@@ -229,8 +229,8 @@ func TestClaudeExitAfterPasteNeverPressesEnter(t *testing.T) {
 	runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-exit", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "safe text"}))
 	cancel()
-	if len(z.pasted) != 1 || z.entered != 0 {
-		t.Fatalf("Claude exit race: paste=%q enter=%d", z.pasted, z.entered)
+	if len(z.pasted) != 1 || z.enters() != 0 {
+		t.Fatalf("Claude exit race: paste=%q enter=%d", z.pasted, z.enters())
 	}
 }
 
@@ -241,8 +241,8 @@ func TestOwnerInputRaceNeverPressesEnterAndKeepsGuard(t *testing.T) {
 	c := &fakeAgentClient{}
 	runtime.handleInject(ctx, c, typedRunner(dir), keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-race", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "remote text"}))
-	if len(z.pasted) != 1 || z.entered != 0 {
-		t.Fatalf("paste=%q enter=%d", z.pasted, z.entered)
+	if len(z.pasted) != 1 || z.enters() != 0 {
+		t.Fatalf("paste=%q enter=%d", z.pasted, z.enters())
 	}
 	if active, _ := runtime.hub().guarded("win-1"); !active {
 		t.Fatal("guard was dropped while remote text remained in the input")
@@ -282,8 +282,8 @@ func TestUnsafeOrWrongPaneTypesNothing(t *testing.T) {
 			runtime.handleInject(ctx, &fakeAgentClient{}, typedRunner(dir), keyedDeps(),
 				signedReq(t, clicore.AgentRequest{ID: "req-safe", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "do it"}))
 			cancel()
-			if len(z.pasted) != 0 || z.entered != 0 {
-				t.Fatalf("unsafe pane received paste=%q enter=%d", z.pasted, z.entered)
+			if len(z.pasted) != 0 || z.enters() != 0 {
+				t.Fatalf("unsafe pane received paste=%q enter=%d", z.pasted, z.enters())
 			}
 		})
 	}

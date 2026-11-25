@@ -894,7 +894,7 @@ func (a app) agentStatus(ctx context.Context, args []string) int {
 	}
 	fmt.Fprintf(a.stdout, "status: %s\n", st.Status)
 	if strings.TrimSpace(st.Result) != "" {
-		fmt.Fprintf(a.stdout, "%s\n", st.Result)
+		fmt.Fprintf(a.stdout, "%s\n", daemon.CleanRemoteText(st.Result))
 	}
 	return 0
 }
@@ -1076,7 +1076,7 @@ func (a app) agentResults(args []string) int {
 	}
 	for _, r := range results {
 		fmt.Fprintf(a.stdout, "%s  %-9s  %s  -> %s %s\n", r.Time.Local().Format("2006-01-02 15:04"), r.Status, r.RequestID, r.Tool, shorten(r.TargetSession))
-		if res := strings.TrimSpace(r.Result); res != "" {
+		if res := strings.TrimSpace(daemon.CleanRemoteText(r.Result)); res != "" {
 			for _, line := range strings.Split(res, "\n") {
 				fmt.Fprintf(a.stdout, "    %s\n", line)
 			}
