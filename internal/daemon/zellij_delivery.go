@@ -80,7 +80,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	if name := strings.TrimSpace(senderName); name != "" {
 		sender = fmt.Sprintf("%q (%s)", name, req.SenderDeviceID)
 	}
-	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s", sender, req.ID, prompt)
+	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s\n\n%s", sender, req.ID, prompt, typedReplyNote)
 	if visible, safe = safeTerminalText(visible); !safe {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
 		_ = EndTypedGuard(req.TargetSessionID, req.ID)
@@ -425,6 +425,11 @@ func (rt *Runtime) dropCancelledPaste(req clicore.AgentRequest, deps Deps) {
 	_ = AppendHop(HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 		Target: req.TargetSessionID, Mode: "typed", Status: "cancelled"})
 }
+
+// typedReplyNote closes a typed prompt. Without it the agent saw a bare message, decided
+// it had no way to answer the sender, and told its owner to relay the result by hand
+// (bug report 2026-11-26), although the Stop hook returns its last reply.
+const typedReplyNote = "(Share2Us: your final reply in this turn is sent back to the sender automatically. Just answer here; there is nothing to report or relay. If the share2us report tool is available, you may use it with this request id instead.)"
 
 // foldedPasteLines reads Claude's "[Pasted text #N +L lines]" marker.
 var foldedPasteLines = regexp.MustCompile(`^\[Pasted text[^]]*\+(\d+) lines\]$`)

@@ -1282,6 +1282,7 @@ func (a app) update(ctx context.Context, args []string) int {
 	}
 	fmt.Fprintf(a.stdout, "Updated %s to %s at %s\n", commandName, updateInfo.LatestVersion, target)
 	a.restartDaemonAfterUpdate(updateInfo.LatestVersion)
+	runAfterUpdate(a, target)
 	return 0
 }
 
