@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261125102102] - 2026-11-25
+
 ### Added
 
 - **Secure ShareNets (end-to-end encrypted)** (ADR-051). Posting with `--sharenet` /
