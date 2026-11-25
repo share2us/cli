@@ -23,9 +23,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 - `s2u agent approve <id>` on the wrong device explains that the request is waiting on
   another device, instead of a bare not_found.
 - `s2u agent status` retries a server error (5xx) briefly instead of failing at once.
-- A typed turn that stops on Claude's approval dialog reports `waiting` (the target is
+- A typed turn that stops on Claude's approval dialog says so in its status (the target is
   asking its owner to approve a step), and its result says approvals were involved, instead
   of a plain `done`.
+- A cancel and the start of a typed request can no longer both win: the daemon claims the
+  request as running before pressing Enter and stops if the sender cancelled first.
+- A reply taken from the session transcript is withheld if it looks like it holds a secret,
+  and results from other devices are shown without terminal control characters.
 
 ### Added
 
