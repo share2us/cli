@@ -12,6 +12,21 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Prompts reach the Claude window you're looking at.** After `/clear` (or a new `claude`
+  in the same zellij pane) the window has a new session id; the agent now follows it, in the
+  same pane and project only, instead of running the prompt headless against the old session
+  in the background.
+- A held prompt now says exactly why it isn't typed in: the window wasn't started with
+  `s2u claude` (with the command to fix it), typing is paused, or the session is busy.
+
+### Changed
+
+- `/s2u` adds `login`, `whoami`, `update`, `daemon`, `shares`, `receive`, `bind`, `join`
+  and `help`, and tells agents to use the agent path (`send`, with `--file`) for anything
+  meant for another agent; `s2u <file> --device` is only for plain file transfers.
+
 ## [20261125201646] - 2026-11-25
 
 ### Added
