@@ -183,6 +183,8 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 		return a.config(args[1:])
 	case "whoami":
 		return a.whoami(ctx)
+	case "status":
+		return a.status(ctx, args[1:])
 	case "logout":
 		return a.logout(ctx)
 	case "signout":

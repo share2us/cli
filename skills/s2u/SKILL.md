@@ -31,7 +31,7 @@ matching row. With no command, or `help`, print this table and the output of
 | `receive` | Files sent to this device: `s2u receive`. |
 | `devices` | The owner's devices and whether they can receive: `s2u devices`. |
 | **Account and setup** | |
-| `login` | The user signs in in a browser: tell them to type `! s2u login` (you can't complete it for them). `whoami`: `s2u whoami`. `logout`: only when the user asked. |
+| `login` | The user signs in in a browser: tell them to type `! s2u login` (you can't complete it for them). `status`: `s2u status` (who is signed in, this device, token use, daemon, skills). `logout`: only when the user asked. |
 | `update` | `s2u update` (also refreshes these skills). |
 | `daemon` | Background service: `s2u daemon status`; `s2u daemon restart` after an update. |
 | `setup` | Install or refresh this skill for every agent tool here: `s2u agent skill install`; `s2u agent skill status` shows what is installed. |
