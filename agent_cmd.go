@@ -861,7 +861,19 @@ func (a app) agentStatus(ctx context.Context, args []string) int {
 	if !ok {
 		return 1
 	}
-	st, err := client.AgentInjectStatus(ctx, args[0])
+	// A 5xx from the API (or its proxy) is a hiccup, not a request state: retry briefly,
+	// then report it on stderr with a non-zero exit. stdout only ever holds states.
+	var st clicore.AgentInjectState
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if st, err = client.AgentInjectStatus(ctx, args[0]); err == nil || !isServerError(err) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+		case <-time.After(time.Duration(attempt+1) * time.Second):
+		}
+	}
 	if err != nil {
 		return a.fail("status", err)
 	}
@@ -936,6 +948,15 @@ func (a app) agentApprove(ctx context.Context, args []string) int {
 		return 1
 	}
 	if err := client.AgentApproveOnce(ctx, args[0]); err != nil {
+		var apiErr *clicore.APIError
+		if errors.As(err, &apiErr) && apiErr.Status == 404 {
+			// Approval happens on the device the request was sent to. Say so instead of a
+			// bare not_found when it exists but is waiting somewhere else.
+			if st, serr := client.AgentInjectStatus(ctx, args[0]); serr == nil && st.Status != "" {
+				fmt.Fprintf(a.stderr, "approve: request %s is %s, but not waiting for approval on this device. Approve it on the device it was sent to (run `%s agent pending` there).\n", args[0], st.Status, commandName)
+				return 1
+			}
+		}
 		return a.fail("approve", err)
 	}
 	fmt.Fprintln(a.stdout, "Approved this request only. The sender was NOT given standing access.")
@@ -978,4 +999,9 @@ func (a app) agentAllowed(ctx context.Context) int {
 			g.SenderDeviceID, g.ApprovedAt, commandName, g.SenderDeviceID)
 	}
 	return 0
+}
+
+func isServerError(err error) bool {
+	var apiErr *clicore.APIError
+	return errors.As(err, &apiErr) && apiErr.Status >= 500
 }

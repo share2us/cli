@@ -12,6 +12,18 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Agent prompts typed into a Claude window no longer get stuck on "input changed".** When
+  the pasted request can't be confirmed at once, the daemon re-reads the input (after 1, 2,
+  4 and 8 seconds) and presses Enter once if the input holds exactly that request. It never
+  submits other text; after a few checks the sender sees `Stuck: input not clean`.
+- A typed request that ends without a channel report now returns the agent's last reply
+  from the session transcript, instead of "finished without a report".
+- `s2u agent approve <id>` on the wrong device explains that the request is waiting on
+  another device, instead of a bare not_found.
+- `s2u agent status` retries a server error (5xx) briefly instead of failing at once.
+
 ## [20261125130957] - 2026-11-25
 
 ### Fixed

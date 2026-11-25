@@ -93,7 +93,10 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		// Something changed after the empty-input check. Never press Enter and
 		// keep the guard active: the pasted remote text may still be submitted
 		// manually, and it must not run with the window's unrestricted policy.
-		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, aborted, waited)
+		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, aborted, waited,
+			unverifiedPaste{visible: visible, allowEnter: true, current: func() (resolvedZellijPane, error) {
+				return resolveZellijPaneWith(ctx, z, binding, session, processPane)
+			}})
 		return true
 	}
 	// The owner may exit Claude between the initial pane check and Enter. A
@@ -101,14 +104,18 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	// pane identity immediately before sending the key.
 	current, err := resolveZellijPaneWith(ctx, z, binding, session, processPane)
 	if err != nil || current != pane {
-		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, aborted, waited)
+		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, aborted, waited,
+			unverifiedPaste{visible: visible, allowEnter: true, current: func() (resolvedZellijPane, error) {
+				return resolveZellijPaneWith(ctx, z, binding, session, processPane)
+			}})
 		return true
 	}
 	if err := z.Enter(ctx, pane.Session, pane.Pane); err != nil {
 		// send-keys may have reached zellij even when its client reports an
 		// error. Retrying could run the same hop twice, so enter the same guarded
-		// uncertain state and never paste this request again.
-		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, aborted, waited)
+		// uncertain state and never paste this request again (nor press Enter again).
+		rt.watchUnverifiedPaste(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, pane, result, aborted, waited,
+			unverifiedPaste{visible: visible})
 		return true
 	}
 	rt.finishTypedInject(ctx, client, deps, req, shown, result, aborted, waited)
@@ -196,7 +203,7 @@ func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, de
 		hop.Status = "done"
 		_ = AppendHop(hop)
 		if strings.TrimSpace(out) == "" {
-			out = "The agent finished its turn without a report. Its work is in the session."
+			out = noReportResult
 		}
 		if len(out) > maxReportedResult {
 			out = out[:maxReportedResult]
@@ -206,18 +213,53 @@ func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, de
 	}()
 }
 
-// watchUnverifiedPaste owns a hop after Paste succeeded but safe submission
-// could not be proved. It never presses Enter and never pastes again. The hook
-// remains active until the owner clears the input, submits it, or the request
-// expires.
-func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, pane resolvedZellijPane, result <-chan string, aborted <-chan struct{}, waited time.Duration) {
+// noReportResult is the result of a turn that ended without a channel report and without
+// a final agent message in the transcript (it should be rare: the Stop hook passes the
+// last reply along).
+const noReportResult = "Done, but no report: the agent ended its turn without a reply. Its work is in the session."
+
+// unverifiedRecheck is how soon the input is re-read after an unconfirmed paste (Claude
+// can take a moment to fold a long paste into its [Pasted text] marker), before falling
+// back to the ordinary hold poll.
+var unverifiedRecheck = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second}
+
+// stuckAfterChecks: re-reads that found someone else's text in the input before the
+// sender is told the delivery is stuck.
+const stuckAfterChecks = 4
+
+// unverifiedPaste is what watchUnverifiedPaste needs to finish a delivery safely.
+type unverifiedPaste struct {
+	// visible is the exact text Share2Us typed.
+	visible string
+	// allowEnter is false once an Enter may already have reached the pane (send-keys
+	// reported an error): pressing again could run the request twice.
+	allowEnter bool
+	// current re-resolves the pane right before Enter (the owner may have quit Claude).
+	current func() (resolvedZellijPane, error)
+}
+
+// watchUnverifiedPaste owns a hop after Paste succeeded but safe submission could not be
+// proved yet. It never pastes again and never submits anyone else's text. It re-reads the
+// input with a short backoff and presses Enter once, only when the input holds exactly
+// the text Share2Us typed and the pane is still the same Claude. Text that differs is
+// left alone; after a few checks the sender is told the delivery is stuck. The guard
+// stays active until the turn ends, the owner clears the input, or the request expires.
+func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, pane resolvedZellijPane, result <-chan string, aborted <-chan struct{}, waited time.Duration, u unverifiedPaste) {
 	rt.holding.Add(1)
-	_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: text reached the Claude input, but Share2Us did not press Enter because the input changed. Review or clear it in that window.")
+	_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: the text reached the Claude input but could not be confirmed yet. Share2Us presses Enter only if the input holds exactly this request.")
+	recheck, holdPoll := append([]time.Duration(nil), unverifiedRecheck...), injectHoldPoll
 	go func() {
 		defer rt.holding.Add(-1)
-		ticker := time.NewTicker(injectHoldPoll)
-		defer ticker.Stop()
 		deadline := requestDeadline(req)
+		checks, unclean, entered, stuckReported := 0, 0, !u.allowEnter, false
+		next := func() time.Duration {
+			if checks < len(recheck) {
+				return recheck[checks]
+			}
+			return holdPoll
+		}
+		timer := time.NewTimer(next())
+		defer timer.Stop()
 		for {
 			select {
 			case <-aborted:
@@ -226,7 +268,7 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 				_ = client.AgentReportResult(ctx, req.ID, "failed", "The typed turn was interrupted by a later owner turn.")
 				return
 			case out := <-result:
-				// The owner submitted it and the guarded turn ended.
+				// The turn ended (submitted by Share2Us below, or by the owner).
 				hop := HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 					Target: req.TargetSessionID, RanIn: req.TargetSessionID, Mode: "typed", Status: "done", Prompt: shown}
 				if waited > 0 {
@@ -234,31 +276,55 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 				}
 				_ = AppendHop(hop)
 				if strings.TrimSpace(out) == "" {
-					out = "The guarded agent turn finished in the session."
+					out = noReportResult
+				}
+				if len(out) > maxReportedResult {
+					out = out[:maxReportedResult]
 				}
 				_ = client.AgentReportResult(ctx, req.ID, "done", out)
 				_ = EndTypedGuard(req.TargetSessionID, req.ID)
 				return
-			case <-ticker.C:
+			case <-timer.C:
+				checks++
 				screen, err := rt.paneDriver().Dump(ctx, pane.Session, pane.Pane)
 				if err == nil {
 					state := parseClaudeScreen(screen)
-					if !state.Busy && state.InputEmpty {
-						// The owner cleared the unsubmitted text. Release the guard
-						// and return to the ordinary wait/retry path.
+					switch {
+					case !entered && u.visible != "" && pastedClaudeInput(screen, u.visible):
+						// Exactly our text and nothing else: safe to submit, once.
+						if u.current != nil {
+							if cur, cerr := u.current(); cerr != nil || cur != pane {
+								break // a different process or pane now: never press Enter there
+							}
+						}
+						entered = true
+						if rt.paneDriver().Enter(ctx, pane.Session, pane.Pane) == nil {
+							deps.logf("agent-bridge: typed inject %s submitted after re-check", req.ID)
+							_ = client.AgentReportResult(ctx, req.ID, "running", "Delivered into the open "+req.Tool+" session.")
+						}
+					case !entered && !state.Busy && state.InputEmpty:
+						// The owner cleared the unsubmitted text. Release the guard and
+						// return to the ordinary wait/retry path.
 						rt.hub().withdraw(req.TargetSessionID, req.ID)
 						_ = EndTypedGuard(req.TargetSessionID, req.ID)
 						rt.holdInject(ctx, client, runner, deps, req, shown, prompt, senderName, cwd)
 						return
+					case !entered && !state.Busy && !state.InputEmpty:
+						unclean++
+						if unclean >= stuckAfterChecks && !stuckReported {
+							stuckReported = true
+							_ = client.AgentReportResult(ctx, req.ID, "waiting", "Stuck: input not clean. The Claude input holds other text, so Share2Us will not submit it. Clear it or submit it in that window.")
+						}
 					}
 				}
 				if time.Now().After(deadline) {
 					rt.hub().withdraw(req.TargetSessionID, req.ID)
 					_ = AppendHop(HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 						Target: req.TargetSessionID, Mode: "expired", Status: "failed", Prompt: shown})
-					_ = client.AgentReportResult(ctx, req.ID, "failed", "The changed Claude input was not submitted or cleared within "+injectHoldMax.String()+".")
+					_ = client.AgentReportResult(ctx, req.ID, "failed", "The Claude input was not submitted or cleared within "+injectHoldMax.String()+".")
 					return
 				}
+				timer.Reset(next())
 			case <-ctx.Done():
 				return
 			}

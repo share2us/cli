@@ -363,3 +363,77 @@ func TranscriptToolIsLaterOwnerTurn(path, request, toolUseID string) bool {
 	}
 	return false
 }
+
+// TranscriptLastReply returns the agent's last text reply after the delivered request's
+// prompt, so a typed turn that ended without a channel report still sends the sender
+// the agent's answer. Empty when the request's prompt or a reply after it isn't found.
+func TranscriptLastReply(path, request string) string {
+	if path == "" || request == "" {
+		return ""
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	marker := ", request " + request + ":"
+	seen, reply := false, ""
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 8<<20)
+	for scanner.Scan() {
+		var entry struct {
+			Type    string `json:"type"`
+			IsMeta  bool   `json:"isMeta"`
+			Message struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &entry) != nil || entry.IsMeta {
+			continue
+		}
+		text := transcriptText(entry.Message.Content)
+		switch {
+		case entry.Type == "user" && entry.Message.Role == "user":
+			if strings.Contains(text, "[Share2Us] from device ") && strings.Contains(text, marker) {
+				seen, reply = true, "" // the delivered prompt: replies start after it
+			} else if seen && strings.TrimSpace(text) != "" && !strings.Contains(string(entry.Message.Content), `"tool_result"`) {
+				return capReply(reply) // a later human prompt: the delivered turn is over
+			}
+		case seen && entry.Type == "assistant" && strings.TrimSpace(text) != "":
+			reply = strings.TrimSpace(text)
+		}
+	}
+	return capReply(reply)
+}
+
+// capReply keeps a transcript reply within what a result may carry.
+func capReply(s string) string {
+	if len(s) > maxReportedResult {
+		return s[:maxReportedResult]
+	}
+	return s
+}
+
+// transcriptText joins the text blocks of a transcript message (a plain string or an
+// array of content blocks; tool calls and results are skipped).
+func transcriptText(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if json.Unmarshal(raw, &blocks) != nil {
+		return ""
+	}
+	var parts []string
+	for _, b := range blocks {
+		if b.Type == "text" && b.Text != "" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "\n")
+}
