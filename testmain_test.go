@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/share2us/cli-core/daemonctl"
 )
@@ -20,6 +21,7 @@ func TestMain(m *testing.M) {
 	serviceRestart = func() error { panic("a test tried to restart the real service") }
 	startDetached = func(string) error { panic("a test tried to start a real daemon") }
 	runAfterUpdate = func(app, string) {}
+	stopReplyWait = time.Millisecond
 	// Windows config/cache dirs ignore XDG_*; macOS uses HOME/Library rather
 	// than XDG_*. Isolate both so tests cannot read or write a real profile.
 	var scratch string

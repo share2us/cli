@@ -28,7 +28,42 @@ type agentUpdatesClient interface {
 	AgentUpdates(ctx context.Context) ([]clicore.AgentUpdate, error)
 }
 
-var sentResultsPoll = 10 * time.Second
+// Results are checked every sentResultsFastPoll for sentResultsFastFor after this device
+// sends (the CLI says so over the control socket), and rarely otherwise.
+var (
+	sentResultsPoll     = 15 * time.Second
+	sentResultsFastPoll = 2 * time.Second
+	sentResultsFastFor  = 15 * time.Minute
+)
+
+// SentRequest: a request was just sent from this device; watch for its result closely.
+func (rt *Runtime) SentRequest() {
+	rt.sentMu.Lock()
+	rt.sentFastUntil = time.Now().Add(sentResultsFastFor)
+	if rt.sentWake == nil {
+		rt.sentWake = make(chan struct{}, 1)
+	}
+	rt.sentMu.Unlock()
+	select {
+	case rt.sentWake <- struct{}{}:
+	default:
+	}
+}
+
+func (rt *Runtime) fastResultsUntil() time.Time {
+	rt.sentMu.Lock()
+	defer rt.sentMu.Unlock()
+	return rt.sentFastUntil
+}
+
+func (rt *Runtime) sentNudge() <-chan struct{} {
+	rt.sentMu.Lock()
+	defer rt.sentMu.Unlock()
+	if rt.sentWake == nil {
+		rt.sentWake = make(chan struct{}, 1)
+	}
+	return rt.sentWake
+}
 
 const sentResultsKeep = 200
 
@@ -119,12 +154,16 @@ func (rt *Runtime) watchSentResults(ctx context.Context, client AgentClient, dep
 	if !ok {
 		return
 	}
-	poll := sentResultsPoll
 	for {
 		rt.collectSentResults(ctx, uc, deps)
+		poll := sentResultsPoll
+		if time.Now().Before(rt.fastResultsUntil()) {
+			poll = sentResultsFastPoll
+		}
 		select {
 		case <-ctx.Done():
 			return
+		case <-rt.sentNudge():
 		case <-time.After(poll):
 		}
 	}

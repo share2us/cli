@@ -106,6 +106,11 @@ type Deps struct {
 // Runtime holds run state (start time, what it owns, the stop hook) so the
 // control server can answer status/owns-receiver and honour a stop request.
 type Runtime struct {
+	// sentMu guards the fast result-polling window after this device sends.
+	sentMu        sync.Mutex
+	sentFastUntil time.Time
+	sentWake      chan struct{}
+
 	notifier Notifier
 	// refusals collapses repeated "declined" notifications per peer (§AJ #31).
 	refusals  refusalNotices
@@ -255,6 +260,9 @@ func (rt *Runtime) control() func(daemonctl.Request) daemonctl.Response {
 		}
 		switch req.Op {
 		case "ping":
+			return daemonctl.Response{OK: true}
+		case "agent-sent":
+			rt.SentRequest()
 			return daemonctl.Response{OK: true}
 		case "status":
 			return daemonctl.Response{

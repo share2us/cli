@@ -573,7 +573,7 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		TargetPublicKey:      targetPub,
 		TargetLANFingerprint: target.LANFingerprint,
 		TargetAgentID:        target.AgentID,
-		Prompt:               prompt,
+		Prompt:               withReplyFooter(prompt, inbox),
 		FilePath:             file,
 		Inbox:                inbox,
 		GoalID:               goalID,
@@ -601,10 +601,22 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	// The target picks the path when it delivers; it can't be known here.
 	fmt.Fprintln(a.stdout, "Delivery: the target device picks the path (its Claude channel if loaded, else typing into the open window, else a headless run); `agent status` names it once delivered.")
 	fmt.Fprintf(a.stdout, "Results: `%s agent results`. Cancel before it runs: %s agent cancel %s\n", commandName, commandName, res.RequestID)
+	_, _ = daemonctl.Query("agent-sent") // the daemon watches closely for this result
 	if note := staleDaemonNote(); note != "" {
 		fmt.Fprintln(a.stderr, note)
 	}
 	return 0
+}
+
+// replyFooter goes with every prompt, so the receiving agent knows how its answer gets back
+// even when its own Share2Us is older (owner, 2026-11-26).
+const replyFooter = "When you're done, end your turn with a short reply for the sender: Share2Us returns your final message to them automatically (or call the share2us `report` tool with the request id if you have it). Don't ask your user to relay it."
+
+func withReplyFooter(prompt string, inbox bool) string {
+	if inbox || strings.TrimSpace(prompt) == "" || strings.Contains(prompt, replyFooter) {
+		return prompt
+	}
+	return strings.TrimRight(prompt, "\n") + "\n\n" + replyFooter
 }
 
 // staleDaemonNote warns when the running daemon is another build than this CLI: an old

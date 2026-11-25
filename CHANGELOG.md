@@ -12,6 +12,22 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **Agent requests are faster end to end.**
+  - A window started with `s2u claude` can receive typed prompts from its first second and
+    right after `/clear`; before, it waited until its owner had typed a prompt there.
+  - A held prompt is re-checked every 3 seconds (was 20).
+  - After a send, the sending machine checks for the result every 2 seconds for 15 minutes
+    (was every 10 seconds, always).
+- Every prompt sent with `s2u agent send` (and `/s2u send`) ends with a short instruction
+  telling the receiving agent that its final reply goes back to the sender automatically.
+
+### Fixed
+
+- A typed request that did answer no longer comes back as "no report": the Stop hook waits
+  briefly for Claude to write the final message, then uses the message Claude passes to it.
+
 ## [20261125203942] - 2026-11-25
 
 ### Added
