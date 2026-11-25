@@ -141,8 +141,9 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 				ownDevices.refresh(c, client)
 			}
 		},
-		CheckUpdate: a.daemonUpdateCheck,
-		Cleanup:     func(c context.Context) error { return cleanupStaging(destDir) },
+		CheckUpdate:    a.daemonUpdateCheck,
+		Cleanup:        func(c context.Context) error { return cleanupStaging(destDir) },
+		SyncSecureKeys: a.daemonSyncSecureKeys,
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(logw, format+"\n", args...)
 		},
