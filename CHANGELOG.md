@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261125201646] - 2026-11-25
+
 ### Added
 
 - **`/s2u` takes commands**: `list`, `send <agent> <task>`, `ask <agent> <question>`,
