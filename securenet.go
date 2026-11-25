@@ -21,6 +21,11 @@ import (
 
 // secureSession is what every Secure ShareNet operation needs on this device.
 func (a app) secureSession(ctx context.Context) (*clicore.SecureNet, clicore.Credential, error) {
+	return a.secureSessionMode(ctx, false)
+}
+
+// secureSessionMode: unattended (the daemon) never accepts a key on first sight.
+func (a app) secureSessionMode(ctx context.Context, unattended bool) (*clicore.SecureNet, clicore.Credential, error) {
 	client, credential, ok := a.authClient()
 	if !ok {
 		return nil, credential, fmt.Errorf("not logged in; run `%s login`", commandName)
@@ -48,7 +53,7 @@ func (a app) secureSession(ctx context.Context) (*clicore.SecureNet, clicore.Cre
 	if err != nil {
 		return nil, credential, err
 	}
-	return &clicore.SecureNet{Keys: kr, Pins: pins}, credential, nil
+	return &clicore.SecureNet{Keys: kr, Pins: pins, Unattended: unattended}, credential, nil
 }
 
 func deviceLabel() string {
@@ -106,7 +111,7 @@ func (a app) keysUsage(code int) int {
 	fmt.Fprintln(w, "  s2u keys approve <device-id>  give another of your devices the key (compare the id first)")
 	fmt.Fprintln(w, "  s2u keys remove <device-id>   stop giving a device new keys")
 	fmt.Fprintln(w, "  s2u keys members <sharenet>   members' key fingerprints and whether this device trusts them")
-	fmt.Fprintln(w, "  s2u keys trust <account-id>   accept a member's new key after comparing fingerprints")
+	fmt.Fprintln(w, "  s2u keys trust <account-id> <fingerprint>  accept a member's new key after comparing it")
 	fmt.Fprintln(w, "  s2u keys sync                 hand the key to waiting members and rotate where due")
 	fmt.Fprintln(w, "  s2u keys restart <sharenet>   start a fresh key when nobody left holds the old one (owner/manager)")
 	return code
@@ -128,7 +133,7 @@ func (a app) keysStatus(ctx context.Context) int {
 	}
 	fmt.Fprintf(a.stdout, "Account key fingerprint: %s\n", clicore.KeyFingerprint(sn.Keys.AccountID, st.PublicKey))
 	here := "not approved yet: approve it from an enrolled device (`s2u keys approve " + sn.Keys.DeviceID() + "`) or run `s2u keys recover`"
-	if _, err := sn.Keys.AccountKey(ctx); err == nil {
+	if _, err := sn.AccountKey(ctx); err == nil {
 		here = "holds the key"
 	} else if !errors.Is(err, clicore.ErrDeviceNotApproved) {
 		return a.fail("open the account key", err)
@@ -160,7 +165,7 @@ func (a app) keysEnrol(ctx context.Context) int {
 		return a.fail("read keys", err)
 	}
 	if st.Enrolled {
-		if _, err := sn.Keys.AccountKey(ctx); err == nil {
+		if _, err := sn.AccountKey(ctx); err == nil {
 			fmt.Fprintln(a.stdout, "This account already has a key and this device holds it.")
 			return 0
 		}
@@ -172,7 +177,7 @@ func (a app) keysEnrol(ctx context.Context) int {
 		fmt.Fprintln(a.stdout, "  or here run: s2u keys recover")
 		return 0
 	}
-	code, err := sn.Keys.Enrol(ctx, deviceLabel())
+	code, err := sn.Enrol(ctx, deviceLabel())
 	if err != nil {
 		return a.fail("create the account key", err)
 	}
@@ -207,7 +212,7 @@ func (a app) keysRecover(ctx context.Context) int {
 			return a.fail("read recovery code", err)
 		}
 	}
-	if err := sn.Keys.Recover(ctx, code, deviceLabel()); err != nil {
+	if err := sn.Recover(ctx, code, deviceLabel()); err != nil {
 		return a.fail("recover", err)
 	}
 	fmt.Fprintln(a.stdout, "This device now holds your Secure ShareNet key.")
@@ -223,7 +228,7 @@ func (a app) keysApprove(ctx context.Context, args []string) int {
 	if err != nil {
 		return a.fail("keys", err)
 	}
-	if err := sn.Keys.Approve(ctx, strings.TrimSpace(args[0])); err != nil {
+	if err := sn.ApproveDevice(ctx, strings.TrimSpace(args[0])); err != nil {
 		return a.fail("approve device", err)
 	}
 	fmt.Fprintf(a.stdout, "Approved %s: it can now open your Secure ShareNets.\n", args[0])
@@ -281,27 +286,35 @@ func (a app) keysMembers(ctx context.Context, args []string) int {
 			continue
 		}
 		trust := "trusted"
+		fp := clicore.KeyFingerprint(m.AccountID, m.PublicKey)
+		if ok, err := sn.Pins.IsTrusted(m.AccountID, m.PublicKey); err != nil {
+			return a.fail("read pins", err)
+		} else if !ok {
+			if known, _ := sn.Pins.Known(m.AccountID); known {
+				trust = "KEY CHANGED: compare, then `s2u keys trust " + m.AccountID + " " + strings.ReplaceAll(fp, " ", "") + "`"
+			} else {
+				trust = "not seen before (trusted on first use when you post or sync)"
+			}
+		}
 		if m.AccountID == sn.Keys.AccountID {
-			trust = "you"
-		} else if pinned, ok := sn.Pins.Pinned(m.AccountID); !ok {
-			trust = "first seen (pinned on first use)"
-		} else if string(pinned) != string(m.PublicKey) {
-			trust = "KEY CHANGED: compare, then `s2u keys trust " + m.AccountID + "`"
+			trust = "you (" + trust + ")"
 		}
 		if pending[m.AccountID] {
 			trust += ", waiting for the key"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\n", m.AccountID, clicore.KeyFingerprint(m.AccountID, m.PublicKey), trust)
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", m.AccountID, fp, trust)
 	}
 	tw.Flush()
 	return 0
 }
 
 func (a app) keysTrust(ctx context.Context, args []string) int {
-	if len(args) != 1 {
-		fmt.Fprintln(a.stderr, "usage: s2u keys trust <account-id>   (from `s2u keys members <sharenet>`)")
+	if len(args) < 2 {
+		fmt.Fprintln(a.stderr, "usage: s2u keys trust <account-id> <fingerprint>   (compare the fingerprint with the member first;")
+		fmt.Fprintln(a.stderr, "       `s2u keys members <sharenet>` shows it)")
 		return 2
 	}
+	typedFP := strings.Join(args[1:], "")
 	sn, _, err := a.secureSession(ctx)
 	if err != nil {
 		return a.fail("keys", err)
@@ -321,6 +334,10 @@ func (a app) keysTrust(ctx context.Context, args []string) int {
 		}
 		for _, m := range st.Members {
 			if m.AccountID == account && len(m.PublicKey) > 0 {
+				if !clicore.SameFingerprint(typedFP, clicore.KeyFingerprint(account, m.PublicKey)) {
+					fmt.Fprintln(a.stderr, "that fingerprint doesn't match the key the server now offers for this member; nothing was trusted")
+					return 1
+				}
 				if err := sn.Pins.Trust(account, m.PublicKey); err != nil {
 					return a.fail("trust", err)
 				}
@@ -351,7 +368,7 @@ func (a app) syncSecureSharenets(ctx context.Context, sn *clicore.SecureNet, qui
 	if quiet {
 		out = io.Discard
 	}
-	if _, err := sn.Keys.AccountKey(ctx); err != nil {
+	if _, err := sn.AccountKey(ctx); err != nil {
 		if !quiet {
 			return a.fail("open the account key", err)
 		}
@@ -369,6 +386,7 @@ func (a app) syncSecureSharenets(ctx context.Context, sn *clicore.SecureNet, qui
 		if !n.Secure {
 			continue
 		}
+		_ = sn.Pins.MarkSecure(n.ID)
 		st, err := sn.Keys.Client.SecureState(ctx, n.ID)
 		if err != nil {
 			problems++
@@ -494,12 +512,12 @@ func (a app) sharenetFiles(ctx context.Context, args []string) int {
 				}
 			}
 			if _, real, err := sn.OpenFile(ctx, args[0], f.SecureEpoch, f.SecureFileID, f.FileKeyWrap, f.FileNameCT); err == nil {
-				name = real
+				name = displayName(real)
 			} else {
 				name = "(encrypted: can't open on this device)"
 			}
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", f.ID, name, f.SizeBytes, orDash(f.PostedByName))
+		fmt.Fprintf(tw, "%s\t%s\t%d\t%s\n", f.ID, displayName(name), f.SizeBytes, orDash(f.PostedByName))
 	}
 	tw.Flush()
 	return 0
@@ -606,28 +624,90 @@ func absOrDot(p string) string {
 // safeLocalName keeps only a file name (a sharenet file's name comes from another member,
 // or from a decrypted field, and must not pick a directory).
 func safeLocalName(name string) string {
+	name = displayName(name)
 	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	name = strings.Map(func(r rune) rune {
+		if strings.ContainsRune(`:*?"<>|`, r) {
+			return '_' // Windows: alternate data streams and invalid characters
+		}
+		return r
+	}, name)
+	name = strings.TrimRight(name, ". ")
 	if name == "" || name == "." || name == ".." || name == "/" {
 		return "sharenet-file"
+	}
+	base := strings.ToUpper(strings.SplitN(name, ".", 2)[0])
+	switch base {
+	case "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+		"LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9":
+		name = "_" + name
 	}
 	return name
 }
 
-// prepareSecurePost decides whether a sharenet/project post goes to a Secure ShareNet and,
-// if so, seals its key and name. ok=false means post as usual.
-func (a app) prepareSecurePost(ctx context.Context, client *clicore.Client, sharenetID, projectID, fileName string) (clicore.SealedPost, string, bool, error) {
-	netID := sharenetID
-	if netID == "" {
-		n, found, err := client.SharenetForProject(ctx, projectID, true)
-		if err != nil || !found {
-			return clicore.SealedPost{}, "", false, err
+// displayName drops control characters (terminal escapes) from a name another member
+// chose, before it is printed or used as a file name.
+func displayName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return -1
 		}
-		netID = n.ID
+		return r
+	}, name)
+}
+
+var errSecureNote = errors.New("a note can't be posted to a Secure ShareNet")
+
+// prepareSecurePost decides whether a sharenet/project post goes to a Secure ShareNet and,
+// if so, seals its key and name. ok=false means post as usual. It fails closed: an error
+// reading the sharenet, or a server claiming a sharenet this device knows is Secure isn't,
+// stops the post rather than sending anything in the clear.
+func (a app) prepareSecurePost(ctx context.Context, client *clicore.Client, sharenetID, projectID, fileName string, hasNote bool) (clicore.SealedPost, string, bool, error) {
+	pinPath, err := clicore.PinStorePath()
+	if err != nil {
+		return clicore.SealedPost{}, "", false, err
+	}
+	pins, err := clicore.OpenPinStore(pinPath)
+	if err != nil {
+		return clicore.SealedPost{}, "", false, err
+	}
+	netID, secure := sharenetID, false
+	if netID == "" {
+		n, found, err := client.SharenetForProject(ctx, projectID, false)
+		if err != nil {
+			return clicore.SealedPost{}, "", false, fmt.Errorf("look up the project's sharenet: %w", err)
+		}
+		if !found {
+			return clicore.SealedPost{}, "", false, nil // the post itself reports an unknown project
+		}
+		netID, secure = n.ID, n.Secure
 	} else {
 		st, err := client.SecureState(ctx, netID)
-		if err != nil || !st.Secure {
-			return clicore.SealedPost{}, "", false, nil // the post itself reports a bad id
+		var apiErr *clicore.APIError
+		if errors.As(err, &apiErr) && apiErr.Status == 404 {
+			if known, _ := pins.KnownSecure(netID); known {
+				return clicore.SealedPost{}, netID, true, errors.New("this device knows the sharenet is a Secure ShareNet but the server says it doesn't exist; nothing was sent")
+			}
+			return clicore.SealedPost{}, "", false, nil // not a member: the post reports it
 		}
+		if err != nil {
+			return clicore.SealedPost{}, "", false, fmt.Errorf("check whether the sharenet is a Secure ShareNet: %w", err)
+		}
+		secure = st.Secure
+	}
+	if known, err := pins.KnownSecure(netID); err != nil {
+		return clicore.SealedPost{}, "", false, err
+	} else if known && !secure {
+		return clicore.SealedPost{}, netID, true, errors.New("the server says this Secure ShareNet is no longer secure, which can't happen; nothing was sent")
+	}
+	if !secure {
+		return clicore.SealedPost{}, "", false, nil
+	}
+	if err := pins.MarkSecure(netID); err != nil {
+		return clicore.SealedPost{}, netID, true, err
+	}
+	if hasNote {
+		return clicore.SealedPost{}, netID, true, errSecureNote
 	}
 	sn, _, err := a.secureSession(ctx)
 	if err != nil {
@@ -659,12 +739,13 @@ func (a app) printSecurePostAPIError(err error) bool {
 // daemonSyncSecureKeys is the daemon's periodic Secure ShareNet job. Not enrolled or not
 // approved on this device is normal (nothing to do), not an error.
 func (a app) daemonSyncSecureKeys(ctx context.Context) error {
-	sn, _, err := a.secureSession(ctx)
+	sn, _, err := a.secureSessionMode(ctx, true)
 	if err != nil {
 		return nil
 	}
-	if _, err := sn.Keys.AccountKey(ctx); err != nil {
-		if errors.Is(err, clicore.ErrKeysNotEnrolled) || errors.Is(err, clicore.ErrDeviceNotApproved) {
+	if _, err := sn.AccountKey(ctx); err != nil {
+		var unknown *clicore.KeyUnknownError
+		if errors.Is(err, clicore.ErrKeysNotEnrolled) || errors.Is(err, clicore.ErrDeviceNotApproved) || errors.As(err, &unknown) {
 			return nil
 		}
 		return err

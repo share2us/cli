@@ -1979,13 +1979,16 @@ func (a app) upload(ctx context.Context, args []string) int {
 	secure := false
 	if opts.sharenet != "" || opts.project != "" {
 		var secureErr error
-		securePost, _, secure, secureErr = a.prepareSecurePost(ctx, client, opts.sharenet, opts.project, fileName)
+		securePost, _, secure, secureErr = a.prepareSecurePost(ctx, client, opts.sharenet, opts.project, fileName, strings.TrimSpace(opts.note) != "")
+		if errors.Is(secureErr, errSecureNote) {
+			fmt.Fprintln(a.stderr, "--note isn't allowed in a Secure ShareNet: it would be stored unencrypted")
+			return 2
+		}
 		if secureErr != nil {
 			return a.fail("prepare the Secure ShareNet post", secureErr)
 		}
-		if secure && strings.TrimSpace(opts.note) != "" {
-			fmt.Fprintln(a.stderr, "--note isn't allowed in a Secure ShareNet: it would be stored unencrypted")
-			return 2
+		if secure {
+			sourceRef = "" // a hash of the local path; nothing about the file goes in the clear
 		}
 	}
 	if opts.encrypt || opts.device != "" || opts.teammate != "" || secure {
@@ -2557,6 +2560,12 @@ func parseUploadArgs(args []string) (uploadOptions, error) {
 	if opts.sharenet != "" || opts.project != "" {
 		if err := sharenetPostConflicts(args); err != nil {
 			return uploadOptions{}, err
+		}
+		// The parsed options too: aliases (-d, --teammate, --keep-updated, ...) slip past
+		// the spelling check above.
+		if opts.live || opts.watch || opts.device != "" || opts.teammate != "" || opts.password != "" || opts.promptPassword ||
+			opts.oneTime || len(opts.recipients) > 0 || opts.private || opts.restrict || opts.unrestrict {
+			return uploadOptions{}, errors.New("link and device options (live updates, devices, contacts, passwords, recipients, privacy) don't apply to a sharenet file: it is shared with the sharenet's members only")
 		}
 		// Standing defaults that describe a link share do not apply to a sharenet
 		// file: it is members only, stored in the clear on the server, kept until
