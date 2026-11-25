@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261125142800] - 2026-11-25
+
 ### Fixed
 
 - **A finished agent request now comes back to the session that sent it.** When the
