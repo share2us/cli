@@ -189,6 +189,52 @@ func (rt *Runtime) reconcileBindingPane(s DiscoveredSession, deps Deps) {
 	}
 }
 
+// sessionNowInPane finds the session that replaced a binding's session in the SAME zellij
+// pane and project: `/clear` and a fresh `claude` in that tab start a new session id, and
+// without this the agent's hops ran headless against the old, closed session while its
+// owner watched an idle window (owner report 2026-11-26). Only an exact pane match counts,
+// and only when the old session is no longer live, so the agent never jumps elsewhere.
+func (rt *Runtime) sessionNowInPane(b Binding, sessions []DiscoveredSession) (DiscoveredSession, *ZellijPane, bool) {
+	if b.Zellij == nil || b.SessionID == "" {
+		return DiscoveredSession{}, nil, false
+	}
+	var hit DiscoveredSession
+	var hitPane *ZellijPane
+	n := 0
+	for _, s := range sessions {
+		if s.SessionID == b.SessionID && s.Live {
+			return DiscoveredSession{}, nil, false // still there
+		}
+		if !s.Live || s.SessionID == b.SessionID || s.PID <= 1 || s.Tool != b.Tool ||
+			normalizeProject(s.Project) != normalizeProject(b.Project) {
+			continue
+		}
+		pane := rt.processZellijPane(s.PID)
+		if pane == nil {
+			pane = TerminalHookPane(s.SessionID, s.PID)
+		}
+		if pane != nil && *pane == *b.Zellij {
+			hit, hitPane = s, pane
+			n++
+		}
+	}
+	return hit, hitPane, n == 1
+}
+
+// followMovedSession moves the binding (same agent id) to the session now in its pane.
+func (rt *Runtime) followMovedSession(b Binding, sessions []DiscoveredSession, deps Deps) (DiscoveredSession, bool) {
+	s, pane, ok := rt.sessionNowInPane(b, sessions)
+	if !ok {
+		return DiscoveredSession{}, false
+	}
+	if _, _, err := BindSessionInPane(b.Project, b.Tool, b.Label, s.SessionID, pane); err != nil {
+		deps.logf("agent-bridge: could not follow %s to session %s: %v", b.AgentID, s.SessionID, err)
+		return DiscoveredSession{}, false
+	}
+	deps.logf("agent-bridge: agent %s followed its pane %s/%s from session %s to %s", b.AgentID, pane.Session, pane.Pane, b.SessionID, s.SessionID)
+	return s, true
+}
+
 // openRebindWarningTab surfaces a loud, foreground warning that a prompt is stuck
 // because the bound session's pane can't be located — a new zellij tab whose title
 // says to re-bind. It is best-effort and deduped by the caller (rebindReported), so
@@ -263,6 +309,17 @@ func (rt *Runtime) agentRegisterLoop(ctx context.Context, client AgentClient, ru
 				continue
 			}
 			sessions = append(sessions, found...)
+		}
+		moved := false
+		for _, b := range bindings {
+			if _, ok := rt.followMovedSession(b, sessions, deps); ok {
+				moved = true
+			}
+		}
+		if moved {
+			if fresh, err := LoadBindings(); err == nil {
+				bindings = fresh
+			}
 		}
 		// A single-session binding is advertised even when discovery does not
 		// list its session (one no window has open is often not listed): the
@@ -480,6 +537,16 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 				break
 			}
 		}
+		// The agent's window moved on to a new session (/clear, a new claude in the same
+		// pane): deliver there, in the foreground, not headless into the old session.
+		if !live && bound {
+			if s, ok := rt.followMovedSession(binding, sessions, deps); ok {
+				req.TargetSessionID, discovered, cwd, live = s.SessionID, s, s.Project, true
+				if list, lerr := LoadBindings(); lerr == nil {
+					binding, bound = BindingForSession(list, s.SessionID)
+				}
+			}
+		}
 	}
 	// A delivered file (ADR-036 P4b): download the ciphertext, open its content
 	// key with this device's key, decrypt it into the session's .s2u-inbox, and
@@ -596,18 +663,40 @@ func (rt *Runtime) paneRebindNeeded(ctx context.Context, runner AgentRunner, req
 	return false
 }
 
-// holdMessages says what a held hop waits for. With typed delivery set up for the session
-// it is typed in once the window is idle, so "runs once you exit" would be wrong there.
-func holdMessages(req clicore.AgentRequest) (notice, status string) {
+// holdMessages says what a held hop waits for, naming the condition that blocks typing it
+// into the open window (owner report 2026-11-26: "it only works in the background" was a
+// window started as plain claude, while the status said it waited for idle).
+func holdMessages(req clicore.AgentRequest, pid int) (notice, status string) {
 	tool := req.Tool
-	if list, err := LoadBindings(); err == nil {
-		if b, ok := BindingForSession(list, req.TargetSessionID); ok && b.Zellij != nil && !b.TypedDeliveryDisabled {
-			return "A prompt is waiting for your " + tool + " session. Share2Us types it in when the window is idle.",
-				"Waiting: the " + tool + " session is open in a window and not idle yet. Share2Us types the prompt in when it is idle (or runs it once " + tool + " is exited there)."
+	exitNote := "It runs in that session once " + tool + " is exited there."
+	list, err := LoadBindings()
+	b, ok := BindingForSession(list, req.TargetSessionID)
+	switch {
+	case err != nil || !ok || b.Zellij == nil:
+		return "A prompt is waiting for your " + tool + " session. " + exitNote,
+			"Waiting: the " + tool + " session is open in a window. " + exitNote
+	case b.TypedDeliveryDisabled:
+		return "A prompt is waiting for your " + tool + " session: typing into it is paused (s2u agent typed on).",
+			"Waiting: typing into the open " + tool + " window is paused there (`s2u agent typed on` turns it back on). " + exitNote
+	case tool == "claude" && !TerminalTypedReady(req.TargetSessionID, pid):
+		fix := "restart it there with `s2u claude --resume " + req.TargetSessionID + "`"
+		return "A prompt is waiting: this Claude window wasn't started with s2u claude, so Share2Us can't type into it. To get prompts live, " + fix + ".",
+			"Waiting: the claude window on that device wasn't started with `s2u claude`, so Share2Us can't type into it safely. " + exitNote + " For live delivery, " + fix + "."
+	}
+	return "A prompt is waiting for your " + tool + " session. Share2Us types it in when the window is idle.",
+		"Waiting: the " + tool + " session is busy (or its input holds other text). Share2Us types the prompt in as soon as it is idle."
+}
+
+// livePID is the process holding a session now, 0 when none is known.
+func livePID(ctx context.Context, runner AgentRunner, session string) int {
+	if found, err := runner.Discover(ctx); err == nil {
+		for _, s := range found {
+			if s.SessionID == session && s.Live {
+				return s.PID
+			}
 		}
 	}
-	return "A prompt is waiting for your " + tool + " session. It runs in that session once you exit " + tool + " there.",
-		"Waiting: the " + tool + " session is open in a window. The prompt runs in that session once " + tool + " is exited there."
+	return 0
 }
 
 // holdInject waits, off the receive loop, until nothing holds the session, then
@@ -624,7 +713,7 @@ func (rt *Runtime) holdInject(ctx context.Context, client AgentClient, runner Ag
 func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, allowChannel, waitingReported bool) {
 	if !waitingReported {
 		deps.logf("agent-bridge: inject %s waits: session %s is open in a window", req.ID, req.TargetSessionID)
-		notice, status := holdMessages(req)
+		notice, status := holdMessages(req, livePID(ctx, runner, req.TargetSessionID))
 		rt.notify("Share2Us", notice)
 		_ = client.AgentReportResult(ctx, req.ID, "waiting", status)
 	}
