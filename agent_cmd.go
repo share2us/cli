@@ -111,7 +111,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "       [--project ID [--as AGENT-ID]]       to an agent in another account: both agents must\n                                             be members of that project. The sending agent is\n                                             the one bound to this directory unless --as names it.\n")
 	fmt.Fprintf(a.stderr, "  join <code>                                join a sharenet project with THIS session: type\n                                             !s2u agent join <code> in Claude Code or Codex\n")
 	fmt.Fprintf(a.stderr, "  project <project-id>                       a project's reachable member agents\n")
-	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
+	fmt.Fprintf(a.stderr, "  status <request-id> [--json]               status, timing and result of a sent request\n")
 	fmt.Fprintf(a.stderr, "  wait <request-id> [--timeout 9m]           block until it finishes, then print the result\n                                             (also: send ... --wait)\n")
 	fmt.Fprintf(a.stderr, "  hops                                       hops this machine ran, and the session each ran in\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
@@ -675,6 +675,9 @@ func (a app) waitForResult(ctx context.Context, client *clicore.Client, id strin
 			errs = 0
 			if agentFinal(st.Status) {
 				fmt.Fprintf(a.stdout, "status: %s\n", st.Status)
+				if t := requestTiming(st); t != "" {
+					fmt.Fprintln(a.stdout, t)
+				}
 				if r := strings.TrimSpace(daemon.CleanRemoteText(st.Result)); r != "" {
 					fmt.Fprintln(a.stdout, r)
 				}
@@ -998,10 +1001,18 @@ func (a app) agentJoin(ctx context.Context, args []string) int {
 }
 
 func (a app) agentStatus(ctx context.Context, args []string) int {
-	if len(args) != 1 {
-		fmt.Fprintf(a.stderr, "usage: %s agent status <request-id>\n", commandName)
+	asJSON := hasFlag(args, "--json")
+	var ids []string
+	for _, x := range args {
+		if x != "--json" {
+			ids = append(ids, x)
+		}
+	}
+	if len(ids) != 1 {
+		fmt.Fprintf(a.stderr, "usage: %s agent status <request-id> [--json]\n", commandName)
 		return 2
 	}
+	args = ids
 	client, ok := a.agentClient()
 	if !ok {
 		return 1
@@ -1023,6 +1034,10 @@ func (a app) agentStatus(ctx context.Context, args []string) int {
 		// Not "status:", which is how a request's state is printed.
 		return a.fail("agent status failed", err)
 	}
+	if asJSON {
+		writeJSON(a.stdout, st)
+		return 0
+	}
 	// A waiting hop whose target session cannot be verified carries a re-bind
 	// marker; surface it as an action, not a bare status line.
 	if reason, needsRebind := strings.CutPrefix(st.Result, daemon.AgentNeedsRebindMarker); needsRebind {
@@ -1031,10 +1046,30 @@ func (a app) agentStatus(ctx context.Context, args []string) int {
 		return 0
 	}
 	fmt.Fprintf(a.stdout, "status: %s\n", st.Status)
+	if t := requestTiming(st); t != "" {
+		fmt.Fprintln(a.stdout, t)
+	}
 	if strings.TrimSpace(st.Result) != "" {
 		fmt.Fprintf(a.stdout, "%s\n", daemon.CleanRemoteText(st.Result))
 	}
 	return 0
+}
+
+// requestTiming: "sent 20:58:35, delivered after 3s, finished after 24s". "" from an
+// older server that sends no times.
+func requestTiming(st clicore.AgentInjectState) string {
+	sent, err := time.Parse(time.RFC3339, st.CreatedAt)
+	if err != nil {
+		return ""
+	}
+	parts := []string{"sent " + sent.Local().Format("15:04:05")}
+	if d, err := time.Parse(time.RFC3339, st.DeliveredAt); err == nil {
+		parts = append(parts, "delivered after "+d.Sub(sent).Round(time.Second).String())
+	}
+	if c, err := time.Parse(time.RFC3339, st.CompletedAt); err == nil {
+		parts = append(parts, "finished after "+c.Sub(sent).Round(time.Second).String())
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (a app) agentPending(ctx context.Context) int {

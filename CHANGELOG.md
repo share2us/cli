@@ -20,11 +20,18 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   channel to run it in the background, so the reply lands the moment it exists instead of
   them sleeping and polling.
 - `s2u --help` lists `s2u status`.
+- `s2u agent status <id>` shows timing (sent, delivered after N, finished after N) and takes
+  `--json`; `--wait` prints the same timing when the request finishes.
+
+### Fixed
+
+- A typed prompt no longer carries the reply instruction twice (the receiver adds its note
+  only when the sender's CLI didn't).
 
 ### Changed
 
 - A `send --file` no longer always waits 3 seconds for LAN discovery: it stops as soon as
-  the target device answers (cli-core v0.75.0).
+  the target device answers (cli-core v0.75.0; v0.76.0 adds request timing).
 
 ## [20261125205448] - 2026-11-25
 

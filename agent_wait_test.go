@@ -56,3 +56,14 @@ func TestWaitForResultTimesOut(t *testing.T) {
 		t.Fatalf("exit %d, stderr %q", code, errOut.String())
 	}
 }
+
+func TestRequestTiming(t *testing.T) {
+	st := clicore.AgentInjectState{CreatedAt: "2026-11-25T20:58:35Z", DeliveredAt: "2026-11-25T20:58:38Z", CompletedAt: "2026-11-25T20:58:59Z"}
+	got := requestTiming(st)
+	if !strings.Contains(got, "delivered after 3s") || !strings.Contains(got, "finished after 24s") || !strings.HasPrefix(got, "sent ") {
+		t.Fatalf("got %q", got)
+	}
+	if requestTiming(clicore.AgentInjectState{}) != "" {
+		t.Fatal("an older server sends no times")
+	}
+}

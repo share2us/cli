@@ -18,7 +18,7 @@ matching row. With no command, or `help`, print this table and the output of
 | `list` | Reachable agents: `list_agents` tool if present, else `s2u agent list`. |
 | `send <agent> <task> [file]` | Hand a task (and optionally a file) to another agent (see "Sending"). |
 | `ask <agent> <question>` | Same as send, phrased as a question that needs an answer back. |
-| `status <request-id>` | `request_status` tool, else `s2u agent status <id>`. |
+| `status <request-id>` | `request_status` tool, else `s2u agent status <id>` (status, timing: sent / delivered / finished, and the reply; `--json`). |
 | `wait <request-id>` | Block until it finishes and print the reply: `s2u agent wait <id>` (run in the background). |
 | `results` | Recent finished requests this device sent: `s2u agent results`. |
 | `cancel <request-id>` | Withdraw a request that hasn't started: `cancel_request` tool, else `s2u agent cancel <id>`. |

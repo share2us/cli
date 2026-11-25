@@ -80,7 +80,10 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	if name := strings.TrimSpace(senderName); name != "" {
 		sender = fmt.Sprintf("%q (%s)", name, req.SenderDeviceID)
 	}
-	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s\n\n%s", sender, req.ID, prompt, typedReplyNote)
+	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s", sender, req.ID, prompt)
+	if !strings.Contains(prompt, "returns your final message to them automatically") {
+		visible += "\n\n" + typedReplyNote // an older sender didn't add its own reply instruction
+	}
 	if visible, safe = safeTerminalText(visible); !safe {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
 		_ = EndTypedGuard(req.TargetSessionID, req.ID)
