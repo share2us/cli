@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261125200514] - 2026-11-25
+
 ### Added
 
 - **Claude sessions can reach your other agents without being told how.** Sessions started
