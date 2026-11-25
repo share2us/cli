@@ -12,6 +12,20 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **`s2u agent wait <id>` and `s2u agent send ... --wait`**: block until the request
+  finishes and print the reply (progress on stderr; exit 0 done, 1 other final state, 124
+  when the wait runs out, default 9 minutes). `/s2u` tells agents without the share2us
+  channel to run it in the background, so the reply lands the moment it exists instead of
+  them sleeping and polling.
+- `s2u --help` lists `s2u status`.
+
+### Changed
+
+- A `send --file` no longer always waits 3 seconds for LAN discovery: it stops as soon as
+  the target device answers (cli-core v0.75.0).
+
 ## [20261125205448] - 2026-11-25
 
 ### Changed

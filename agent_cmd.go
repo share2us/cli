@@ -47,6 +47,8 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentCancel(ctx, args[1:])
 	case "results":
 		return a.agentResults(ctx, args[1:])
+	case "wait":
+		return a.agentWait(ctx, args[1:])
 	case "pending":
 		return a.agentPending(ctx)
 	case "approve":
@@ -110,6 +112,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  join <code>                                join a sharenet project with THIS session: type\n                                             !s2u agent join <code> in Claude Code or Codex\n")
 	fmt.Fprintf(a.stderr, "  project <project-id>                       a project's reachable member agents\n")
 	fmt.Fprintf(a.stderr, "  status <request-id>                        status/result of a sent request\n")
+	fmt.Fprintf(a.stderr, "  wait <request-id> [--timeout 9m]           block until it finishes, then print the result\n                                             (also: send ... --wait)\n")
 	fmt.Fprintf(a.stderr, "  hops                                       hops this machine ran, and the session each ran in\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
 	fmt.Fprintf(a.stderr, "  approve <request-id>                       approve ONE pending request (no standing access)\n")
@@ -432,6 +435,7 @@ func (a app) agentList(ctx context.Context, args []string) int {
 func (a app) agentSend(ctx context.Context, args []string) int {
 	var deviceID, sessionID, agentID, prompt, tool, file, goalID, projectID, asAgent string
 	var inbox bool
+	var waitFor time.Duration
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--agent", "--to":
@@ -479,6 +483,8 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 			if i < len(args) {
 				asAgent = args[i]
 			}
+		case "--wait":
+			waitFor = defaultAgentWait
 		case "--inbox":
 			// Deliver the file to the agent's inbox without running it (the agent
 			// or its owner picks it up). Requires --file; the prompt is optional.
@@ -602,10 +608,100 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	fmt.Fprintln(a.stdout, "Delivery: the target device picks the path (its Claude channel if loaded, else typing into the open window, else a headless run); `agent status` names it once delivered.")
 	fmt.Fprintf(a.stdout, "Results: `%s agent results`. Cancel before it runs: %s agent cancel %s\n", commandName, commandName, res.RequestID)
 	_, _ = daemonctl.Query("agent-sent") // the daemon watches closely for this result
+	if waitFor > 0 {
+		return a.waitForResult(ctx, client, res.RequestID, waitFor)
+	}
 	if note := staleDaemonNote(); note != "" {
 		fmt.Fprintln(a.stderr, note)
 	}
 	return 0
+}
+
+// defaultAgentWait stays under a coding agent's 10-minute shell limit.
+const defaultAgentWait = 9 * time.Minute
+
+// agentWait blocks until a sent request reaches a final state: an agent in a plain shell
+// gets the reply the moment it exists instead of sleeping and polling (2026-11-26).
+func (a app) agentWait(ctx context.Context, args []string) int {
+	var id string
+	timeout := defaultAgentWait
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--timeout" && i+1 < len(args):
+			d, err := time.ParseDuration(args[i+1])
+			if err != nil || d <= 0 {
+				fmt.Fprintf(a.stderr, "bad --timeout %q (e.g. 90s, 5m)\n", args[i+1])
+				return 2
+			}
+			timeout, i = d, i+1
+		case id == "" && !strings.HasPrefix(args[i], "-"):
+			id = args[i]
+		default:
+			fmt.Fprintf(a.stderr, "usage: %s agent wait <request-id> [--timeout 9m]\n", commandName)
+			return 2
+		}
+	}
+	if id == "" {
+		fmt.Fprintf(a.stderr, "usage: %s agent wait <request-id> [--timeout 9m]\n", commandName)
+		return 2
+	}
+	client, ok := a.agentClient()
+	if !ok {
+		return 1
+	}
+	return a.waitForResult(ctx, client, id, timeout)
+}
+
+var agentWaitPoll = time.Second
+
+func agentFinal(status string) bool {
+	switch status {
+	case "done", "failed", "rejected", "cancelled", "expired":
+		return true
+	}
+	return false
+}
+
+// waitForResult prints progress to stderr and the final state + result to stdout. Exit 0
+// for done, 1 for any other final state, 124 when the wait ran out first.
+func (a app) waitForResult(ctx context.Context, client *clicore.Client, id string, timeout time.Duration) int {
+	deadline := time.Now().Add(timeout)
+	last := ""
+	errs := 0
+	for {
+		st, err := client.AgentInjectStatus(ctx, id)
+		switch {
+		case err == nil:
+			errs = 0
+			if agentFinal(st.Status) {
+				fmt.Fprintf(a.stdout, "status: %s\n", st.Status)
+				if r := strings.TrimSpace(daemon.CleanRemoteText(st.Result)); r != "" {
+					fmt.Fprintln(a.stdout, r)
+				}
+				if st.Status == "done" {
+					return 0
+				}
+				return 1
+			}
+			if line := st.Status + ": " + strings.TrimSpace(daemon.CleanRemoteText(st.Result)); line != last {
+				fmt.Fprintf(a.stderr, "... %s\n", strings.TrimSuffix(line, ": "))
+				last = line
+			}
+		case isServerError(err) && errs < 10:
+			errs++ // a proxy hiccup: keep waiting
+		default:
+			return a.fail("agent wait failed", err)
+		}
+		if time.Now().After(deadline) {
+			fmt.Fprintf(a.stderr, "still %s after %s; keep waiting with: %s agent wait %s\n", st.Status, timeout, commandName, id)
+			return 124
+		}
+		select {
+		case <-ctx.Done():
+			return 130
+		case <-time.After(agentWaitPoll):
+		}
+	}
 }
 
 // replyFooter goes with every prompt, so the receiving agent knows how its answer gets back

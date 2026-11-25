@@ -141,7 +141,7 @@ func skillContent(t skillTarget) []byte {
 	desc, _ := json.Marshal(skillDescription) // a JSON string is valid quoted YAML; the text has ": "
 	b.WriteString("---\nname: s2u\ndescription: " + string(desc) + "\n")
 	if t.ArgumentHint {
-		b.WriteString("argument-hint: \"[list | send <agent> <task> | ask <agent> <question> | status <id> | results | cancel <id> | pending | approve <id> | bind | join <code> | share <file> | shares | receive | devices | login | status | update | daemon | setup | help]\"\n")
+		b.WriteString("argument-hint: \"[list | send <agent> <task> | ask <agent> <question> | status <id> | wait <id> | results | cancel <id> | pending | approve <id> | bind | join <code> | share <file> | shares | receive | devices | login | status | update | daemon | setup | help]\"\n")
 	}
 	b.WriteString("---\n")
 	b.Write(s2uSkillBody)
