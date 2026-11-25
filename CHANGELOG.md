@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261125212750] - 2026-11-25
+
 ### Added
 
 - **`s2u agent wait <id>` and `s2u agent send ... --wait`**: block until the request
