@@ -25,6 +25,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ### Fixed
 
+- **A request that breaks on the target now says so to the sender.** If the target's guard
+  refuses a command, the result starts with `Blocked on the target:` and names the refused
+  commands (it used to read as a plain `done`). With the server update, a request whose
+  target device goes quiet for 3 minutes, or whose daemon restarts mid-run, ends as
+  `failed` with the reason instead of staying `running` forever. `/s2u` tells agents to
+  report these as failures, not successes.
 - A typed prompt no longer carries the reply instruction twice (the receiver adds its note
   only when the sender's CLI didn't).
 

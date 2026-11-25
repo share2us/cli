@@ -206,3 +206,17 @@ func TestSentRequestNudgesTheResultWatcher(t *testing.T) {
 		t.Fatal("fast window not opened")
 	}
 }
+
+// A turn the target's guard blocked tells its sender so, before the reply.
+func TestGuardDenialsAreReportedToTheSender(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	runtime, _, dir := typedRuntime(t, "│ ❯  │", "│ ❯ [Pasted text #1 +3 lines] │")
+	c := &fakeAgentClient{reportNotify: make(chan struct{}, 8)}
+	runtime.handleInject(context.Background(), c, typedRunner(dir), keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-blocked", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "run agent hops"}))
+	runtime.hub().recordDenied("win-1", DescribeToolUse("Bash", map[string]any{"command": "share2us   agent hops"}))
+	runtime.hub().turnEndedForCaller("win-1", "req-blocked", false, 0, "I couldn't run it.")
+	waitIdle(t, runtime)
+	waitForReport(t, c, "done", "Blocked on the target: its Share2Us guard refused `share2us agent hops`")
+	waitForReport(t, c, "done", "I couldn't run it.")
+}

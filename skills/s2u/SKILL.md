@@ -65,6 +65,11 @@ it. Use that only when the user asks for a plain file transfer to a device.
 
 ## What to expect
 
+- When a reply lands, check it before relaying it: status `failed` (the target stopped
+  responding, restarted, or the turn was interrupted) or a result starting with
+  `Blocked on the target:` (its guard refused a command) means the request did NOT fully
+  work. Tell the user plainly what broke and what would fix it; don't report success.
+
 - `pending`: the target device hasn't approved this sender yet. Tell the user to approve it
   on that device (`s2u agent pending`, then `s2u agent approve <id>` there).
 - `waiting`: the target session is busy or open in a window; it runs when it's free.

@@ -52,6 +52,7 @@ type channelHub struct {
 	proven    map[string]bool              // session -> a channel-delivered request was answered via report
 	channel   map[string]bool              // request -> requires an explicit report, never Stop
 	reported  map[string]string            // request -> result, held until the guarded turn ends
+	denied    map[string][]string          // request -> tool uses the guard refused during it
 }
 
 func newChannelHub() *channelHub {
@@ -60,7 +61,7 @@ func newChannelHub() *channelHub {
 		picked: map[string]chan struct{}{}, result: map[string]chan string{}, aborted: map[string]chan struct{}{},
 		active: map[string]map[string]bool{}, activePID: map[string]int{}, owner: map[string]string{},
 		guard: map[string]bool{}, guardPID: map[string]int{}, proven: map[string]bool{}, channel: map[string]bool{},
-		reported: map[string]string{},
+		reported: map[string]string{}, denied: map[string][]string{},
 	}
 }
 
@@ -226,6 +227,42 @@ func (h *channelHub) poll(session string, claudePID int) []ChannelDelivery {
 
 const ChannelKindResult = "result"
 
+// recordDenied notes a refused tool use against every request in progress in session.
+func (h *channelHub) recordDenied(session, what string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for id := range h.active[session] {
+		if len(h.denied[id]) < 10 {
+			h.denied[id] = append(h.denied[id], what)
+		}
+	}
+}
+
+// annotateDenied puts the guard's refusals first, so a turn that was blocked never reads
+// as a plain success to its sender.
+func annotateDenied(out string, denied []string) string {
+	if len(denied) == 0 {
+		return out
+	}
+	return "Blocked on the target: its Share2Us guard refused " + strings.Join(denied, "; ") +
+		". The result below may be incomplete; the target's owner can run it, or allow it in that project's rules.\n\n" + out
+}
+
+// DescribeToolUse is a short, single-line name for a tool call ("`share2us agent hops`").
+func DescribeToolUse(tool string, input map[string]any) string {
+	if cmd, ok := input["command"].(string); ok && tool == "Bash" {
+		cmd = strings.Join(strings.Fields(cmd), " ")
+		if r := []rune(cmd); len(r) > 80 {
+			cmd = string(r[:80]) + "…"
+		}
+		return "`" + cmd + "`"
+	}
+	if p, ok := input["file_path"].(string); ok {
+		return tool + " " + p
+	}
+	return tool
+}
+
 // notice queues a result notice for a session whose channel is listening now; false
 // when nobody is listening (the desktop notification and the results log still have it).
 func (h *channelHub) notice(session string, d ChannelDelivery) bool {
@@ -302,7 +339,7 @@ func (h *channelHub) turnEndedForCaller(session, requestID string, verifyTyped b
 			out = replyForSender(reply)
 		}
 		if r, ok := h.result[id]; ok {
-			r <- out
+			r <- annotateDenied(out, h.denied[id])
 		}
 		h.forget(id)
 	}
@@ -337,6 +374,7 @@ func (h *channelHub) forget(requestID string) {
 	delete(h.channel, requestID)
 	delete(h.aborted, requestID)
 	delete(h.reported, requestID)
+	delete(h.denied, requestID)
 	delete(h.activePID, requestID)
 	if s, ok := h.owner[requestID]; ok {
 		delete(h.active[s], requestID)
@@ -406,6 +444,9 @@ func (h *channelHub) channelControl(req daemonctl.Request, callerSessionPID func
 	case "channel-guard-registered":
 		session := req.Args["session"]
 		return daemonctl.Response{OK: h.guardRegistered(session, callerPID(session))}, true
+	case "channel-denied":
+		h.recordDenied(req.Args["session"], req.Args["what"])
+		return daemonctl.Response{OK: true}, true
 	case "channel-guarded":
 		active, strict := h.guarded(req.Args["session"])
 		b, _ := json.Marshal(map[string]bool{"strict": strict})
