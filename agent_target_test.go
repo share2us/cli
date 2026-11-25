@@ -170,3 +170,21 @@ func TestDeviceNameForIDUsesTheSendingDevice(t *testing.T) {
 		t.Fatalf("current device fallback = %q, want jarvis", got)
 	}
 }
+
+func TestPickTargetByName(t *testing.T) {
+	targets := []agentTarget{
+		{AgentID: "agt_1", Names: []string{"homelab-70", ""}, DeviceName: "homelab", Status: "available"},
+		{AgentID: "agt_2", Names: []string{"site", "Portfolio"}, DeviceName: "portfolio", Status: "available"},
+		{AgentID: "agt_3", Names: []string{"other", ""}, DeviceName: "openclaw", Status: "available"},
+		{AgentID: "agt_4", Names: []string{"other2", ""}, DeviceName: "openclaw", Status: "available"},
+	}
+	for q, want := range map[string]string{"homelab-70": "agt_1", "HOMELAB": "agt_1", "portfolio": "agt_2", "site": "agt_2"} {
+		if got, err := pickTarget(targets, targetQuery{Agent: q}); err != nil || got.AgentID != want {
+			t.Errorf("%q: %+v %v, want %s", q, got, err, want)
+		}
+	}
+	// A device with two agents is ambiguous, not a guess.
+	if _, err := pickTarget(targets, targetQuery{Agent: "openclaw"}); err == nil || !strings.Contains(err.Error(), "2 reachable sessions match") {
+		t.Fatalf("ambiguous device: %v", err)
+	}
+}

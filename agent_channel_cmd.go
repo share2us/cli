@@ -31,8 +31,9 @@ func (a app) agentChannel(ctx context.Context) int {
 			}
 			return s.SessionID, nil
 		},
-		Call: daemonctl.Call,
-		Logf: func(format string, args ...any) { fmt.Fprintf(a.stderr, format+"\n", args...) },
+		Call:  daemonctl.Call,
+		Logf:  func(format string, args ...any) { fmt.Fprintf(a.stderr, format+"\n", args...) },
+		Tools: a.channelAgentTools(),
 	}
 	if err := srv.Serve(ctx, os.Stdin, a.stdout); err != nil && !errors.Is(err, io.EOF) {
 		fmt.Fprintf(a.stderr, "share2us channel: %v\n", err)
@@ -243,6 +244,7 @@ func (a app) claude(ctx context.Context, args []string) int {
 	if err != nil {
 		return a.fail("write the channel config", err)
 	}
+	_, _ = installClaudeSkill() // keep /s2u current with this build; best effort
 	cmd := exec.CommandContext(ctx, "claude", append(daemon.ClaudeChannelArgs(mcp, settings), args...)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	// The agent bound to this directory knows who it is, so its posts into a

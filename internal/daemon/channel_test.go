@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -590,5 +591,71 @@ func TestChannelLaunchConfig(t *testing.T) {
 	args := strings.Join(ClaudeChannelArgs(mcp, settings), " ")
 	if !strings.Contains(args, "--dangerously-load-development-channels server:share2us") {
 		t.Fatalf("args = %s", args)
+	}
+}
+
+// During a delivered prompt the agent may report and look, but not fan out to other agents.
+func TestHookDecisionLimitsChannelAgentToolsDuringHop(t *testing.T) {
+	project := t.TempDir()
+	for tool, wantDeny := range map[string]bool{
+		"mcp__share2us__report": false, "mcp__share2us__list_agents": false, "mcp__share2us__request_status": false,
+		"mcp__share2us__send_to_agent": true, "mcp__share2us__cancel_request": true,
+	} {
+		if deny, _ := HookDecision(project, tool, map[string]any{}, false); deny != wantDeny {
+			t.Errorf("%s: deny=%v, want %v", tool, deny, wantDeny)
+		}
+	}
+}
+
+func TestChannelServerAgentTools(t *testing.T) {
+	var guarded atomic.Bool
+	call := func(req daemonctl.Request) (daemonctl.Response, bool) {
+		if req.Op == "channel-guarded" {
+			return daemonctl.Response{OK: guarded.Load()}, true
+		}
+		return daemonctl.Response{OK: true}, true
+	}
+	var ran atomic.Int32
+	srv := &ChannelServer{FindSession: func(context.Context) (string, error) { return "sess-1", nil }, Call: call, Poll: 5 * time.Millisecond,
+		Tools: []ChannelTool{{Name: "send_to_agent", Description: "d", Properties: map[string]any{}, NotDuringHop: true,
+			Run: func(_ context.Context, args json.RawMessage) (string, bool) {
+				ran.Add(1)
+				return "sent " + string(args), false
+			}}}}
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = srv.Serve(ctx, inR, outW) }()
+	lines := bufio.NewScanner(outR)
+	reply := func(id float64) map[string]any {
+		for lines.Scan() {
+			var m map[string]any
+			_ = json.Unmarshal(lines.Bytes(), &m)
+			if m["id"] == id {
+				return m["result"].(map[string]any)
+			}
+		}
+		t.Fatal("server closed")
+		return nil
+	}
+	send := func(s string) { _, _ = io.WriteString(inW, s+"\n") }
+	send(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`)
+	tools := reply(1)["tools"].([]any)
+	if len(tools) != 2 || tools[1].(map[string]any)["name"] != "send_to_agent" {
+		t.Fatalf("tools = %v", tools)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for srv.inHop() && time.Now().Before(deadline) { // wait for the session to be known
+		time.Sleep(5 * time.Millisecond)
+	}
+	send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"send_to_agent","arguments":{"to":"homelab"}}}`)
+	if r := reply(2); r["isError"] != false || !strings.Contains(fmt.Sprint(r["content"]), "homelab") {
+		t.Fatalf("call = %v", r)
+	}
+	guarded.Store(true)
+	send(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"send_to_agent","arguments":{"to":"x"}}}`)
+	if r := reply(3); r["isError"] != true || ran.Load() != 1 {
+		t.Fatalf("ran during a hop: %v (runs %d)", r, ran.Load())
 	}
 }

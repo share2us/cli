@@ -33,7 +33,9 @@ const channelInstructions = "Share2Us requests arrive as <channel source=\"share
 	"Do the task here, in this session, within this project's rules. " +
 	"When you are done, call the report tool once with the request_id and a short result for the sender. " +
 	"An event with kind=\"result\" is different: it only says that a request THIS session sent has finished. " +
-	"It is not a task and needs no report; tell your owner, and read the reply with the command it names if it is useful."
+	"It is not a task and needs no report; tell your owner, and read the reply with the command it names if it is useful. " +
+	"To hand work to another agent (another of your owner's machines or a project member), use list_agents and send_to_agent; " +
+	"the result comes back to this session as a kind=\"result\" event, so don't poll for it."
 
 // ChannelCaller sends a control request to the daemon (daemonctl.Call in
 // production).
@@ -46,9 +48,27 @@ type ChannelServer struct {
 	Call        ChannelCaller
 	Poll        time.Duration
 	Logf        func(string, ...any)
+	// Tools are offered beside report (talking to other agents). Optional.
+	Tools []ChannelTool
 
 	out   io.Writer
 	outMu sync.Mutex
+
+	sessionMu sync.Mutex
+	session   string
+}
+
+// ChannelTool is an extra tool on the share2us channel. Run gets the raw arguments and
+// returns the text for the agent; isError marks a failure.
+type ChannelTool struct {
+	Name        string
+	Description string
+	Properties  map[string]any
+	Required    []string
+	// NotDuringHop: refused while this session is running a delivered prompt, so a
+	// prompt from another agent can't fan out to more agents (the guard hook says so too).
+	NotDuringHop bool
+	Run          func(ctx context.Context, args json.RawMessage) (text string, isError bool)
 }
 
 type rpcMessage struct {
@@ -124,7 +144,7 @@ func (s *ChannelServer) handle(m rpcMessage) {
 			"instructions": channelInstructions,
 		})
 	case "tools/list":
-		s.reply(m.ID, map[string]any{"tools": []any{map[string]any{
+		tools := []any{map[string]any{
 			"name":        "report",
 			"description": "Send the result of a Share2Us request back to the device or agent that sent it. Call it once per request, when the task is done.",
 			"inputSchema": map[string]any{
@@ -135,20 +155,33 @@ func (s *ChannelServer) handle(m rpcMessage) {
 				},
 				"required": []string{"request_id", "result"},
 			},
-		}}})
+		}}
+		for _, t := range s.Tools {
+			req := t.Required
+			if req == nil {
+				req = []string{}
+			}
+			tools = append(tools, map[string]any{"name": t.Name, "description": t.Description,
+				"inputSchema": map[string]any{"type": "object", "properties": t.Properties, "required": req}})
+		}
+		s.reply(m.ID, map[string]any{"tools": tools})
 	case "tools/call":
+		var call struct {
+			Name      string          `json:"name"`
+			Arguments json.RawMessage `json:"arguments"`
+		}
+		_ = json.Unmarshal(m.Params, &call)
+		if call.Name != "report" {
+			s.callTool(m.ID, call.Name, call.Arguments)
+			return
+		}
 		var p struct {
-			Name      string `json:"name"`
 			Arguments struct {
 				RequestID string `json:"request_id"`
 				Result    string `json:"result"`
 			} `json:"arguments"`
 		}
 		_ = json.Unmarshal(m.Params, &p)
-		if p.Name != "report" {
-			s.fail(m.ID, -32602, "unknown tool: "+p.Name)
-			return
-		}
 		resp, ok := s.Call(daemonctl.Request{Op: "channel-report", Args: map[string]string{"request_id": p.Arguments.RequestID, "result": p.Arguments.Result}})
 		text := "Reported to the sender."
 		if !ok {
@@ -166,6 +199,54 @@ func (s *ChannelServer) handle(m rpcMessage) {
 	}
 }
 
+func (s *ChannelServer) callTool(id json.RawMessage, name string, args json.RawMessage) {
+	for _, t := range s.Tools {
+		if t.Name != name {
+			continue
+		}
+		if t.NotDuringHop {
+			if s.currentSession() == "" {
+				s.reply(id, toolText("Share2Us doesn't know this Claude session yet (it may still be starting, or it isn't bound: run `s2u agent bind` here). Try again shortly, or use `s2u agent send` in a shell.", true))
+				return
+			}
+			if s.inHop() {
+				s.reply(id, toolText("Not while this session is running a request from another agent: report back to its sender instead.", true))
+				return
+			}
+		}
+		// Off the read loop: a send can take seconds and the session keeps talking to us.
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			text, isErr := t.Run(ctx, args)
+			s.reply(id, toolText(text, isErr))
+		}()
+		return
+	}
+	s.fail(id, -32602, "unknown tool: "+name)
+}
+
+func toolText(text string, isError bool) map[string]any {
+	return map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "isError": isError}
+}
+
+// inHop: this session is running a delivered prompt. Unknown (no session yet, daemon
+// unreachable) counts as in a hop, so the refusal fails closed.
+func (s *ChannelServer) currentSession() string {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	return s.session
+}
+
+func (s *ChannelServer) inHop() bool {
+	session := s.currentSession()
+	if session == "" {
+		return true
+	}
+	resp, ok := s.Call(daemonctl.Request{Op: "channel-guarded", Args: map[string]string{"session": session}})
+	return !ok || resp.OK
+}
+
 // pump finds the session, then polls the daemon and pushes deliveries.
 func (s *ChannelServer) pump(ctx context.Context) {
 	var session string
@@ -181,6 +262,9 @@ func (s *ChannelServer) pump(ctx context.Context) {
 		case <-time.After(2 * time.Second):
 		}
 	}
+	s.sessionMu.Lock()
+	s.session = session
+	s.sessionMu.Unlock()
 	s.logf("share2us channel: listening for session %s", session)
 	t := time.NewTicker(s.Poll)
 	defer t.Stop()

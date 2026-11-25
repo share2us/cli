@@ -69,6 +69,8 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentTyped(args[1:])
 	case "bindings":
 		return a.agentBindings(ctx)
+	case "skill":
+		return a.agentSkill(args[1:])
 	case "goal", "goals":
 		return a.agentGoal(ctx, args[1:])
 	case "project":
@@ -92,12 +94,12 @@ func (a app) agent(ctx context.Context, args []string) int {
 }
 
 func (a app) agentUsage() int {
-	fmt.Fprintf(a.stderr, "usage: %s agent <list|pin|hide|rename|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|typed|bindings|goal|rules|policy>\n", commandName)
+	fmt.Fprintf(a.stderr, "usage: %s agent <list|pin|hide|rename|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|typed|bindings|skill|goal|rules|policy>\n", commandName)
 	fmt.Fprintf(a.stderr, "  list [--all]                               reachable agent sessions across your devices\n                                             (--all includes hidden ones)\n")
 	fmt.Fprintf(a.stderr, "  pin|unpin <agent-id>                       pin an agent to the top of the list (or undo)\n")
 	fmt.Fprintf(a.stderr, "  hide|unhide <agent-id>                     hide an agent from the default list (or undo)\n")
 	fmt.Fprintf(a.stderr, "  rename <agent-id> [NAME]                   give an agent a local name (empty NAME clears it);\n                                             this is your label only, nobody else sees it\n")
-	fmt.Fprintf(a.stderr, "  send --agent ID --prompt P [--file PATH] [--goal ID]\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
+	fmt.Fprintf(a.stderr, "  send --to NAME|ID --prompt P [--file PATH] [--goal ID]\n                                             NAME is the agent's name or alias, or its device's\n                                             name when that device has one agent (e.g. --to homelab)\n                                             inject a prompt (+ optional file). With --goal it\n                                             is a counted hop against that goal's budget.\n")
 	fmt.Fprintf(a.stderr, "       --inbox --file PATH                   drop a file in the agent's inbox without running it\n")
 	fmt.Fprintf(a.stderr, "       [--device ID] [--session ID]         or name the session instead; any id may be a\n                                             unique prefix, as `agent list` prints it\n")
 	fmt.Fprintf(a.stderr, "       [--project ID [--as AGENT-ID]]       to an agent in another account: both agents must\n                                             be members of that project. The sending agent is\n                                             the one bound to this directory unless --as names it.\n")
@@ -115,6 +117,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  unbind <session-id|--project DIR>          stop advertising it\n")
 	fmt.Fprintf(a.stderr, "  typed <on|off> [--project DIR]              allow or pause automatic Zellij typing for a Claude binding\n")
 	fmt.Fprintf(a.stderr, "  bindings                                   what this machine advertises\n")
+	fmt.Fprintf(a.stderr, "  skill [install]                            install the /s2u Claude Code skill, so Claude\n                                             sessions know how to reach your other agents\n")
 	fmt.Fprintf(a.stderr, "  goal <new|list|show|close|wait>            a unit of autonomous work, with a budget\n")
 	fmt.Fprintf(a.stderr, "  rules [--project DIR]                      show which .s2u.rules are hard-enforced vs advisory\n")
 	fmt.Fprintf(a.stderr, "  policy [--project DIR] [LEVEL]             show or set this agent's privilege\n")
@@ -210,6 +213,11 @@ func (a app) agentBind(ctx context.Context, args []string) int {
 	// A bound session is only reachable while the daemon runs: make sure it does.
 	a.ensureAgentReachable()
 	a.channelHint(s)
+	if s.Tool == "claude" || b.Tool == "claude" {
+		if path, err := installClaudeSkill(); err == nil {
+			fmt.Fprintf(a.stdout, "Claude skill /s2u installed (%s): sessions know how to reach your other agents.\n", path)
+		}
+	}
 	return 0
 }
 

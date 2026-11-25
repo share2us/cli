@@ -21,6 +21,9 @@ import (
 type agentTarget struct {
 	AgentID, SessionID, DeviceID, DeviceName, Tool, Status, PublicKey string
 	LastSeen                                                          string
+	// Names the sender may address it by instead of an id: the session's name and the
+	// local alias (`agent rename`).
+	Names []string
 	// LANFingerprint is the target device's lanid fingerprint (from the
 	// directory), used to find and pin its agent-file receiver for a direct LAN
 	// transfer. Empty means relay-only.
@@ -28,9 +31,11 @@ type agentTarget struct {
 }
 
 func targetsFromSessions(list []clicore.AgentSessionInfo) []agentTarget {
+	config, _ := clicore.LoadConfig()
 	out := make([]agentTarget, 0, len(list))
 	for _, s := range list {
 		out = append(out, agentTarget{
+			Names:   []string{s.Name, config.AgentDisplayName(s.AgentID, s.Name)},
 			AgentID: s.AgentID, SessionID: s.SessionID, DeviceID: s.DeviceID,
 			DeviceName: s.DeviceName, Tool: s.Tool, Status: s.Status,
 			PublicKey: s.DevicePublicKey, LastSeen: s.LastSeen, LANFingerprint: s.LANFingerprint,
@@ -83,6 +88,9 @@ func pickTarget(targets []agentTarget, q targetQuery) (agentTarget, error) {
 			hits = append(hits, t)
 		}
 	}
+	if len(hits) == 0 && q.Agent != "" && q.Device == "" && q.Session == "" {
+		hits = targetsByName(targets, q.Agent)
+	}
 	switch len(hits) {
 	case 1:
 		return hits[0], nil
@@ -98,6 +106,31 @@ func pickTarget(targets []agentTarget, q targetQuery) (agentTarget, error) {
 		fmt.Fprintf(&b, "\n  %s", targetFlags(t))
 	}
 	return agentTarget{}, fmt.Errorf("%s", b.String())
+}
+
+// targetsByName matches an agent by its name or alias, else by its device's name (so
+// "homelab" finds the one agent on homelab). Case-insensitive, exact.
+func targetsByName(targets []agentTarget, name string) []agentTarget {
+	name = strings.TrimSpace(name)
+	var byName, byDevice []agentTarget
+	for _, t := range targets {
+		if t.Status == "offline" {
+			continue
+		}
+		for _, n := range t.Names {
+			if n != "" && strings.EqualFold(n, name) {
+				byName = append(byName, t)
+				break
+			}
+		}
+		if t.DeviceName != "" && strings.EqualFold(t.DeviceName, name) {
+			byDevice = append(byDevice, t)
+		}
+	}
+	if len(byName) > 0 {
+		return byName
+	}
+	return byDevice
 }
 
 // targetFlags is how a target is written on the command line, in full.
