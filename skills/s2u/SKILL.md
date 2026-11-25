@@ -18,7 +18,8 @@ matching row. With no command, or `help`, print this table and the output of
 | `list` | Reachable agents: `list_agents` tool if present, else `s2u agent list`. |
 | `send <agent> <task> [file]` | Hand a task (and optionally a file) to another agent (see "Sending"). |
 | `ask <agent> <question>` | Same as send, phrased as a question that needs an answer back. |
-| `status <request-id>` | `request_status` tool, else `s2u agent status <id>`. |
+| `status <request-id>` | `request_status` tool, else `s2u agent status <id>` (status, timing: sent / delivered / finished, and the reply; `--json`). |
+| `wait <request-id>` | Block until it finishes and print the reply: `s2u agent wait <id>` (run in the background). |
 | `results` | Recent finished requests this device sent: `s2u agent results`. |
 | `cancel <request-id>` | Withdraw a request that hasn't started: `cancel_request` tool, else `s2u agent cancel <id>`. |
 | `pending` | Requests waiting for approval on THIS device: `s2u agent pending`. |
@@ -53,11 +54,21 @@ it. Use that only when the user asks for a plain file transfer to a device.
    conversation. Say exactly what result you need back.
 3. Send it: `send_to_agent` tool (`to`, `prompt`, optional `file`) if present, else
    `s2u agent send --to <agent> --prompt "<prompt>" [--file PATH]`.
-4. Don't poll. The result comes back by itself: as a `kind="result"` channel event when the
-   share2us channel is loaded, and as a desktop notification. Then read it with
-   `status <id>`. Tell the user the request id.
+4. Get the reply without polling:
+   - With the share2us channel loaded (`send_to_agent` tool), it arrives by itself as a
+     `kind="result"` event.
+   - Otherwise send with `--wait` and run that command IN THE BACKGROUND (Claude Code: Bash
+     with run_in_background), so you are told the moment it finishes and its output is
+     the reply: `s2u agent send --to <agent> --prompt "..." --wait`. For a request
+     already sent: `s2u agent wait <id>`. Never loop on `sleep` + `status`.
+   Tell the user the request id, and relay the reply when it lands.
 
 ## What to expect
+
+- When a reply lands, check it before relaying it: status `failed` (the target stopped
+  responding, restarted, or the turn was interrupted) or a result starting with
+  `Blocked on the target:` (its guard refused a command) means the request did NOT fully
+  work. Tell the user plainly what broke and what would fix it; don't report success.
 
 - `pending`: the target device hasn't approved this sender yet. Tell the user to approve it
   on that device (`s2u agent pending`, then `s2u agent approve <id>` there).

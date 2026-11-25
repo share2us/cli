@@ -12,6 +12,33 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **`s2u agent wait <id>` and `s2u agent send ... --wait`**: block until the request
+  finishes and print the reply (progress on stderr; exit 0 done, 1 other final state, 124
+  when the wait runs out, default 9 minutes). `/s2u` tells agents without the share2us
+  channel to run it in the background, so the reply lands the moment it exists instead of
+  them sleeping and polling.
+- `s2u --help` lists `s2u status`.
+- `s2u agent status <id>` shows timing (sent, delivered after N, finished after N) and takes
+  `--json`; `--wait` prints the same timing when the request finishes.
+
+### Fixed
+
+- **A request that breaks on the target now says so to the sender.** If the target's guard
+  refuses a command, the result starts with `Blocked on the target:` and names the refused
+  commands (it used to read as a plain `done`). With the server update, a request whose
+  target device goes quiet for 3 minutes, or whose daemon restarts mid-run, ends as
+  `failed` with the reason instead of staying `running` forever. `/s2u` tells agents to
+  report these as failures, not successes.
+- A typed prompt no longer carries the reply instruction twice (the receiver adds its note
+  only when the sender's CLI didn't).
+
+### Changed
+
+- A `send --file` no longer always waits 3 seconds for LAN discovery: it stops as soon as
+  the target device answers (cli-core v0.75.0; v0.76.0 adds request timing).
+
 ## [20261125205448] - 2026-11-25
 
 ### Changed

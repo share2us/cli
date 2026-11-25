@@ -141,6 +141,9 @@ func (a app) agentHook(args []string) int {
 		}
 		_ = json.Unmarshal(resp.Data, &g)
 		if deny, reason := daemon.HookDecision(in.CWD, in.ToolName, in.ToolInput, g.Strict); deny {
+			// The sender must learn its request hit a wall, not just read a vague "done".
+			_, _ = daemonctl.Call(daemonctl.Request{Op: "channel-denied", Args: map[string]string{
+				"session": in.SessionID, "what": daemon.DescribeToolUse(in.ToolName, in.ToolInput)}})
 			fmt.Fprintln(a.stdout, hookDeny(reason))
 		}
 	case "stop":
