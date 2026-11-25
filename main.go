@@ -153,7 +153,7 @@ func (a app) maybeShowTip(command string) {
 		return
 	}
 	switch command {
-	case "", "help", "-h", "--help", "version", "-v", "--version", "tui", "mcp", "daemon", "agent", "forms", "setup":
+	case "", "help", "-h", "--help", "version", "-v", "--version", "tui", "mcp", "daemon", "agent", "forms", "setup", "keys", "sharenet":
 		return
 	}
 	if mrand.Intn(tipEveryN) != 0 {
@@ -255,6 +255,10 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 		return a.agent(ctx, args[1:])
 	case "forms":
 		return a.forms(ctx, args[1:])
+	case "keys":
+		return a.keys(ctx, args[1:])
+	case "sharenet":
+		return a.sharenet(ctx, args[1:])
 	case "claude":
 		return a.claude(ctx, args[1:])
 	case "setup":
@@ -1969,8 +1973,27 @@ func (a app) upload(ctx context.Context, args []string) int {
 	if code := a.runSecretPreflight(path, opts); code != 0 {
 		return code
 	}
-	if opts.encrypt || opts.device != "" || opts.teammate != "" {
-		dataKey, err = clicore.NewDataKey()
+	// ADR-051 Secure ShareNet: the file, its name and its type never reach the server in
+	// the clear. The key and name are sealed under the sharenet's current epoch key.
+	var securePost clicore.SealedPost
+	secure := false
+	if opts.sharenet != "" || opts.project != "" {
+		var secureErr error
+		securePost, _, secure, secureErr = a.prepareSecurePost(ctx, client, opts.sharenet, opts.project, fileName)
+		if secureErr != nil {
+			return a.fail("prepare the Secure ShareNet post", secureErr)
+		}
+		if secure && strings.TrimSpace(opts.note) != "" {
+			fmt.Fprintln(a.stderr, "--note isn't allowed in a Secure ShareNet: it would be stored unencrypted")
+			return 2
+		}
+	}
+	if opts.encrypt || opts.device != "" || opts.teammate != "" || secure {
+		if secure {
+			dataKey = securePost.DataKey
+		} else {
+			dataKey, err = clicore.NewDataKey()
+		}
 		if err != nil {
 			return a.fail("generate encryption key", err)
 		}
@@ -2000,7 +2023,7 @@ func (a app) upload(ctx context.Context, args []string) int {
 		}
 		uploadPath = tmpPath
 		uploadSize = encryptedInfo.Size()
-		if !folderUpload {
+		if !folderUpload || secure {
 			contentType = "application/octet-stream"
 		}
 	}
@@ -2042,15 +2065,24 @@ func (a app) upload(ctx context.Context, args []string) int {
 		}
 	}
 
+	requestFileName := fileName
+	if secure {
+		requestFileName = "encrypted" // the real one is in FileNameCT
+		requestedContentClass = ""
+	}
 	created, err := client.CreateUpload(ctx, clicore.UploadCreateRequest{
-		FileName:    fileName,
-		SizeBytes:   uint64(uploadSize),
-		ContentType: contentType,
-		ExpiresIn:   apiExpiry,
-		NoExpiry:    noExpiry,
-		SHA256:      sum,
-		SourceRef:   sourceRef,
-		New:         opts.newShare,
+		SecureEpoch:  securePost.Epoch,
+		FileKeyWrap:  securePost.FileKeyWrap,
+		FileNameCT:   securePost.FileNameCT,
+		SecureFileID: securePost.FileID,
+		FileName:     requestFileName,
+		SizeBytes:    uint64(uploadSize),
+		ContentType:  contentType,
+		ExpiresIn:    apiExpiry,
+		NoExpiry:     noExpiry,
+		SHA256:       sum,
+		SourceRef:    sourceRef,
+		New:          opts.newShare,
 		// ADR-050: inside an agent's process (s2u claude / a daemon run), a sharenet
 		// post says which agent is posting; the server enforces the owner's grant.
 		AgentID: func() string {
@@ -2096,6 +2128,9 @@ func (a app) upload(ctx context.Context, args []string) int {
 		ProjectID:      opts.project,
 	})
 	if err != nil {
+		if (opts.sharenet != "" || opts.project != "") && a.printSecurePostAPIError(err) {
+			return 1
+		}
 		if (opts.sharenet != "" || opts.project != "") && strings.Contains(err.Error(), "sharenet_not_found") {
 			fmt.Fprintln(a.stderr, "no such sharenet or project, or you are not a member of it")
 			return 1

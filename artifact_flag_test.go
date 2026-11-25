@@ -16,6 +16,11 @@ func captureCreate(t *testing.T, got *clicore.UploadCreateRequest, seen *bool) h
 	t.Helper()
 	inner := uploadHandler(t)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A project post first looks for the project among the caller's Secure ShareNets.
+		if r.URL.Path == "/v1/sharenets" {
+			writeTestJSON(w, map[string]any{"sharenets": []any{}})
+			return
+		}
 		if r.URL.Path == "/v1/uploads" {
 			if err := json.NewDecoder(r.Body).Decode(got); err != nil {
 				t.Fatalf("decode: %v", err)

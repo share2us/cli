@@ -29,10 +29,13 @@ const (
 	// login adds one), and a sender is only recognized for direct LAN once it is
 	// cached, so this refreshes on a shorter cadence. A restart refreshes at once.
 	ownDevicesRefreshEvery = time.Hour
-	updateCheckEvery       = 6 * time.Hour
-	cleanupEvery           = 6 * time.Hour
-	schedulerTick          = 30 * time.Second
-	jobTimeout             = 60 * time.Second
+	// Secure ShareNet bookkeeping: hand the key to members who joined, rotate after one
+	// left. Members wait at most this long when no other member's device is online.
+	secureKeysSyncEvery = 5 * time.Minute
+	updateCheckEvery    = 6 * time.Hour
+	cleanupEvery        = 6 * time.Hour
+	schedulerTick       = 30 * time.Second
+	jobTimeout          = 60 * time.Second
 )
 
 // Options configures a daemon run. Zero values fall back to sensible defaults.
@@ -74,6 +77,9 @@ type Deps struct {
 	CheckUpdate func(ctx context.Context) (available bool, message string)
 	// Cleanup removes stale temp/staging files (best-effort).
 	Cleanup func(ctx context.Context) error
+	// SyncSecureKeys does the Secure ShareNet key work this device can (ADR-051):
+	// hand the current key to waiting members and rotate where a member left. nil = off.
+	SyncSecureKeys func(ctx context.Context) error
 	// AgentClient + AgentRunner drive the agent-session bridge (ADR-036); nil when
 	// the bridge is off.
 	AgentClient  AgentClient
@@ -364,6 +370,12 @@ func (rt *Runtime) scheduler(ctx context.Context, opts Options, deps Deps) {
 		{name: "own-devices-refresh", every: ownDevicesRefreshEvery, run: func(c context.Context) error {
 			if opts.AgentBridge && opts.LANDiscoverable && deps.RefreshOwnDevices != nil {
 				deps.RefreshOwnDevices(c)
+			}
+			return nil
+		}},
+		{name: "secure-keys-sync", every: secureKeysSyncEvery, run: func(c context.Context) error {
+			if deps.SyncSecureKeys != nil {
+				return deps.SyncSecureKeys(c)
 			}
 			return nil
 		}},
