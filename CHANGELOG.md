@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261125203942] - 2026-11-25
+
 ### Added
 
 - **`s2u status`**: one screen with who you're signed in as (email, plan, auth method,
