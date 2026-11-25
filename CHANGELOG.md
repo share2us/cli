@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261125140230] - 2026-11-25
+
 ### Fixed
 
 - **Agent prompts typed into a Claude window no longer get stuck on "input changed".** When
