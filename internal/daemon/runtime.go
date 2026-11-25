@@ -235,6 +235,8 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 				go func() { defer wg.Done(); rt.agentFileLANLoop(ctx, opts, deps) }()
 			}
 			wg.Add(1)
+			go func() { defer wg.Done(); rt.watchSentResults(ctx, deps.AgentClient, deps) }()
+			wg.Add(1)
 			go func() { defer wg.Done(); rt.agentBridge(ctx, deps.AgentClient, deps.AgentRunners, deps) }()
 		}
 	}

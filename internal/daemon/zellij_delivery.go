@@ -83,6 +83,11 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		_ = EndTypedGuard(req.TargetSessionID, req.ID)
 		return false
 	}
+	if cancelledBySender(ctx, client, req.ID) {
+		rt.hub().withdraw(req.TargetSessionID, req.ID)
+		_ = EndTypedGuard(req.TargetSessionID, req.ID)
+		return false // the hold path sees the cancel and drops it
+	}
 	if err := z.Paste(ctx, pane.Session, pane.Pane, visible); err != nil {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
 		_ = EndTypedGuard(req.TargetSessionID, req.ID)
@@ -110,6 +115,10 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 			}})
 		return true
 	}
+	if cancelledBySender(ctx, client, req.ID) {
+		rt.dropCancelledPaste(req, deps)
+		return true
+	}
 	if err := z.Enter(ctx, pane.Session, pane.Pane); err != nil {
 		// send-keys may have reached zellij even when its client reports an
 		// error. Retrying could run the same hop twice, so enter the same guarded
@@ -118,7 +127,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 			unverifiedPaste{visible: visible})
 		return true
 	}
-	rt.finishTypedInject(ctx, client, deps, req, shown, result, aborted, waited)
+	rt.finishTypedInject(ctx, client, deps, req, shown, result, aborted, waited, pane)
 	return true
 }
 
@@ -171,46 +180,92 @@ func waitForPastedClaudeInput(ctx context.Context, z zellijDriver, pane resolved
 	}
 }
 
-func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, deps Deps, req clicore.AgentRequest, shown string, result <-chan string, aborted <-chan struct{}, waited time.Duration) {
+func (rt *Runtime) finishTypedInject(ctx context.Context, client AgentClient, deps Deps, req clicore.AgentRequest, shown string, result <-chan string, aborted <-chan struct{}, waited time.Duration, pane resolvedZellijPane) {
 	rt.holding.Add(1)
+	poll := approvalPoll
 	go func() {
 		defer rt.holding.Add(-1)
 		deps.logf("agent-bridge: typed inject %s into open session %s", req.ID, req.TargetSessionID)
-		_ = client.AgentReportResult(ctx, req.ID, "running", "Delivered into the open "+req.Tool+" session.")
+		_ = client.AgentReportResult(ctx, req.ID, "running", typedDeliveredMsg(req.Tool))
 		hop := HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 			Target: req.TargetSessionID, RanIn: req.TargetSessionID, Mode: "typed", Prompt: shown}
 		if waited > 0 {
 			hop.Waited = waited.Round(time.Second).String()
 		}
-		deadline := requestDeadline(req)
+		deadline := time.NewTimer(time.Until(requestDeadline(req)))
+		defer deadline.Stop()
+		ticker := time.NewTicker(poll)
+		defer ticker.Stop()
+		approvals := approvalWatch{}
 		var out string
-		select {
-		case out = <-result:
-		case <-aborted:
-			hop.Status = "failed"
-			_ = AppendHop(hop)
-			_ = client.AgentReportResult(ctx, req.ID, "failed", "The typed turn was interrupted by a later owner turn.")
-			return
-		case <-time.After(time.Until(deadline)):
-			rt.hub().withdraw(req.TargetSessionID, req.ID)
-			hop.Status = "failed"
-			_ = AppendHop(hop)
-			_ = client.AgentReportResult(ctx, req.ID, "failed", "The typed agent turn did not finish within "+injectHoldMax.String()+".")
-			return
-		case <-ctx.Done():
-			return
+	wait:
+		for {
+			select {
+			case out = <-result:
+				break wait
+			case <-aborted:
+				hop.Status = "failed"
+				_ = AppendHop(hop)
+				_ = client.AgentReportResult(ctx, req.ID, "failed", "The typed turn was interrupted by a later owner turn.")
+				return
+			case <-deadline.C:
+				rt.hub().withdraw(req.TargetSessionID, req.ID)
+				hop.Status = "failed"
+				_ = AppendHop(hop)
+				_ = client.AgentReportResult(ctx, req.ID, "failed", "The typed agent turn did not finish within "+injectHoldMax.String()+".")
+				return
+			case <-ticker.C:
+				approvals.check(ctx, rt, client, req, pane)
+			case <-ctx.Done():
+				return
+			}
 		}
 		hop.Status = "done"
 		_ = AppendHop(hop)
 		if strings.TrimSpace(out) == "" {
 			out = noReportResult
 		}
+		out = approvals.annotate(out)
 		if len(out) > maxReportedResult {
 			out = out[:maxReportedResult]
 		}
 		_ = client.AgentReportResult(ctx, req.ID, "done", out)
 		_ = EndTypedGuard(req.TargetSessionID, req.ID)
 	}()
+}
+
+// approvalPoll is how often a running typed turn's window is checked for Claude's
+// approval dialog (todo ZT item 3: a turn blocked on approvals must not read as done).
+var approvalPoll = 5 * time.Second
+
+// approvalWatch tracks Claude's "Do you want to ...?" dialog during a typed turn.
+type approvalWatch struct {
+	showing, seen bool
+}
+
+func (w *approvalWatch) check(ctx context.Context, rt *Runtime, client AgentClient, req clicore.AgentRequest, pane resolvedZellijPane) {
+	screen, err := rt.paneDriver().Dump(ctx, pane.Session, pane.Pane)
+	if err != nil {
+		return
+	}
+	dialog := parseClaudeScreen(screen).Dialog
+	switch {
+	case dialog && !w.showing:
+		w.showing, w.seen = true, true
+		_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: the "+req.Tool+" session is asking its owner to approve a step. The request continues once they answer.")
+	case !dialog && w.showing:
+		w.showing = false
+		_ = client.AgentReportResult(ctx, req.ID, "running", typedDeliveredMsg(req.Tool))
+	}
+}
+
+// annotate tells the sender that the turn needed approvals, so a turn that was blocked
+// or partly refused doesn't read as a plain success.
+func (w *approvalWatch) annotate(out string) string {
+	if !w.seen {
+		return out
+	}
+	return out + "\n\n(Note: the session asked its owner to approve steps during this turn; some may have been declined.)"
 }
 
 // noReportResult is the result of a turn that ended without a channel report and without
@@ -252,6 +307,7 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 		defer rt.holding.Add(-1)
 		deadline := requestDeadline(req)
 		checks, unclean, entered, stuckReported := 0, 0, !u.allowEnter, false
+		approvals := approvalWatch{}
 		next := func() time.Duration {
 			if checks < len(recheck) {
 				return recheck[checks]
@@ -278,6 +334,7 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 				if strings.TrimSpace(out) == "" {
 					out = noReportResult
 				}
+				out = approvals.annotate(out)
 				if len(out) > maxReportedResult {
 					out = out[:maxReportedResult]
 				}
@@ -286,6 +343,13 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 				return
 			case <-timer.C:
 				checks++
+				if entered {
+					approvals.check(ctx, rt, client, req, pane)
+				}
+				if !entered && cancelledBySender(ctx, client, req.ID) {
+					rt.dropCancelledPaste(req, deps)
+					return
+				}
 				screen, err := rt.paneDriver().Dump(ctx, pane.Session, pane.Pane)
 				if err == nil {
 					state := parseClaudeScreen(screen)
@@ -300,7 +364,7 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 						entered = true
 						if rt.paneDriver().Enter(ctx, pane.Session, pane.Pane) == nil {
 							deps.logf("agent-bridge: typed inject %s submitted after re-check", req.ID)
-							_ = client.AgentReportResult(ctx, req.ID, "running", "Delivered into the open "+req.Tool+" session.")
+							_ = client.AgentReportResult(ctx, req.ID, "running", typedDeliveredMsg(req.Tool))
 						}
 					case !entered && !state.Busy && state.InputEmpty:
 						// The owner cleared the unsubmitted text. Release the guard and
@@ -330,6 +394,22 @@ func (rt *Runtime) watchUnverifiedPaste(ctx context.Context, client AgentClient,
 			}
 		}
 	}()
+}
+
+// dropCancelledPaste ends a typed hop the sender cancelled before Enter was pressed. The
+// pasted text stays in the input (clearing someone's input box is not ours to do); the
+// owner is told it was not submitted.
+func (rt *Runtime) dropCancelledPaste(req clicore.AgentRequest, deps Deps) {
+	rt.hub().withdraw(req.TargetSessionID, req.ID)
+	_ = EndTypedGuard(req.TargetSessionID, req.ID)
+	deps.logf("agent-bridge: inject %s cancelled by its sender before submission", req.ID)
+	rt.notify("Share2Us", "A prompt in your "+req.Tool+" input was cancelled by its sender and was NOT submitted. You can clear it.")
+	_ = AppendHop(HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
+		Target: req.TargetSessionID, Mode: "typed", Status: "cancelled"})
+}
+
+func typedDeliveredMsg(tool string) string {
+	return "Delivered by typing into the open " + tool + " window (Zellij)."
 }
 
 func requestDeadline(req clicore.AgentRequest) time.Time {

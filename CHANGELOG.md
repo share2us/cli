@@ -23,6 +23,20 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 - `s2u agent approve <id>` on the wrong device explains that the request is waiting on
   another device, instead of a bare not_found.
 - `s2u agent status` retries a server error (5xx) briefly instead of failing at once.
+- A typed turn that stops on Claude's approval dialog reports `waiting` (the target is
+  asking its owner to approve a step), and its result says approvals were involved, instead
+  of a plain `done`.
+
+### Added
+
+- `s2u agent cancel <id>` withdraws a request you sent before it runs; the target never
+  submits it (text already typed into its input is left there, unsubmitted, and its owner
+  is told).
+- Results of requests you send come back to you: the daemon shows a notification when one
+  finishes, and `s2u agent results` lists them (`--json` for scripts). No more polling
+  `agent status`.
+- `agent status` names the delivery path once a request is delivered (Claude channel,
+  typed into the open window, or headless).
 
 ## [20261125130957] - 2026-11-25
 

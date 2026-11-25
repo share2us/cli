@@ -42,6 +42,10 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentSend(ctx, args[1:])
 	case "status":
 		return a.agentStatus(ctx, args[1:])
+	case "cancel":
+		return a.agentCancel(ctx, args[1:])
+	case "results":
+		return a.agentResults(args[1:])
 	case "pending":
 		return a.agentPending(ctx)
 	case "approve":
@@ -563,6 +567,7 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		ProjectID:            projectID,
 		SenderAgentID:        senderAgent,
 		SenderDeviceName:     currentDeviceName(ctx, client, credential.DeviceSessionID),
+		SenderSessionID:      sendingSession(senderAgent),
 	})
 	if err != nil {
 		return a.fail("send", err)
@@ -580,6 +585,9 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		}
 		fmt.Fprintf(a.stdout, "Sent (%s)%s, queued for delivery. Track: %s agent status %s\n", res.RequestID, via, commandName, res.RequestID)
 	}
+	// The target decides how it delivers (Claude channel, typing into the open window,
+	// or a headless run); `agent status` names the path once it is delivered.
+	fmt.Fprintf(a.stdout, "When it finishes, this device's daemon notifies you and `%s agent results` shows the outcome. Cancel before it runs: %s agent cancel %s\n", commandName, commandName, res.RequestID)
 	return 0
 }
 
@@ -1004,4 +1012,75 @@ func (a app) agentAllowed(ctx context.Context) int {
 func isServerError(err error) bool {
 	var apiErr *clicore.APIError
 	return errors.As(err, &apiErr) && apiErr.Status >= 500
+}
+
+// sendingSession is the agent session this send comes from (the bound session of the
+// sending agent, or of this directory), so the outcome can be routed back to it.
+func sendingSession(senderAgent string) string {
+	list, err := daemon.LoadBindings()
+	if err != nil {
+		return ""
+	}
+	agent := strings.TrimSpace(senderAgent)
+	if agent == "" {
+		agent = strings.TrimSpace(os.Getenv(daemon.AgentEnvVar))
+	}
+	if agent == "" {
+		cwd, _ := os.Getwd()
+		agent, _ = daemon.AgentIDForProject(list, cwd)
+	}
+	for _, b := range list {
+		if agent != "" && b.AgentID == agent {
+			return b.SessionID
+		}
+	}
+	return ""
+}
+
+// agentCancel withdraws a request this device sent that hasn't started running.
+func (a app) agentCancel(ctx context.Context, args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintf(a.stderr, "usage: %s agent cancel <request-id>\n", commandName)
+		return 2
+	}
+	client, ok := a.agentClient()
+	if !ok {
+		return 1
+	}
+	if err := client.AgentCancel(ctx, args[0]); err != nil {
+		var apiErr *clicore.APIError
+		if errors.As(err, &apiErr) && apiErr.Code == "not_cancellable" {
+			fmt.Fprintf(a.stderr, "cancel: too late, %s\n", strings.TrimPrefix(apiErr.Message, "the request is "))
+			return 1
+		}
+		return a.fail("cancel", err)
+	}
+	fmt.Fprintln(a.stdout, "Cancelled. The target will not run it.")
+	return 0
+}
+
+// agentResults lists the outcomes of requests this device sent, newest last.
+func (a app) agentResults(args []string) int {
+	asJSON := len(args) > 0 && args[0] == "--json"
+	results, err := daemon.LoadSentResults(50)
+	if err != nil {
+		return a.fail("results", err)
+	}
+	if asJSON {
+		writeJSON(a.stdout, results)
+		return 0
+	}
+	if len(results) == 0 {
+		fmt.Fprintln(a.stdout, "No finished requests yet (the daemon records them as they finish).")
+		return 0
+	}
+	for _, r := range results {
+		fmt.Fprintf(a.stdout, "%s  %-9s  %s  -> %s %s\n", r.Time.Local().Format("2006-01-02 15:04"), r.Status, r.RequestID, r.Tool, shorten(r.TargetSession))
+		if res := strings.TrimSpace(r.Result); res != "" {
+			for _, line := range strings.Split(res, "\n") {
+				fmt.Fprintf(a.stdout, "    %s\n", line)
+			}
+		}
+	}
+	return 0
 }
