@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261125202736] - 2026-11-25
+
 ### Fixed
 
 - **Prompts reach the Claude window you're looking at.** After `/clear` (or a new `claude`
