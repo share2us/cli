@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261125073511] - 2026-11-25
+
 ### Changed
 
 - **ShareNet agents are read-only by default** (ADR-050). `s2u claude` and the daemon's
