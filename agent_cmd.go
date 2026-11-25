@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/share2us/cli-core/daemonctl"
 	"net/url"
 	"os"
 	"sort"
@@ -45,7 +46,7 @@ func (a app) agent(ctx context.Context, args []string) int {
 	case "cancel":
 		return a.agentCancel(ctx, args[1:])
 	case "results":
-		return a.agentResults(args[1:])
+		return a.agentResults(ctx, args[1:])
 	case "pending":
 		return a.agentPending(ctx)
 	case "approve":
@@ -585,10 +586,26 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		}
 		fmt.Fprintf(a.stdout, "Sent (%s)%s, queued for delivery. Track: %s agent status %s\n", res.RequestID, via, commandName, res.RequestID)
 	}
-	// The target decides how it delivers (Claude channel, typing into the open window,
-	// or a headless run); `agent status` names the path once it is delivered.
-	fmt.Fprintf(a.stdout, "When it finishes, this device's daemon notifies you and `%s agent results` shows the outcome. Cancel before it runs: %s agent cancel %s\n", commandName, commandName, res.RequestID)
+	// The target picks the path when it delivers; it can't be known here.
+	fmt.Fprintln(a.stdout, "Delivery: the target device picks the path (its Claude channel if loaded, else typing into the open window, else a headless run); `agent status` names it once delivered.")
+	fmt.Fprintf(a.stdout, "Results: `%s agent results`. Cancel before it runs: %s agent cancel %s\n", commandName, commandName, res.RequestID)
+	if note := staleDaemonNote(); note != "" {
+		fmt.Fprintln(a.stderr, note)
+	}
 	return 0
+}
+
+// staleDaemonNote warns when the running daemon is another build than this CLI: an old
+// daemon doesn't collect results or push them to the sending session.
+func staleDaemonNote() string {
+	resp, ok := daemonctl.Query("status")
+	if !ok || !resp.OK {
+		return "note: the Share2Us daemon is not running, so you won't be notified when this finishes. Start it: " + commandName + " daemon start"
+	}
+	if resp.Version != "" && resp.Version != clicore.FullVersion() {
+		return fmt.Sprintf("note: the running daemon is %s but this CLI is %s; restart it to get result notices: %s daemon restart", resp.Version, clicore.FullVersion(), commandName)
+	}
+	return ""
 }
 
 func currentDeviceName(ctx context.Context, client *clicore.Client, deviceID string) string {
@@ -883,7 +900,8 @@ func (a app) agentStatus(ctx context.Context, args []string) int {
 		}
 	}
 	if err != nil {
-		return a.fail("status", err)
+		// Not "status:", which is how a request's state is printed.
+		return a.fail("agent status failed", err)
 	}
 	// A waiting hop whose target session cannot be verified carries a re-bind
 	// marker; surface it as an action, not a bare status line.
@@ -961,7 +979,11 @@ func (a app) agentApprove(ctx context.Context, args []string) int {
 			// Approval happens on the device the request was sent to. Say so instead of a
 			// bare not_found when it exists but is waiting somewhere else.
 			if st, serr := client.AgentInjectStatus(ctx, args[0]); serr == nil && st.Status != "" {
-				fmt.Fprintf(a.stderr, "approve: request %s is %s, but not waiting for approval on this device. Approve it on the device it was sent to (run `%s agent pending` there).\n", args[0], st.Status, commandName)
+				where := "the device it was sent to"
+				if st.TargetDeviceName != "" {
+					where = fmt.Sprintf("device %q", st.TargetDeviceName)
+				}
+				fmt.Fprintf(a.stderr, "approve: request %s is %s and waits on %s, not this one. Approve it there (run `%s agent pending` on that device).\n", args[0], st.Status, where, commandName)
 				return 1
 			}
 		}
@@ -1060,8 +1082,17 @@ func (a app) agentCancel(ctx context.Context, args []string) int {
 }
 
 // agentResults lists the outcomes of requests this device sent, newest last.
-func (a app) agentResults(args []string) int {
+func (a app) agentResults(ctx context.Context, args []string) int {
 	asJSON := len(args) > 0 && args[0] == "--json"
+	// Collect anything the daemon hasn't (it may be stopped, or an older build without
+	// the collector). Best effort: offline, the local log is still shown.
+	if client, _, ok := a.authClient(); ok {
+		if updates, err := client.AgentUpdates(ctx); err == nil && len(updates) > 0 {
+			if rerr := daemon.RecordSentUpdates(updates); rerr != nil {
+				fmt.Fprintf(a.stderr, "warning: could not save %d result(s) locally: %v\n", len(updates), rerr)
+			}
+		}
+	}
 	results, err := daemon.LoadSentResults(50)
 	if err != nil {
 		return a.fail("results", err)
@@ -1071,7 +1102,7 @@ func (a app) agentResults(args []string) int {
 		return 0
 	}
 	if len(results) == 0 {
-		fmt.Fprintln(a.stdout, "No finished requests yet (the daemon records them as they finish).")
+		fmt.Fprintln(a.stdout, "No finished requests yet.")
 		return 0
 	}
 	for _, r := range results {

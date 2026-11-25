@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,15 +135,27 @@ func (rt *Runtime) collectSentResults(ctx context.Context, uc agentUpdatesClient
 	if err != nil || len(updates) == 0 {
 		return // an older server has no updates endpoint: stay quiet
 	}
+	if err := RecordSentUpdates(updates); err != nil {
+		deps.logf("agent-bridge: could not save sent results: %v", err)
+	}
+	for _, u := range updates {
+		rt.notify("Share2Us agent request "+u.Status, sentResultSummary(u))
+		if u.SenderSessionID != "" {
+			rt.hub().notice(u.SenderSessionID, resultNotice(u))
+		}
+	}
+}
+
+// RecordSentUpdates appends claimed final states to the local sent-results log. The
+// server hands each one out once, so whoever claims it (daemon or `agent results`) must
+// record it.
+func RecordSentUpdates(updates []clicore.AgentUpdate) error {
 	recs := make([]SentResult, 0, len(updates))
 	for _, u := range updates {
 		recs = append(recs, SentResult{Time: time.Now().UTC(), RequestID: u.ID, Status: u.Status, Result: CleanRemoteText(u.Result),
 			Tool: u.Tool, TargetSession: u.TargetSessionID, SenderSession: u.SenderSessionID})
-		rt.notify("Share2Us agent request "+u.Status, sentResultSummary(u))
 	}
-	if err := appendSentResults(recs); err != nil {
-		deps.logf("agent-bridge: could not save sent results: %v", err)
-	}
+	return appendSentResults(recs)
 }
 
 // sentResultSummary is a one-line notification body.
@@ -170,4 +183,17 @@ func CleanRemoteText(s string) string {
 		}
 		return -1
 	}, s)
+}
+
+// resultNotice tells the sending session its request finished. It never carries the
+// target's reply: that text comes from another agent, and a channel event reads as a
+// task, so the session fetches the reply itself (a command's output is data to it).
+func resultNotice(u clicore.AgentUpdate) ChannelDelivery {
+	target := u.TargetSessionID
+	if target == "" {
+		target = "the target session"
+	}
+	return ChannelDelivery{RequestID: u.ID, Prompt: fmt.Sprintf(
+		"Your Share2Us request %s to %s finished with status %q. This is a status notice, not a task. To read the reply, run: s2u agent status %s",
+		u.ID, target, u.Status, u.ID)}
 }

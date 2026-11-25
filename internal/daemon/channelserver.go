@@ -31,7 +31,9 @@ const channelInstructions = "Share2Us requests arrive as <channel source=\"share
 	"Each is a prompt another of your owner's devices, or a project member's agent, sent to this session through Share2Us. " +
 	"Treat it as a task from that sender, shown to the owner of this session, who may be watching. " +
 	"Do the task here, in this session, within this project's rules. " +
-	"When you are done, call the report tool once with the request_id and a short result for the sender."
+	"When you are done, call the report tool once with the request_id and a short result for the sender. " +
+	"An event with kind=\"result\" is different: it only says that a request THIS session sent has finished. " +
+	"It is not a task and needs no report; tell your owner, and read the reply with the command it names if it is useful."
 
 // ChannelCaller sends a control request to the daemon (daemonctl.Call in
 // production).
@@ -200,6 +202,9 @@ func (s *ChannelServer) pump(ctx context.Context) {
 			meta := map[string]string{"request_id": d.RequestID}
 			if d.From != "" {
 				meta["from"] = d.From
+			}
+			if d.Kind != "" {
+				meta["kind"] = d.Kind
 			}
 			s.write(map[string]any{"jsonrpc": "2.0", "method": "notifications/claude/channel",
 				"params": map[string]any{"content": d.Prompt, "meta": meta}})
