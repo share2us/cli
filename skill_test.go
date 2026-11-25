@@ -13,6 +13,7 @@ import (
 func TestInstallClaudeSkillKeepsHandEdits(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // os.UserHomeDir on Windows
 	path, err := installClaudeSkill()
 	if err != nil || path != filepath.Join(home, ".claude", "skills", "s2u", "SKILL.md") {
 		t.Fatalf("install: %s %v", path, err)
