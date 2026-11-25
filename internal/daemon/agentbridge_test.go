@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 )
 
 type fakeAgentClient struct {
+	mu           sync.Mutex  // reports is written by delivery goroutines
 	reports      [][2]string // {status, result}
 	reportNotify chan struct{}
 	registered   []string
@@ -49,7 +51,9 @@ func (f *fakeAgentClient) AgentLongPoll(_ context.Context, _ int) ([]clicore.Age
 	return nil, nil
 }
 func (f *fakeAgentClient) AgentReportResult(_ context.Context, _, status, result string) error {
+	f.mu.Lock()
 	f.reports = append(f.reports, [2]string{status, result})
+	f.mu.Unlock()
 	if f.reportNotify != nil {
 		select {
 		case f.reportNotify <- struct{}{}:
@@ -471,4 +475,12 @@ func TestReceiverRefusesARelabelledProjectOrAgent(t *testing.T) {
 	if r.ranPrompt != "go" {
 		t.Fatalf("a genuine v2 hop did not run: %q", r.ranPrompt)
 	}
+}
+
+// reportsSnapshot copies reports under the lock (for tests that read while a delivery
+// goroutine may still report).
+func (f *fakeAgentClient) reportsSnapshot() [][2]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][2]string(nil), f.reports...)
 }

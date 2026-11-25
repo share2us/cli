@@ -12,6 +12,36 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Agent prompts typed into a Claude window no longer get stuck on "input changed".** When
+  the pasted request can't be confirmed at once, the daemon re-reads the input (after 1, 2,
+  4 and 8 seconds) and presses Enter once if the input holds exactly that request. It never
+  submits other text; after a few checks the sender sees `Stuck: input not clean`.
+- A typed request that ends without a channel report now returns the agent's last reply
+  from the session transcript, instead of "finished without a report".
+- `s2u agent approve <id>` on the wrong device explains that the request is waiting on
+  another device, instead of a bare not_found.
+- `s2u agent status` retries a server error (5xx) briefly instead of failing at once.
+- A typed turn that stops on Claude's approval dialog says so in its status (the target is
+  asking its owner to approve a step), and its result says approvals were involved, instead
+  of a plain `done`.
+- A cancel and the start of a typed request can no longer both win: the daemon claims the
+  request as running before pressing Enter and stops if the sender cancelled first.
+- A reply taken from the session transcript is withheld if it looks like it holds a secret,
+  and results from other devices are shown without terminal control characters.
+
+### Added
+
+- `s2u agent cancel <id>` withdraws a request you sent before it runs; the target never
+  submits it (text already typed into its input is left there, unsubmitted, and its owner
+  is told).
+- Results of requests you send come back to you: the daemon shows a notification when one
+  finishes, and `s2u agent results` lists them (`--json` for scripts). No more polling
+  `agent status`.
+- `agent status` names the delivery path once a request is delivered (Claude channel,
+  typed into the open window, or headless).
+
 ## [20261125130957] - 2026-11-25
 
 ### Fixed

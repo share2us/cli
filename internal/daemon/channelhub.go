@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"encoding/json"
+	clicore "github.com/share2us/cli-core"
 	"strings"
 	"sync"
 	"time"
@@ -257,10 +258,12 @@ func (h *channelHub) turnEnded(session string) {
 // request before that request can complete. Channel requests still require an
 // explicit report, independently of Stop.
 func (h *channelHub) turnEndedForHook(session, requestID string, verifyTyped bool) {
-	h.turnEndedForCaller(session, requestID, verifyTyped, 0)
+	h.turnEndedForCaller(session, requestID, verifyTyped, 0, "")
 }
 
-func (h *channelHub) turnEndedForCaller(session, requestID string, verifyTyped bool, claudePID int) {
+// reply is the agent's last transcript message for requestID, used as that typed
+// request's result when the agent sent no channel report.
+func (h *channelHub) turnEndedForCaller(session, requestID string, verifyTyped bool, claudePID int, reply string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id := range h.active[session] {
@@ -273,6 +276,9 @@ func (h *channelHub) turnEndedForCaller(session, requestID string, verifyTyped b
 		out, reported := h.reported[id]
 		if h.channel[id] && !reported {
 			continue // an unrelated owner turn is not this request's report
+		}
+		if !reported && id == requestID && reply != "" {
+			out = replyForSender(reply)
 		}
 		if r, ok := h.result[id]; ok {
 			r <- out
@@ -357,7 +363,7 @@ func (h *channelHub) channelControl(req daemonctl.Request, callerSessionPID func
 			(h.requestSession(requestID) != session || !h.requestOwnedByProcess(requestID, pid)) {
 			return daemonctl.Response{Err: "caller does not own this request"}, true
 		}
-		h.turnEndedForCaller(session, req.Args["request_id"], true, pid)
+		h.turnEndedForCaller(session, req.Args["request_id"], true, pid, req.Args["reply"])
 		return daemonctl.Response{OK: true}, true
 	case "channel-abandon-typed":
 		pid := callerPID(req.Args["session"])
@@ -385,4 +391,14 @@ func (h *channelHub) channelControl(req daemonctl.Request, callerSessionPID func
 		return daemonctl.Response{OK: active, Data: b}, true
 	}
 	return daemonctl.Response{}, false
+}
+
+// replyForSender keeps a transcript reply from carrying a secret off this device: the
+// agent never chose to send it (unlike a channel report), so a hit withholds it whole.
+func replyForSender(reply string) string {
+	res, err := clicore.ScanBytesForSecrets([]byte(reply), clicore.SecretScanOptions{})
+	if err != nil || len(res.Findings) > 0 {
+		return "The session finished, but its reply was withheld because it looks like it contains a secret. Ask its owner for the result."
+	}
+	return reply
 }

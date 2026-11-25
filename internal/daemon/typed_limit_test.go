@@ -65,8 +65,8 @@ func TestTypedDeliveryOwnerSwitchBlocksPaste(t *testing.T) {
 		DiscoveredSession{SessionID: "win-1", Tool: "claude", Project: dir, PID: 123, Status: "available", Live: true}, "read only", "read only", "sender", dir, 0) {
 		t.Fatal("owner-disabled binding accepted automatic typing")
 	}
-	if len(z.pasted) != 0 || z.entered != 0 {
-		t.Fatalf("owner-disabled binding touched pane: pasted=%v entered=%d", z.pasted, z.entered)
+	if len(z.pasted) != 0 || z.enters() != 0 {
+		t.Fatalf("owner-disabled binding touched pane: pasted=%v entered=%d", z.pasted, z.enters())
 	}
 	b, err = SetTypedDelivery(dir, true)
 	if err != nil || b.TypedDeliveryDisabled || b.AgentID != old.AgentID {
@@ -91,8 +91,8 @@ func TestTypedDeliveryCountsReachedInput(t *testing.T) {
 		DiscoveredSession{SessionID: "win-1", Tool: "claude", Project: dir, PID: 123, Status: "available", Live: true}, "read only", "read only", "sender", dir, 0) {
 		t.Fatal("cooldown accepted a second typed prompt")
 	}
-	if len(z.pasted) != 0 || z.entered != 0 {
-		t.Fatalf("cooldown touched pane: pasted=%v entered=%d", z.pasted, z.entered)
+	if len(z.pasted) != 0 || z.enters() != 0 {
+		t.Fatalf("cooldown touched pane: pasted=%v entered=%d", z.pasted, z.enters())
 	}
 	if got := TypedGuardRequest("win-1"); strings.Contains(got, "req-count") {
 		t.Fatalf("cooldown left a guard marker for %q", got)

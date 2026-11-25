@@ -633,6 +633,12 @@ func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runn
 				return
 			case <-t.C:
 			}
+			if cancelledBySender(ctx, client, req.ID) {
+				deps.logf("agent-bridge: waiting inject %s cancelled by its sender", req.ID)
+				_ = AppendHop(HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
+					Target: req.TargetSessionID, Mode: "waiting", Status: "cancelled"})
+				return
+			}
 			// Prefer a proven channel; if the organisation blocks it, a verified
 			// Zellij pane and hook proof provide the local fallback.
 			if allowChannel && rt.hub().channelReady(req.TargetSessionID) && sessionAvailable(ctx, runner, req.TargetSessionID) {
@@ -740,7 +746,7 @@ func (rt *Runtime) deliverViaChannel(ctx context.Context, client AgentClient, ru
 		}
 		deps.logf("agent-bridge: delivered inject %s into the open session %s", req.ID, req.TargetSessionID)
 		rt.notify("Share2Us", "A prompt was delivered into your open "+req.Tool+" session")
-		_ = client.AgentReportResult(ctx, req.ID, "running", "Delivered into the open "+req.Tool+" session.")
+		_ = client.AgentReportResult(ctx, req.ID, "running", "Delivered through the Claude channel into the open "+req.Tool+" session.")
 		hop := HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 			Target: req.TargetSessionID, RanIn: req.TargetSessionID, Mode: "delivered", Prompt: shown}
 		if waited > 0 {
@@ -790,7 +796,10 @@ func (rt *Runtime) runInject(ctx context.Context, client AgentClient, runner Age
 	defer rt.hopMu.Unlock()
 	rt.notify("Share2Us", "Running a prompt in your "+req.Tool+" session")
 	deps.logf("agent-bridge: running inject %s in session %s (cwd %s)", req.ID, req.TargetSessionID, cwd)
-	_ = client.AgentReportResult(ctx, req.ID, "running", "")
+	if isCancelledErr(client.AgentReportResult(ctx, req.ID, "running", "Running headless in the "+req.Tool+" session (no window open).")) {
+		deps.logf("agent-bridge: inject %s cancelled by its sender before it ran", req.ID)
+		return
+	}
 	var out string
 	var err error
 	rt.hopRunning.Store(true)

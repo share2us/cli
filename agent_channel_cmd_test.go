@@ -189,7 +189,7 @@ func TestSubmitBindsPromptAndStopWaitsForDaemonAck(t *testing.T) {
 	if got := daemon.TypedGuardRequest("session-1"); got != "request-1" {
 		t.Fatalf("unacknowledged Stop dropped marker: %q", got)
 	}
-	if !completeHookTurn("session-1", "request-1", func(req daemonctl.Request) (daemonctl.Response, bool) {
+	if !completeHookTurn("session-1", "request-1", "", func(req daemonctl.Request) (daemonctl.Response, bool) {
 		if req.Op != "channel-turn-ended" || req.Args["request_id"] != "request-1" {
 			t.Fatalf("wrong completion request: %+v", req)
 		}

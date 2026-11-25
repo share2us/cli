@@ -136,7 +136,7 @@ func (a app) agentHook(args []string) int {
 				}
 			}
 		}
-		completeHookTurn(in.SessionID, request, daemonctl.Call)
+		completeHookTurn(in.SessionID, request, daemon.TranscriptLastReply(in.TranscriptPath, request), daemonctl.Call)
 	case "session-end":
 		a.endTerminalSession(in.SessionID)
 	}
@@ -173,8 +173,15 @@ func ensureChannelGuardReady(session string, call daemon.ChannelCaller) bool {
 // The local typed marker is the fail-closed fallback if the daemon vanishes
 // or refuses the Stop control. Clearing it before an acknowledgement would
 // leave the daemon's request active while the hook stops enforcing it.
-func completeHookTurn(session, request string, call daemon.ChannelCaller) bool {
-	resp, ok := call(daemonctl.Request{Op: "channel-turn-ended", Args: map[string]string{"session": session, "request_id": request}})
+//
+// reply is the agent's last message from the transcript: the typed turn's result when the
+// agent didn't report through the channel.
+func completeHookTurn(session, request, reply string, call daemon.ChannelCaller) bool {
+	args := map[string]string{"session": session, "request_id": request}
+	if request != "" && reply != "" {
+		args["reply"] = reply
+	}
+	resp, ok := call(daemonctl.Request{Op: "channel-turn-ended", Args: args})
 	if !ok || !resp.OK {
 		return false
 	}
