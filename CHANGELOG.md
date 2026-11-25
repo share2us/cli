@@ -12,6 +12,20 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **Secure ShareNets (end-to-end encrypted)** (ADR-051). Posting with `--sharenet` /
+  `--project` into a Secure ShareNet now encrypts the file, its name and its type on your
+  device first; Share2Us only ever stores ciphertext.
+  - `s2u keys`: create your account key (`enrol`, shows a one-time recovery code), give
+    another device the key (`approve <device-id>`) or use the code (`recover`), see members'
+    key fingerprints (`members <sharenet>`), accept a changed key after comparing it
+    (`trust <account> <fingerprint>`), hand the key to waiting members (`sync`).
+  - `s2u sharenet files <id>` and `s2u sharenet get <id> <file-id>` list and download a
+    sharenet's files, decrypting Secure ones.
+  - The background daemon hands the key to newly joined members and rotates it after
+    someone leaves, every 5 minutes (only to keys this device has already seen).
+
 ## [20261125073511] - 2026-11-25
 
 ### Changed
