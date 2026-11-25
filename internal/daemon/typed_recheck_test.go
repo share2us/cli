@@ -42,7 +42,7 @@ func TestUnconfirmedPasteIsSubmittedWhenTheInputIsExactlyOurs(t *testing.T) {
 	runtime, z, dir := typedRuntime(t,
 		"│ ❯  │", // idle before the paste
 		"│ ❯ owner text [Pasted text +3 lines] │", // verification fails
-		"│ ❯ [Pasted text +3 lines] │",            // re-check: only our text
+		"│ ❯ [Pasted text +5 lines] │",            // re-check: only our text (header, prompt, reply note)
 	)
 	c := &fakeAgentClient{reportNotify: make(chan struct{}, 8)}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -53,6 +53,10 @@ func TestUnconfirmedPasteIsSubmittedWhenTheInputIsExactlyOurs(t *testing.T) {
 	waitFor(t, func() bool { return z.enters() == 1 })
 	if len(z.pasted) != 1 {
 		t.Fatalf("paste=%d, want no second paste", len(z.pasted))
+	}
+	// The receiving agent must learn that its reply returns by itself (bug 2026-11-26).
+	if !strings.Contains(z.pasted[0], "request req-recheck:") || !strings.HasSuffix(z.pasted[0], typedReplyNote) {
+		t.Fatalf("typed text = %q", z.pasted[0])
 	}
 }
 

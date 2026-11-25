@@ -5,6 +5,7 @@ package main
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -23,7 +24,19 @@ var (
 	serviceActive  = daemon.ServiceActive
 	serviceRestart = daemon.ServiceRestart
 	startDetached  = startDetachedDaemon
+	runAfterUpdate = runNewBinaryAfterUpdate
 )
+
+// runNewBinaryAfterUpdate lets the NEW build speak (this process is the old one and
+// doesn't know what changed): it refreshes the /s2u skills and suggests missing ones.
+// An older new build without the hook just prints usage, which is discarded.
+func runNewBinaryAfterUpdate(a app, exe string) {
+	cmd := exec.Command(exe, "agent", "skill", "--after-update")
+	out, err := cmd.Output()
+	if err == nil && len(out) > 0 {
+		_, _ = a.stdout.Write(out)
+	}
+}
 
 // detachedMarker is set in the environment of a daemon this CLI started in the
 // background (no service manager), so update knows it may restart it the same way.

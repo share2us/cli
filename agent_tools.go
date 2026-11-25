@@ -11,8 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -112,47 +112,174 @@ func (a app) runCaptured(ctx context.Context, args ...string) (string, bool) {
 }
 
 //go:embed skills/s2u/SKILL.md
-var s2uSkill []byte
+var s2uSkillBody []byte
 
 const skillManagedMarker = "share2us-managed"
 
-// installClaudeSkill writes the /s2u skill to ~/.claude/skills/s2u. A copy the user
-// edited (marker line removed) is left alone. Quiet: a failure only loses the skill.
-func installClaudeSkill() (path string, err error) {
+const skillDescription = "Talk to other coding agents and share files through Share2Us: list reachable agents, send or ask an agent on another machine or project (e.g. \"ask homelab to...\"), check or cancel a request, read results, share a file as a link."
+
+// skillTarget is one agent tool that loads Agent Skills (SKILL.md folders).
+type skillTarget struct {
+	Tool, Label string
+	// Dir is the tool's config dir under $HOME; the skill goes to Dir/skills/s2u.
+	Dir string
+	// Bin is looked up on PATH to tell whether the tool is installed.
+	Bin string
+	// ArgumentHint: Claude Code shows it while typing /s2u. Codex and Gemini validate
+	// the frontmatter, so they get only the standard name + description.
+	ArgumentHint bool
+}
+
+var skillTargets = []skillTarget{
+	{Tool: "claude", Label: "Claude Code", Dir: ".claude", Bin: "claude", ArgumentHint: true},
+	{Tool: "codex", Label: "Codex", Dir: ".codex", Bin: "codex"},
+	{Tool: "gemini", Label: "Gemini CLI", Dir: ".gemini", Bin: "gemini"},
+}
+
+func skillContent(t skillTarget) []byte {
+	var b bytes.Buffer
+	desc, _ := json.Marshal(skillDescription) // a JSON string is valid quoted YAML; the text has ": "
+	b.WriteString("---\nname: s2u\ndescription: " + string(desc) + "\n")
+	if t.ArgumentHint {
+		b.WriteString("argument-hint: \"[list | send <agent> <task> | ask <agent> <question> | status <id> | results | cancel <id> | pending | share <file> | devices | setup]\"\n")
+	}
+	b.WriteString("---\n")
+	b.Write(s2uSkillBody)
+	return b.Bytes()
+}
+
+func skillPath(t skillTarget) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".claude", "skills", "s2u")
-	path = filepath.Join(dir, "SKILL.md")
-	if cur, rerr := os.ReadFile(path); rerr == nil {
-		if bytes.Equal(cur, s2uSkill) {
-			return path, nil
-		}
-		if !bytes.Contains(cur, []byte(skillManagedMarker)) {
-			return path, errSkillUserOwned
-		}
-	} else if !errors.Is(rerr, fs.ErrNotExist) {
-		return path, rerr
+	return filepath.Join(home, t.Dir, "skills", "s2u", "SKILL.md"), nil
+}
+
+// skillPresent: the tool looks installed (its binary is on PATH or its config dir exists).
+func skillPresent(t skillTarget) bool {
+	if _, err := lookPath(t.Bin); err == nil {
+		return true
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+	st, err := os.Stat(filepath.Join(home, t.Dir))
+	return err == nil && st.IsDir()
+}
+
+var lookPath = exec.LookPath
+
+// skillState: "current", "outdated" (our copy, older build), "edited" (the user's own),
+// or "missing".
+func skillState(t skillTarget) string {
+	path, err := skillPath(t)
+	if err != nil {
+		return "missing"
+	}
+	cur, err := os.ReadFile(path)
+	switch {
+	case err != nil:
+		return "missing"
+	case bytes.Equal(cur, skillContent(t)):
+		return "current"
+	case bytes.Contains(cur, []byte(skillManagedMarker)):
+		return "outdated"
+	default:
+		return "edited"
+	}
+}
+
+// installSkill writes the skill for one tool. A hand-edited copy is left alone.
+func installSkill(t skillTarget) (string, error) {
+	path, err := skillPath(t)
+	if err != nil {
+		return "", err
+	}
+	if skillState(t) == "edited" {
+		return path, errSkillUserOwned
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return path, err
 	}
-	return path, os.WriteFile(path, s2uSkill, 0o644)
+	if err := os.WriteFile(path, skillContent(t), 0o644); err != nil {
+		return path, err
+	}
+	return path, nil
 }
+
+// installClaudeSkill keeps the Claude Code copy current (s2u claude, agent bind).
+func installClaudeSkill() (string, error) { return installSkill(skillTargets[0]) }
 
 var errSkillUserOwned = errors.New("left as is: it was edited by hand (the share2us-managed line is gone)")
 
-// agentSkill: `s2u agent skill [install]` installs or refreshes the /s2u Claude skill.
+// agentSkill: `s2u agent skill [install|status] [claude|codex|gemini|--all]`.
 func (a app) agentSkill(args []string) int {
-	if len(args) > 0 && args[0] != "install" {
-		fmt.Fprintf(a.stderr, "usage: %s agent skill [install]\n", commandName)
-		return 2
+	action := "install"
+	if len(args) > 0 && (args[0] == "install" || args[0] == "status") {
+		action, args = args[0], args[1:]
 	}
-	path, err := installClaudeSkill()
-	if err != nil {
-		return a.fail("install the /s2u skill ("+path+")", err)
+	var targets []skillTarget
+	all := hasFlag(args, "--all")
+	for _, t := range skillTargets {
+		named := false
+		for _, a := range args {
+			if a == t.Tool {
+				named = true
+			}
+		}
+		if named || all || (len(args) == 0 && skillPresent(t)) {
+			targets = append(targets, t)
+		}
 	}
-	fmt.Fprintf(a.stdout, "Installed the /s2u skill for Claude Code: %s\nClaude sessions now know how to reach your other agents through Share2Us (new sessions pick it up).\n", path)
-	return 0
+	if len(targets) == 0 {
+		if len(args) > 0 && !all {
+			fmt.Fprintf(a.stderr, "usage: %s agent skill [install|status] [claude] [codex] [gemini] [--all]\n", commandName)
+			return 2
+		}
+		fmt.Fprintln(a.stdout, "No Claude Code, Codex or Gemini CLI found here. Name one to install anyway, e.g. `"+commandName+" agent skill install codex`.")
+		return 0
+	}
+	code := 0
+	for _, t := range targets {
+		if action == "status" {
+			path, _ := skillPath(t)
+			fmt.Fprintf(a.stdout, "%-12s %-9s %s\n", t.Label, skillState(t), path)
+			continue
+		}
+		path, err := installSkill(t)
+		if err != nil {
+			fmt.Fprintf(a.stderr, "%s: %s (%s)\n", t.Label, err, path)
+			code = 1
+			continue
+		}
+		fmt.Fprintf(a.stdout, "%-12s /s2u installed: %s\n", t.Label, path)
+	}
+	if action == "install" && code == 0 {
+		fmt.Fprintln(a.stdout, "New sessions pick it up. Try: /s2u list, /s2u send <agent> <task>, /s2u share <file> (in Codex: $s2u).")
+	}
+	return code
+}
+
+// skillUpdateHint runs in the NEW binary right after `s2u update`: refresh copies we
+// manage, and point at tools that don't have the skill yet.
+func (a app) skillUpdateHint() {
+	var missing []string
+	for _, t := range skillTargets {
+		if !skillPresent(t) {
+			continue
+		}
+		switch skillState(t) {
+		case "outdated":
+			if _, err := installSkill(t); err == nil {
+				fmt.Fprintf(a.stdout, "Refreshed the /s2u skill for %s.\n", t.Label)
+			}
+		case "missing":
+			missing = append(missing, t.Label)
+		}
+	}
+	if len(missing) > 0 {
+		fmt.Fprintf(a.stdout, "Tip: let %s reach your other agents and share files: run `%s agent skill install` (adds the /s2u skill).\n", strings.Join(missing, ", "), commandName)
+	}
 }

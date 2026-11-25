@@ -69,7 +69,11 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentTyped(args[1:])
 	case "bindings":
 		return a.agentBindings(ctx)
-	case "skill":
+	case "skill", "skills":
+		if len(args) > 1 && args[1] == "--after-update" {
+			a.skillUpdateHint()
+			return 0
+		}
 		return a.agentSkill(args[1:])
 	case "goal", "goals":
 		return a.agentGoal(ctx, args[1:])
@@ -117,7 +121,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  unbind <session-id|--project DIR>          stop advertising it\n")
 	fmt.Fprintf(a.stderr, "  typed <on|off> [--project DIR]              allow or pause automatic Zellij typing for a Claude binding\n")
 	fmt.Fprintf(a.stderr, "  bindings                                   what this machine advertises\n")
-	fmt.Fprintf(a.stderr, "  skill [install]                            install the /s2u Claude Code skill, so Claude\n                                             sessions know how to reach your other agents\n")
+	fmt.Fprintf(a.stderr, "  skill [install|status] [claude|codex|gemini|--all]\n                                             install the /s2u skill (default: every agent tool\n                                             found here), so sessions can reach your other agents\n")
 	fmt.Fprintf(a.stderr, "  goal <new|list|show|close|wait>            a unit of autonomous work, with a budget\n")
 	fmt.Fprintf(a.stderr, "  rules [--project DIR]                      show which .s2u.rules are hard-enforced vs advisory\n")
 	fmt.Fprintf(a.stderr, "  policy [--project DIR] [LEVEL]             show or set this agent's privilege\n")

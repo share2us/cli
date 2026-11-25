@@ -12,6 +12,24 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **`/s2u` takes commands**: `list`, `send <agent> <task>`, `ask <agent> <question>`,
+  `status <id>`, `results`, `cancel <id>`, `pending`, `approve <id>`, `share <file>`,
+  `devices`, `setup`. Claude Code shows them as you type `/s2u`.
+- **The skill installs for Codex and Gemini CLI too** (`~/.codex/skills`,
+  `~/.gemini/skills`): `s2u agent skill install` covers every agent tool found on the
+  machine (or name them: `claude`, `codex`, `gemini`, `--all`); `s2u agent skill status`
+  shows what's installed.
+- `s2u update` refreshes installed skills and suggests installing them for agent tools that
+  don't have them yet.
+
+### Fixed
+
+- A prompt typed into a receiving Claude window now says that its final reply goes back to
+  the sender automatically. Agents used to think they had no way to answer and asked their
+  owner to relay the result by hand.
+
 ## [20261125200514] - 2026-11-25
 
 ### Added
