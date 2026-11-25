@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- A file refused by storage during upload or download now reports the storage error code
+  instead of "the server returned a Cloudflare challenge" (storage answers through
+  Cloudflare, which made every refusal look like a challenge).
+
 ## [20261125102102] - 2026-11-25
 
 ### Added
