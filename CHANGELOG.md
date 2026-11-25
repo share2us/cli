@@ -12,6 +12,25 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A finished agent request now comes back to the session that sent it.** When the
+  sending Claude session has the Share2Us channel loaded, the daemon posts a short notice
+  there (request, target, final status, and the `s2u agent status <id>` command to read the
+  reply). The target's reply text is not put into the session, so it can't steer it.
+- `s2u agent results` fetches finished requests from the server itself, so it works even
+  when the daemon is stopped or is an older build.
+- `s2u agent send` warns when the daemon isn't running or is an older build than the CLI,
+  and says how the target picks the delivery path.
+- A request waiting for an open Claude window with typing set up now says it will be typed
+  in when the window is idle (it no longer claims it waits for Claude to exit).
+- `s2u agent approve` on the wrong device names the device the request waits on.
+- `s2u agent status` errors read `agent status failed: ...`, never like a `status:` line.
+
+### Added
+
+- `s2u daemon restart`: pick up a new build after an update.
+
 ## [20261125140230] - 2026-11-25
 
 ### Fixed

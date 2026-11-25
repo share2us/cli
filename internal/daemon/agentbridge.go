@@ -596,6 +596,20 @@ func (rt *Runtime) paneRebindNeeded(ctx context.Context, runner AgentRunner, req
 	return false
 }
 
+// holdMessages says what a held hop waits for. With typed delivery set up for the session
+// it is typed in once the window is idle, so "runs once you exit" would be wrong there.
+func holdMessages(req clicore.AgentRequest) (notice, status string) {
+	tool := req.Tool
+	if list, err := LoadBindings(); err == nil {
+		if b, ok := BindingForSession(list, req.TargetSessionID); ok && b.Zellij != nil && !b.TypedDeliveryDisabled {
+			return "A prompt is waiting for your " + tool + " session. Share2Us types it in when the window is idle.",
+				"Waiting: the " + tool + " session is open in a window and not idle yet. Share2Us types the prompt in when it is idle (or runs it once " + tool + " is exited there)."
+		}
+	}
+	return "A prompt is waiting for your " + tool + " session. It runs in that session once you exit " + tool + " there.",
+		"Waiting: the " + tool + " session is open in a window. The prompt runs in that session once " + tool + " is exited there."
+}
+
 // holdInject waits, off the receive loop, until nothing holds the session, then
 // runs the hop in it. The server already handed the hop over (it stays
 // "delivered"), so it lives here until then. It gives up after injectHoldMax.
@@ -610,8 +624,9 @@ func (rt *Runtime) holdInject(ctx context.Context, client AgentClient, runner Ag
 func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, allowChannel, waitingReported bool) {
 	if !waitingReported {
 		deps.logf("agent-bridge: inject %s waits: session %s is open in a window", req.ID, req.TargetSessionID)
-		rt.notify("Share2Us", "A prompt is waiting for your "+req.Tool+" session. It runs in that session once you exit "+req.Tool+" there.")
-		_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: the "+req.Tool+" session is open in a window. The prompt runs in that session once "+req.Tool+" is exited there.")
+		notice, status := holdMessages(req)
+		rt.notify("Share2Us", notice)
+		_ = client.AgentReportResult(ctx, req.ID, "waiting", status)
 	}
 	rt.holding.Add(1)
 	// The limit counts from when the hop was sent, so a restart does not reset it.

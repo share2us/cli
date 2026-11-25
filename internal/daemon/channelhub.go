@@ -28,6 +28,9 @@ type ChannelDelivery struct {
 	// Strict: the daemon runs agents read-only (--agent-strict); the hook
 	// enforces that too while this hop is in progress.
 	Strict bool `json:"-"`
+	// Kind "result": a notice that a request this session SENT finished. Not a task:
+	// nothing is tracked, guarded or reported for it.
+	Kind string `json:"kind,omitempty"`
 }
 
 // channelAlive is how recently a channel must have polled to count as listening.
@@ -205,6 +208,9 @@ func (h *channelHub) poll(session string, claudePID int) []ChannelDelivery {
 	out := h.queue[session]
 	delete(h.queue, session)
 	for _, d := range out {
+		if d.Kind == ChannelKindResult {
+			continue
+		}
 		if p, ok := h.picked[d.RequestID]; ok {
 			close(p)
 			delete(h.picked, d.RequestID)
@@ -216,6 +222,21 @@ func (h *channelHub) poll(session string, claudePID int) []ChannelDelivery {
 		h.activePID[d.RequestID] = claudePID
 	}
 	return out
+}
+
+const ChannelKindResult = "result"
+
+// notice queues a result notice for a session whose channel is listening now; false
+// when nobody is listening (the desktop notification and the results log still have it).
+func (h *channelHub) notice(session string, d ChannelDelivery) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if t, ok := h.seen[session]; !ok || time.Since(t) > channelAlive {
+		return false
+	}
+	d.Kind = ChannelKindResult
+	h.queue[session] = append(h.queue[session], d)
+	return true
 }
 
 // report records the agent's result for a request (the channel's report tool).

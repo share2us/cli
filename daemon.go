@@ -43,6 +43,8 @@ func (a app) daemon(ctx context.Context, args []string) int {
 		return 0
 	case "stop":
 		return a.daemonStop()
+	case "restart":
+		return a.daemonRestart()
 	case "install":
 		return a.daemonInstall(args[1:])
 	case "uninstall":
@@ -61,14 +63,14 @@ func (a app) daemon(ctx context.Context, args []string) int {
 }
 
 func (a app) daemonUsage() int {
-	fmt.Fprintf(a.stderr, "usage: %s daemon <run|status|start|stop|install|uninstall|logs>\n", commandName)
+	fmt.Fprintf(a.stderr, "usage: %s daemon <run|status|start|stop|restart|install|uninstall|logs>\n", commandName)
 	fmt.Fprintf(a.stderr, "  run [--dest DIR] [--no-lan] [--no-notify] [--no-warn-tab] [--no-agent-bridge] [--agent-strict]  run the receiver\n")
 	fmt.Fprintf(a.stderr, "                                               (the agent bridge is on by default and stays idle\n")
 	fmt.Fprintf(a.stderr, "                                                until a session is bound)\n")
 	fmt.Fprintf(a.stderr, "  install [--dest DIR]                         install + start the per-user service\n")
 	fmt.Fprintf(a.stderr, "                                               (asks where files land and whether to save\n")
 	fmt.Fprintf(a.stderr, "                                                them automatically, since the service can't)\n")
-	fmt.Fprintf(a.stderr, "  status | stop | start | logs [-f] | uninstall\n")
+	fmt.Fprintf(a.stderr, "  status | stop | start | restart | logs [-f] | uninstall\n")
 	return 2
 }
 
@@ -267,6 +269,25 @@ func (a app) daemonStop() int {
 		return 3
 	}
 	fmt.Fprintln(a.stdout, "Stopped.")
+	return 0
+}
+
+// daemonRestart picks up a new build after an update: stop whatever runs (service or
+// hand-started), then start it again the way `agent bind` would.
+func (a app) daemonRestart() int {
+	if code := a.daemonStop(); code != 0 && code != 3 {
+		return code
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for daemonRunning() && time.Now().Before(deadline) {
+		time.Sleep(200 * time.Millisecond)
+	}
+	if _, err := a.ensureDaemon(); err != nil {
+		return a.fail("daemon restart", err)
+	}
+	if resp, ok := daemonctl.Query("status"); ok && resp.OK {
+		fmt.Fprintf(a.stdout, "Running (pid %d, %s).\n", resp.PID, resp.Version)
+	}
 	return 0
 }
 
