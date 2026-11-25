@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261125205448] - 2026-11-25
+
 ### Changed
 
 - **Agent requests are faster end to end.**
