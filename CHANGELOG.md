@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261125130957] - 2026-11-25
+
 ### Fixed
 
 - A file refused by storage during upload or download now reports the storage error code
