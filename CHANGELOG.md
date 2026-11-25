@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **`s2u status`**: one screen with who you're signed in as (email, plan, auth method,
+  server), this device (name, when it logged in, when its token was last used and when it
+  expires, device keys, other devices), and this machine (daemon version and uptime, bound
+  agents, /s2u skill per agent tool). `--json` for scripts. `/s2u status` in agents.
+
 ## [20261125202736] - 2026-11-25
 
 ### Fixed
