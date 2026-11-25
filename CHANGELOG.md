@@ -12,6 +12,20 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **Claude sessions can reach your other agents without being told how.** Sessions started
+  with `s2u claude` get Share2Us tools on the share2us channel: `list_agents`,
+  `send_to_agent` (by name), `request_status` and `cancel_request`. The result comes back
+  into the session by itself. While a session is handling a request from another agent it
+  can't send new ones (no fan-out from a delivered prompt).
+- **`/s2u` skill for Claude Code**, installed to `~/.claude/skills/s2u/` by `s2u claude`,
+  `s2u agent bind` (Claude sessions) and `s2u agent skill install`. It teaches any Claude
+  session, including plain `claude`, how to find agents, send work, and read results. A copy
+  you edited by hand is left alone.
+- `s2u agent send --to NAME`: address an agent by its name or alias, or by its device's name
+  when that device runs one agent (`--to homelab`).
+
 ## [20261125142800] - 2026-11-25
 
 ### Fixed
