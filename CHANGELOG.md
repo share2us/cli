@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126132839] - 2026-11-26
+
 ### Fixed
 
 - **Prompts are typed into a Claude window that shows a Tab suggestion.** Claude's grey
