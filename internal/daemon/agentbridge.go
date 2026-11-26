@@ -947,6 +947,7 @@ func (rt *Runtime) runInject(ctx context.Context, client AgentClient, runner Age
 	var err error
 	rt.hopRunning.Store(true)
 	defer rt.hopRunning.Store(false)
+	defer rt.runningHeadless(req.TargetSessionID, req.ID)()
 	hop := HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 		Target: req.TargetSessionID, RanIn: req.TargetSessionID, Mode: "ran", Prompt: shown}
 	if waited > 0 {

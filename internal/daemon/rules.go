@@ -47,6 +47,9 @@ var selfProtection = []string{
 	"Edit(**/.claude/settings.local.json)",
 	"Edit(**/.git)",
 	"Edit(**/.git/**)",
+	// Codex reads hooks and config from a project's .codex directory, and headless Codex
+	// runs hooks without the trust review (codex_hook.go).
+	"Edit(**/.codex/**)",
 	// These read-looking Git commands may run core.fsmonitor. Keep privileged
 	// Git operations available; only the unsafe unattended read exceptions go.
 	"Bash(git status:*)",

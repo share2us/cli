@@ -100,7 +100,7 @@ func (a app) agentHook(args []string) int {
 	}
 	var in hookInput
 	if err := json.NewDecoder(io.LimitReader(os.Stdin, 8<<20)).Decode(&in); err != nil || in.SessionID == "" {
-		if args[0] == "headless-pre-tool-use" {
+		if args[0] == "headless-pre-tool-use" || args[0] == daemon.CodexPreToolUseHook {
 			fmt.Fprintln(a.stdout, hookDeny("Share2Us: the headless Git guard could not identify this tool call."))
 		}
 		return 0
@@ -109,6 +109,10 @@ func (a app) agentHook(args []string) int {
 		if deny, reason := daemon.HeadlessGitDecision(os.Getenv("S2U_HEADLESS_GUARD_PROJECT"), in.ToolName, in.ToolInput); deny {
 			fmt.Fprintln(a.stdout, hookDeny(reason))
 		}
+		return 0
+	}
+	if args[0] == daemon.CodexPreToolUseHook {
+		a.codexPreToolUse(in, daemonctl.Call, time.Sleep)
 		return 0
 	}
 	switch args[0] {
@@ -371,6 +375,60 @@ func (a app) endTerminalSession(sessionID string) {
 	s, err := daemon.FindOwnSession(context.Background())
 	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
 		daemon.EndTerminalSession(sessionID, s.PID)
+	}
+}
+
+// codexPreToolUse guards a headless Codex run the daemon started: the rules of a delivered
+// Claude turn and the same ask-the-owner hold (ADR-052). The project, session and strict mode
+// come from the run's environment, which the delivered prompt can't change. Every way out
+// that isn't an allow prints a deny: Codex runs the tool on a hook error.
+func (a app) codexPreToolUse(in hookInput, call func(daemonctl.Request) (daemonctl.Response, bool), sleep func(time.Duration)) {
+	project := os.Getenv(daemon.CodexGuardProjectEnv)
+	if project == "" {
+		fmt.Fprintln(a.stdout, hookDeny("Share2Us: the Codex guard has no trusted project path; tool use is blocked."))
+		return
+	}
+	if s := os.Getenv(daemon.CodexGuardSessionEnv); s != "" {
+		in.SessionID = s
+	}
+	strict := os.Getenv(daemon.CodexGuardStrictEnv) == "1"
+	checks, err := daemon.CodexToolCalls(project, in.ToolName, in.ToolInput)
+	if err != nil {
+		fmt.Fprintln(a.stdout, hookDeny(err.Error()))
+		return
+	}
+	var allowedNow []string
+	// One hold for the whole call (a patch can touch several files): the hook must answer
+	// before Codex's timeout, which would let the tool run.
+	deadline := time.Now().Add(approvalHold)
+	for _, c := range checks {
+		deny, reason := daemon.HookDecision(project, c.Tool, c.Input, strict)
+		if !deny {
+			continue
+		}
+		if daemon.SelfProtected(project, c.Tool, c.Input) {
+			fmt.Fprintln(a.stdout, hookDeny(reason))
+			return
+		}
+		one := in
+		one.ToolName, one.ToolInput, one.CWD = c.Tool, c.Input, project
+		hold := time.Until(deadline)
+		if hold < approvalPoll {
+			fmt.Fprintln(a.stdout, hookDeny(reason))
+			return
+		}
+		allowed, why, _ := askOwner(one, reason, hold, call, sleep)
+		if !allowed {
+			fmt.Fprintln(a.stdout, hookDeny(why))
+			return
+		}
+		if why != "" {
+			allowedNow = append(allowedNow, why)
+		}
+	}
+	if len(allowedNow) > 0 {
+		out, _ := json.Marshal(map[string]any{"systemMessage": strings.Join(allowedNow, " ")})
+		fmt.Fprintln(a.stdout, string(out))
 	}
 }
 

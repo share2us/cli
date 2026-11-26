@@ -104,6 +104,7 @@ type approvalState struct {
 	grantsAt time.Time
 	parked   map[string]parkedApproval
 	senders  map[string]string // request -> sender label, for the owner's email
+	headless map[string]string // session -> the request running headless in it (one at a time)
 	// The bridge's client, runners and deps, for continuations started by the watcher.
 	client  AgentClient
 	runners map[string]AgentRunner
@@ -218,6 +219,9 @@ func (rt *Runtime) approvalCheck(ctx context.Context, args map[string]string) da
 	requestID := rt.hub().activeRequest(session)
 	s := rt.approvals()
 	s.mu.Lock()
+	if requestID == "" {
+		requestID = s.headless[session]
+	}
 	sender := s.senders[requestID]
 	s.mu.Unlock()
 	display := actionDisplay(text)
@@ -356,6 +360,25 @@ func (rt *Runtime) continueAfterApproval(ctx context.Context, client AgentClient
 	text := fmt.Sprintf("Your owner has now allowed the action that was blocked (%s). Continue the task from request %s where it stopped, and give your final answer; it goes back to the sender.", scope, requestID)
 	req := clicore.AgentRequest{ID: requestID, Tool: b.Tool, TargetSessionID: session, SenderDeviceID: "share2us-approval"}
 	rt.holdInject(ctx, client, runner, deps, req, text, text, "Share2Us (owner approval)", b.Project)
+}
+
+// runningHeadless notes the request a headless run serves, so an approval its hook files is
+// tied to that request (status for the sender, continuation after a late approval).
+func (rt *Runtime) runningHeadless(session, requestID string) func() {
+	s := rt.approvals()
+	s.mu.Lock()
+	if s.headless == nil {
+		s.headless = map[string]string{}
+	}
+	s.headless[session] = requestID
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		if s.headless[session] == requestID {
+			delete(s.headless, session)
+		}
+		s.mu.Unlock()
+	}
 }
 
 // setApprovalBridge records what continuations need; called when the bridge starts.
