@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126082951] - 2026-11-26
+
 ### Added
 
 - **Do not disturb:** `s2u agent pause` / `s2u agent resume` (also `disable` / `enable`)
