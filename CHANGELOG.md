@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u agent join <code> --wait` waits until a host approves the request (checks every few
+  seconds, up to 9 minutes) instead of leaving you to watch for it; without `--wait` it
+  tells you the command.
+
 ## [20261126102106] - 2026-11-26
 
 ### Added

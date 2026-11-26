@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	clicore "github.com/share2us/cli-core"
 )
@@ -115,5 +116,32 @@ func TestAddAgentsReportsEach(t *testing.T) {
 	}
 	if f.mineBody["can_post"] != true || !strings.Contains(out.String(), "Added agt_MINE00000000000000001 to Shop.api (may post files)") {
 		t.Fatalf("body %v out %s", f.mineBody, out.String())
+	}
+}
+
+func TestWaitForAdmission(t *testing.T) {
+	calls := 0
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/agent/projects/p-1/agents", func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 3 {
+			w.WriteHeader(http.StatusForbidden) // not a member yet: the device can't look
+			fmt.Fprint(w, `{"error":{"code":"forbidden","message":"no"}}`)
+			return
+		}
+		fmt.Fprint(w, `{"agents":[{"agent_id":"agt_ME0000000000000000001"}]}`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	old := joinWaitPoll
+	joinWaitPoll = time.Millisecond
+	defer func() { joinWaitPoll = old }()
+	var out bytes.Buffer
+	a := manageApp(&out)
+	if !a.waitForAdmission(context.Background(), clicore.NewClient(srv.URL, "tok"), "p-1", "agt_ME0000000000000000001", time.Second) {
+		t.Fatal("approval not seen")
+	}
+	if a.waitForAdmission(context.Background(), clicore.NewClient(srv.URL, "tok"), "p-1", "agt_OTHER00000000000000001", 20*time.Millisecond) {
+		t.Fatal("another agent's admission counted")
 	}
 }
