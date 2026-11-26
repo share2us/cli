@@ -47,8 +47,9 @@ func TestCodexHookArgsAndEnv(t *testing.T) {
 	if n := len(args); args[n-2] != "sess" || args[n-1] != "do it" || !slices.Contains(args, "approval_policy=never") || !slices.Contains(args, cfg) {
 		t.Fatalf("args %v", args)
 	}
-	env := codexGuardEnv([]string{"PATH=/bin", CodexGuardProjectEnv + "=/evil"}, "/p", "sess", true)
-	if slices.Contains(env, CodexGuardProjectEnv+"=/evil") || !slices.Contains(env, CodexGuardProjectEnv+"=/p") || !slices.Contains(env, CodexGuardStrictEnv+"=1") || !slices.Contains(env, CodexGuardSessionEnv+"=sess") {
+	project := t.TempDir()
+	env := codexGuardEnv([]string{"PATH=/bin", CodexGuardProjectEnv + "=/evil"}, project, "sess", true)
+	if slices.Contains(env, CodexGuardProjectEnv+"=/evil") || !slices.Contains(env, CodexGuardProjectEnv+"="+project) || !slices.Contains(env, CodexGuardStrictEnv+"=1") || !slices.Contains(env, CodexGuardSessionEnv+"=sess") {
 		t.Fatalf("env %v", env)
 	}
 }
