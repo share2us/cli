@@ -77,6 +77,8 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentUnbind(args[1:])
 	case "typed":
 		return a.agentTyped(args[1:])
+	case "mentions":
+		return a.agentMentions(args[1:])
 	case "bindings":
 		return a.agentBindings(ctx)
 	case "skill", "skills":
@@ -106,7 +108,7 @@ func (a app) agent(ctx context.Context, args []string) int {
 }
 
 func (a app) agentUsage() int {
-	fmt.Fprintf(a.stderr, "usage: %s agent <list|pin|hide|rename|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|typed|bindings|skill|goal|rules|policy>\n", commandName)
+	fmt.Fprintf(a.stderr, "usage: %s agent <list|pin|hide|rename|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|typed|mentions|bindings|skill|goal|rules|policy>\n", commandName)
 	fmt.Fprintf(a.stderr, "  list [--all] [--sharenets]                 reachable agent sessions across your devices\n                                             (--all includes hidden ones; --sharenets adds the\n                                             agents in your sharenet projects, as sharenet.agent)\n")
 	fmt.Fprintf(a.stderr, "  pin|unpin <agent-id>                       pin an agent to the top of the list (or undo)\n")
 	fmt.Fprintf(a.stderr, "  hide|unhide <agent-id>                     hide an agent from the default list (or undo)\n")
@@ -137,6 +139,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  goal <new|list|show|close|wait>            a unit of autonomous work, with a budget\n")
 	fmt.Fprintf(a.stderr, "  rules [--project DIR]                      show which .s2u.rules are hard-enforced vs advisory\n")
 	fmt.Fprintf(a.stderr, "  policy [--project DIR] [LEVEL]             show or set this agent's privilege\n")
+	fmt.Fprintf(a.stderr, "  mentions <on|off> [--project DIR]          take tasks from @mentions in sharenet projects (default on)\n")
 	fmt.Fprintf(a.stderr, "                                             (restricted | standard | privileged)\n")
 	return 2
 }
@@ -312,6 +315,44 @@ func (a app) agentTyped(args []string) int {
 		return a.fail("typed delivery setting", err)
 	}
 	fmt.Fprintf(a.stdout, "automatic Zellij typing %s for Claude binding %s (%s)\n", args[0], b.AgentID, b.Project)
+	return 0
+}
+
+// agentMentions is `s2u agent mentions <on|off> [--project DIR]`: whether the agent bound here
+// takes tasks from @mentions in sharenet projects (ADR-053; on by default).
+func (a app) agentMentions(args []string) int {
+	usage := func() int {
+		fmt.Fprintf(a.stderr, "usage: %s agent mentions <on|off> [--project DIR]\n", commandName)
+		return 2
+	}
+	if (len(args) != 1 && len(args) != 3) || (args[0] != "on" && args[0] != "off") {
+		return usage()
+	}
+	project, err := os.Getwd()
+	if err != nil {
+		return a.fail("current directory", err)
+	}
+	if len(args) == 3 {
+		if args[1] != "--project" || args[2] == "" {
+			return usage()
+		}
+		project = args[2]
+	}
+	changed, err := daemon.SetMentionTasks(project, args[0] == "on")
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(a.stderr, "No agent is bound in %s.\n", project)
+			return 1
+		}
+		return a.fail("mention tasks setting", err)
+	}
+	for _, b := range changed {
+		if args[0] == "on" {
+			fmt.Fprintf(a.stdout, "✓ %s (%s) takes tasks from @mentions in its sharenet projects.\n", b.AgentID, b.Tool)
+		} else {
+			fmt.Fprintf(a.stdout, "✓ %s (%s) no longer takes tasks from @mentions; mentioning it still notifies you.\n", b.AgentID, b.Tool)
+		}
+	}
 	return 0
 }
 

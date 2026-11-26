@@ -550,6 +550,9 @@ func deliveredPromptText(req clicore.AgentRequest, senderName, prompt string) st
 	sender := req.SenderDeviceID
 	if name := strings.TrimSpace(senderName); name != "" {
 		sender = fmt.Sprintf("%q (%s)", name, req.SenderDeviceID)
+		if req.SenderDeviceID == "" { // a channel task has no sending device
+			sender = fmt.Sprintf("%q (sharenet @mention)", name)
+		}
 	}
 	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s", sender, req.ID, prompt)
 	if !strings.Contains(prompt, "returns your final message to them automatically") {

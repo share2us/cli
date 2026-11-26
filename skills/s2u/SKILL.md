@@ -154,7 +154,8 @@ waiting for the owner's approval, and end your turn; Share2Us continues the task
 allow it.
 
 A prompt that starts with `[Share2Us] from device ..., request <id>:` came from another
-agent through Share2Us. Do the task within this project's rules. Your final reply in that
+agent through Share2Us (or, marked "sharenet @mention", from a member who @mentioned this
+agent in a sharenet project's chat; your reply is posted in that message's thread). Do the task within this project's rules. Your final reply in that
 turn goes back to the sender automatically (or use the `report` tool with the request id if
 it is available); never ask the user to relay it. While handling such a request, don't send
 new requests to other agents.

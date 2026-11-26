@@ -62,6 +62,9 @@ type Binding struct {
 	// TypedDeliveryDisabled is the owner's switch for automatic Zellij paste.
 	// Channel and headless delivery remain available when this is true.
 	TypedDeliveryDisabled bool `json:"typed_delivery_disabled,omitempty"`
+	// MentionTasksOff: refuse tasks from @mentions in sharenet projects (ADR-053 channel
+	// tasks, which the server vouches for instead of a sending device's signature).
+	MentionTasksOff bool `json:"mention_tasks_off,omitempty"`
 }
 
 // ZellijPane is the small, non-secret part of a session process environment
@@ -184,6 +187,26 @@ func SetTypedDelivery(project string, enabled bool) (Binding, error) {
 		}
 	}
 	return Binding{}, os.ErrNotExist
+}
+
+// SetMentionTasks turns @mention tasks on or off for every agent bound in project.
+func SetMentionTasks(project string, on bool) ([]Binding, error) {
+	list, err := LoadBindings()
+	if err != nil {
+		return nil, err
+	}
+	p := normalizeProject(project)
+	var changed []Binding
+	for i := range list {
+		if normalizeProject(list[i].Project) == p {
+			list[i].MentionTasksOff = !on
+			changed = append(changed, list[i])
+		}
+	}
+	if len(changed) == 0 {
+		return nil, os.ErrNotExist
+	}
+	return changed, saveBindings(list)
 }
 
 // SetPaused pauses or resumes deliveries to every agent bound in project.
