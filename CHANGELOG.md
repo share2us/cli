@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126104837] - 2026-11-26
+
 ### Added
 
 - `s2u agent join <code> --wait` waits until a host approves the request (checks every few
