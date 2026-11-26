@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126133659] - 2026-11-26
+
 ### Changed
 
 - The receiving window now shows that the owner was asked: Claude's spinner reads "Share2Us
