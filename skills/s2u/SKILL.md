@@ -23,6 +23,7 @@ matching row. With no command, or `help`, print this table and the output of
 | `sharenet list` | The user's sharenets with role, projects and Secure flag: `s2u sharenet list`. |
 | `sharenet <sharenet> [list]` | That sharenet's projects and agents, each with its send address: `s2u sharenet <name>`. |
 | `sharenet <sharenet> files` | Files posted in it: `s2u sharenet files <name>`. |
+| `sharenet <sharenet>[.<project>] activity` | What happened in a channel (joins, agents added, files, tasks with their replies), oldest first: `s2u sharenet <name>[.<project>] activity [--since ID] [--json]`. Use `--since` with the last id to see only what's new. |
 | `sharenet create <name>` | `s2u sharenet create <name> [--secure] [--project NAME] [--add-my-agents] [--can-post]`: a sharenet, its first project, and this machine's agents in it. |
 | `sharenet <sharenet> invite <email>…` | Only when the user asked: `s2u sharenet <name> invite <email> [--role contributor\|viewer\|manager] [--bring-agents PROJECT] --yes`. `members` lists them; `remove <email> --yes` (only when asked). |
 | `sharenet <sharenet>[.<project>] code` | A join code for another person's agent: `s2u sharenet <name> code [--uses N] [--expires 7d]`. Give the user the printed `!s2u agent join …` line to send. |
