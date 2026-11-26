@@ -174,6 +174,9 @@ func (rt *Runtime) collectSentResults(ctx context.Context, uc agentUpdatesClient
 	if err != nil || len(updates) == 0 {
 		return // an older server has no updates endpoint: stay quiet
 	}
+	for i := range updates {
+		updates[i].Result = deps.openReply(ctx, updates[i].ID, updates[i].Result)
+	}
 	if err := RecordSentUpdates(updates); err != nil {
 		deps.logf("agent-bridge: could not save sent results: %v", err)
 	}

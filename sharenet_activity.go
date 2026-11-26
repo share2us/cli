@@ -58,6 +58,11 @@ func (a app) sharenetActivity(ctx context.Context, client *clicore.Client, n cli
 	if err != nil {
 		return a.fail("read the activity", err)
 	}
+	if n.Secure {
+		if sn, _, err := a.secureSession(ctx); err == nil {
+			_ = sn.OpenMessages(ctx, n.ID, events) // unopened ones read "(encrypted)"
+		}
+	}
 	if q.After == 0 { // the newest page comes newest first
 		for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
 			events[i], events[j] = events[j], events[i]
@@ -123,7 +128,26 @@ func describeEvent(e clicore.SharenetEvent) string {
 		"project.created": "created the project", "project.renamed": "renamed the project", "project.deleted": "deleted a project",
 		"agent.invited": "invited agent " + agent, "agent.added": "added agent " + agent, "agent.removed": "removed an agent",
 		"join.approved": "approved a join request (" + agent + ")", "join.rejected": "rejected a join request",
-		"file.deleted": "deleted a file", "settings.changed": "changed the settings", "message": "said: " + e.Body,
+		"file.deleted": "deleted a file", "settings.changed": "changed the settings",
+	}
+	if e.Kind == "message" {
+		if agent != "" {
+			who += "'s " + agent
+		}
+		switch {
+		case e.Deleted:
+			return who + ": (message deleted)"
+		case e.Body == "" && len(e.BodyCT) > 0:
+			return who + ": (encrypted; this device doesn't hold the key yet)"
+		}
+		body := e.Body
+		if e.Edited {
+			body += " (edited)"
+		}
+		if e.ParentID > 0 {
+			return fmt.Sprintf("%s (reply to %d): %s", who, e.ParentID, body)
+		}
+		return who + ": " + body
 	}
 	if p, ok := phrases[e.Kind]; ok {
 		return who + " " + p

@@ -80,6 +80,11 @@ type Deps struct {
 	// SyncSecureKeys does the Secure ShareNet key work this device can (ADR-051):
 	// hand the current key to waiting members and rotate where a member left. nil = off.
 	SyncSecureKeys func(ctx context.Context) error
+	// SealTaskReply seals a reply to a task sent in projectID when its sharenet is Secure
+	// (secure=false: send it as is). OpenTaskReply opens a sealed reply this device can read,
+	// else returns a placeholder. Both optional (ADR-053).
+	SealTaskReply func(ctx context.Context, projectID, requestID, reply string) (sealed string, secure bool, err error)
+	OpenTaskReply func(ctx context.Context, requestID, result string) string
 	// AgentClient + AgentRunner drive the agent-session bridge (ADR-036); nil when
 	// the bridge is off.
 	AgentClient  AgentClient
@@ -107,10 +112,12 @@ type Deps struct {
 // control server can answer status/owns-receiver and honour a stop request.
 type Runtime struct {
 	// Owner approvals (ADR-052): grant cache, parked requests, the bridge for continuations.
-	approvalsOnce  sync.Once
-	approvalsState *approvalState
-	codexLiveOnce  sync.Once
-	codexLiveSt    *codexLiveState
+	approvalsOnce    sync.Once
+	approvalsState   *approvalState
+	codexLiveOnce    sync.Once
+	codexLiveSt      *codexLiveState
+	taskProjectsOnce sync.Once
+	taskProjectsSt   *taskProjects
 
 	// typedBlocks: why the last typed attempt per request didn't happen (for its status).
 	typedBlockMu sync.Mutex

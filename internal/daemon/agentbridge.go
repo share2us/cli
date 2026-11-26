@@ -59,6 +59,7 @@ func (rt *Runtime) agentBridge(ctx context.Context, client AgentClient, runners 
 		return
 	}
 	deps.logf("agent-bridge: a session is bound; advertising bound sessions and receiving requests")
+	client = sealingClient{AgentClient: client, rt: rt, deps: deps}
 	go rt.agentRegisterLoop(ctx, client, runners, deps)
 	rt.agentReceiveLoop(ctx, client, runners, deps)
 }
@@ -469,6 +470,7 @@ func (rt *Runtime) agentReceiveLoop(ctx context.Context, client AgentClient, run
 }
 
 func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest) {
+	rt.noteTaskProject(req.ID, req.ProjectID)
 	if req.Tool != runner.Tool() {
 		deps.logf("agent-bridge: unsupported tool %q for request %s", req.Tool, req.ID)
 		_ = client.AgentReportResult(ctx, req.ID, "failed", "this daemon does not run "+req.Tool+" sessions")

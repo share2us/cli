@@ -858,6 +858,7 @@ func (a app) waitForResult(ctx context.Context, client *clicore.Client, id strin
 		case err == nil:
 			errs = 0
 			if agentFinal(st.Status) {
+				st.Result = a.openTaskReply(ctx, id, st.Result)
 				fmt.Fprintf(a.stdout, "status: %s\n", st.Status)
 				if t := requestTiming(st); t != "" {
 					fmt.Fprintln(a.stdout, t)
@@ -1230,6 +1231,7 @@ func (a app) agentStatus(ctx context.Context, args []string) int {
 		// Not "status:", which is how a request's state is printed.
 		return a.fail("agent status failed", err)
 	}
+	st.Result = a.openTaskReply(ctx, st.ID, st.Result)
 	if asJSON {
 		writeJSON(a.stdout, st)
 		return 0
@@ -1439,6 +1441,9 @@ func (a app) agentResults(ctx context.Context, args []string) int {
 	// the collector). Best effort: offline, the local log is still shown.
 	if client, _, ok := a.authClient(); ok {
 		if updates, err := client.AgentUpdates(ctx); err == nil && len(updates) > 0 {
+			for i := range updates {
+				updates[i].Result = a.openTaskReply(ctx, updates[i].ID, updates[i].Result)
+			}
 			if rerr := daemon.RecordSentUpdates(updates); rerr != nil {
 				fmt.Fprintf(a.stderr, "warning: could not save %d result(s) locally: %v\n", len(updates), rerr)
 			}

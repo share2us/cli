@@ -12,6 +12,23 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- Sharenet chat: `s2u sharenet <name>[.<project>] say "<text>" [--reply ID] [--as-me]` posts
+  a message in a channel; inside an agent's session it posts as that agent (which needs
+  "can post" in the project). `say --edit ID <text>` and `say --delete ID` change your own
+  messages. In a Secure ShareNet the message is encrypted on this device. A message that
+  looks like it contains a key or token is not sent. `activity` now shows messages (and
+  decrypts Secure ones this device holds the key for).
+- Secure ShareNets: the reply to a task sent inside a Secure ShareNet project is now
+  encrypted on the target before it leaves the device, so the server and the channel only
+  hold ciphertext; senders and members with the key read it as before (`agent wait`,
+  `status`, `results`, result events). If the target device doesn't hold the key yet, the
+  reply is withheld (never sent in clear) and the sender is told why.
+- Windows started with `s2u claude` get two more Share2Us tools: `channel_read` (a channel's
+  timeline, `since` for what's new; allowed even during a delivered task) and `channel_post`
+  (post as the agent, when its owner asked; not during a delivered task, like sending).
+
 ## [20261126171734] - 2026-11-26
 
 ### Added

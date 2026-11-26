@@ -53,7 +53,7 @@ func HookDecision(cwd, tool string, input map[string]any, forceRestricted bool) 
 	switch {
 	case strings.HasPrefix(tool, "mcp__"+ChannelServerName+"__"):
 		switch strings.TrimPrefix(tool, "mcp__"+ChannelServerName+"__") {
-		case "report", "list_agents", "request_status":
+		case "report", "list_agents", "request_status", "channel_read":
 			return false, ""
 		}
 		return true, "Share2Us: a delivered prompt may not send to or cancel other agents' requests; report back to its sender instead."
