@@ -80,7 +80,7 @@ func TestDiscoverCodexMissingRoot(t *testing.T) {
 }
 
 func TestBuildCodexInjectArgs(t *testing.T) {
-	args := buildCodexInjectArgs("sess-9", "do it", codexSandbox(PrivilegeStandard))
+	args := buildCodexInjectArgs("sess-9", "do it", codexSandbox(PrivilegeStandard), nil)
 	joined := strings.Join(args, " ")
 	if !strings.HasPrefix(joined, "exec resume") {
 		t.Fatalf("must use exec resume: %v", args)

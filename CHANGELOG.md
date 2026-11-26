@@ -12,6 +12,21 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- Owner approvals now cover Codex agents. When a task sent to a Codex agent runs
+  headless (no window open), the same guard as Claude's checks each command and file
+  edit, and anything it refuses asks the owner (email + portal) and waits up to 3 minutes,
+  exactly as for Claude. Approving later continues the task. Codex's sandbox still applies
+  underneath: an approved command that needs the network or writes outside the project is
+  blocked unless the agent is `privileged`. Linux and macOS, Codex CLI 0.172 or later; on
+  Windows and older Codex versions the sandbox alone guards, as before.
+
+### Changed
+
+- Delivered prompts can't edit a project's `.codex/` folder (Codex reads hooks and config
+  from it), the same as `.git` and `.claude/settings.json`.
+
 ## [20261126133659] - 2026-11-26
 
 ### Changed

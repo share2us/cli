@@ -189,11 +189,12 @@ func RunCodexInject(ctx context.Context, sessionID, cwd, prompt string, forceRes
 	}
 	cctx, cancel := context.WithTimeout(ctx, injectRunTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "codex", buildCodexInjectArgs(sessionID, prompt, codexSandbox(priv))...)
+	cmd := exec.CommandContext(cctx, "codex", buildCodexInjectArgs(sessionID, prompt, codexSandbox(priv), codexHookArgs())...)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
 	SetAgentEnv(cmd, cwd) // also strips an inherited value when cwd is empty
+	cmd.Env = codexGuardEnv(cmd.Env, cwd, sessionID, forceRestricted)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -204,8 +205,9 @@ func RunCodexInject(ctx context.Context, sessionID, cwd, prompt string, forceRes
 // There is no cwd flag — the caller sets the process directory.
 // --skip-git-repo-check keeps injection working in a project that is not a git
 // repo (codex otherwise refuses headlessly).
-func buildCodexInjectArgs(sessionID, prompt, sandbox string) []string {
-	return []string{
+// guard is the owner-approval hook (codexHookArgs), empty when this Codex can't run it.
+func buildCodexInjectArgs(sessionID, prompt, sandbox string, guard []string) []string {
+	args := []string{
 		"exec", "resume",
 		"-c", "sandbox_mode=" + sandbox,
 		// Without this the sandbox is advisory: a denied command escalates to the
@@ -213,8 +215,9 @@ func buildCodexInjectArgs(sessionID, prompt, sandbox string) []string {
 		// with no sandbox at all. Verified 2026-09-07.
 		"-c", "approval_policy=never",
 		"--skip-git-repo-check",
-		sessionID, prompt,
 	}
+	args = append(args, guard...)
+	return append(args, sessionID, prompt)
 }
 
 // codexSandbox picks the sandbox from the agent's privilege (ADR-041 §6).
