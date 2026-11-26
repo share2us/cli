@@ -57,20 +57,31 @@ type hookInput struct {
 }
 
 // stopHookReply is a typed request's reply for its sender. Claude can run the Stop hook
-// before the final message reaches the transcript file, which returned "no report" for a
-// turn that did answer (2026-11-26), so the transcript is re-read briefly, then the
-// hook's own last-message field is used.
+// before the final message reaches the transcript file: reading too early returned "no
+// report", or an EARLIER progress line as the answer (2026-11-26). So the hook's own
+// last-message field wins when Claude passes it; otherwise the transcript is re-read
+// until its last reply stops changing.
 func stopHookReply(in hookInput, request string) string {
 	if request == "" {
 		return ""
 	}
+	if r := strings.TrimSpace(in.LastAssistantMessage); r != "" {
+		return r
+	}
+	last, stable := "", 0
 	for i := 0; i < stopReplyTries; i++ {
-		if r := daemon.TranscriptLastReply(in.TranscriptPath, request); r != "" {
-			return r
+		r := daemon.TranscriptLastReply(in.TranscriptPath, request)
+		if r != "" && r == last {
+			if stable++; stable >= 2 {
+				return r
+			}
+		} else {
+			stable = 0
 		}
+		last = r
 		time.Sleep(stopReplyWait)
 	}
-	return strings.TrimSpace(in.LastAssistantMessage)
+	return last
 }
 
 var (
