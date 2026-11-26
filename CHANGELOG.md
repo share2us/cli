@@ -12,6 +12,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`privileged` now applies to prompts typed into a window.** The guard kept those on
+  the read-only list at every level, so raising an agent to privileged changed nothing.
+  Only deny rules and self-protection apply there now.
+- **Everyday reads work in delivered prompts:** combined flags (`grep -rni`, `ls -lat`),
+  recursive grep, `grep -e PATTERN`, quoted patterns with `|`, `ls --full-time`. Paths
+  are still limited to the project folder.
+- `date`, `uname` and `uptime` are allowed in delivered prompts (`date -s` is not). `ip`,
+  `hostname` and network commands still need `privileged`.
+
 ## [20261126070227] - 2026-11-26
 
 ### Fixed

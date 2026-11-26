@@ -67,6 +67,7 @@ var selfProtection = []string{
 var hopReadOnly = []string{
 	"Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)", "Bash(grep:*)",
 	"Bash(wc:*)", "Bash(pwd)", "Bash(stat:*)", "Bash(which:*)",
+	"Bash(date:*)", "Bash(uname:*)", "Bash(uptime)",
 }
 
 // hardRule maps a keyword found in a prohibition to the deny patterns it compiles
