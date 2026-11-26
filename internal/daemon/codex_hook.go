@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -163,7 +164,9 @@ func codexGuardEnv(env []string, project, session string, strict bool) []string 
 // codexHookArgs is what RunCodexInject adds for the guard, or nothing when this Codex can't
 // run it (the sandbox alone guards then, as before).
 func codexHookArgs() []string {
-	if !codexHookSupported() {
+	// Not on Windows yet: which shell Codex runs a hook command in there is unverified, and a
+	// hook that fails to start lets every tool run (the sandbox alone guards, as before).
+	if runtime.GOOS == "windows" || !codexHookSupported() {
 		return nil
 	}
 	exe, err := os.Executable()

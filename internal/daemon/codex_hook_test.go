@@ -9,7 +9,8 @@ import (
 
 func TestCodexToolCalls(t *testing.T) {
 	project := t.TempDir()
-	calls, err := CodexToolCalls(project, "apply_patch", map[string]any{"command": "*** Begin Patch\n*** Update File: a.go\n*** Move to: b/c.go\n*** Delete File: /etc/x\n*** Update File: a.go\n*** End Patch"})
+	outside := filepath.Join(t.TempDir(), "x")
+	calls, err := CodexToolCalls(project, "apply_patch", map[string]any{"command": "*** Begin Patch\n*** Update File: a.go\n*** Move to: b/c.go\n*** Delete File: " + outside + "\n*** Update File: a.go\n*** End Patch"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -20,7 +21,7 @@ func TestCodexToolCalls(t *testing.T) {
 		}
 		got = append(got, c.Input["file_path"].(string))
 	}
-	want := []string{filepath.Join(project, "a.go"), filepath.Join(project, "b", "c.go"), "/etc/x"}
+	want := []string{filepath.Join(project, "a.go"), filepath.Join(project, "b", "c.go"), outside}
 	if !slices.Equal(got, want) {
 		t.Fatalf("paths %v, want %v", got, want)
 	}
@@ -37,7 +38,7 @@ func TestCodexToolCalls(t *testing.T) {
 
 func TestCodexHookArgsAndEnv(t *testing.T) {
 	cfg := codexHookConfig("/opt/s2u/share2us")
-	for _, want := range []string{`hooks.PreToolUse=[{matcher="^(Bash|apply_patch|spawn_agent)$|^mcp__"`, `"\"/opt/s2u/share2us\" agent hook codex-pre-tool-use"`, `timeout=240`} {
+	for _, want := range []string{`hooks.PreToolUse=[{matcher="^(Bash|apply_patch|spawn_agent)$|^mcp__"`, `/opt/s2u/share2us\" agent hook codex-pre-tool-use"`, `timeout=240`} {
 		if !strings.Contains(cfg, want) {
 			t.Fatalf("config %s lacks %s", cfg, want)
 		}
