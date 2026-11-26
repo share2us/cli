@@ -262,7 +262,7 @@ func (rt *Runtime) approvalStatusOp(ctx context.Context, id string) daemonctl.Re
 			}
 		}
 	}
-	return jsonResp(map[string]string{"status": st.Status, "scope": st.Scope})
+	return jsonResp(map[string]string{"status": st.Status, "scope": st.Scope, "note": st.Note})
 }
 
 // parkApproval: the hold ran out; watch the request and continue the task when it's allowed.
@@ -358,6 +358,9 @@ func (rt *Runtime) continueAfterApproval(ctx context.Context, client AgentClient
 	scope := map[string]string{"once": "once", "command": fmt.Sprintf("for %d minutes", st.Minutes),
 		"all": fmt.Sprintf("everything, for %d minutes", st.Minutes), "always": "always"}[st.Scope]
 	text := fmt.Sprintf("Your owner has now allowed the action that was blocked (%s). Continue the task from request %s where it stopped, and give your final answer; it goes back to the sender.", scope, requestID)
+	if note := strings.TrimSpace(st.Note); note != "" {
+		text += " Your owner's note: " + note
+	}
 	req := clicore.AgentRequest{ID: requestID, Tool: b.Tool, TargetSessionID: session, SenderDeviceID: "share2us-approval"}
 	rt.holdInject(ctx, client, runner, deps, req, text, text, "Share2Us (owner approval)", b.Project)
 }
