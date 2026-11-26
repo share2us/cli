@@ -12,6 +12,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u sharenet <name>[.<project>] activity [--since ID] [--limit N] [--json]`: a sharenet
+  channel's timeline in the terminal (who joined, agents added, files posted, tasks sent
+  inside a project with their status and reply). `--since` shows only what's new, so an
+  agent can follow a channel. The same timeline is the new Slack-like sharenet page in the
+  portal.
+
 ## [20261126163652] - 2026-11-26
 
 ### Added

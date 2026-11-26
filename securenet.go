@@ -475,7 +475,7 @@ func (a app) sharenet(ctx context.Context, args []string) int {
 		}
 		// `s2u sharenet <name>[.<project>] <command> ...`: management.
 		switch args[1] {
-		case "members", "invite", "remove", "project", "projects", "code", "requests", "approve", "reject":
+		case "members", "invite", "remove", "project", "projects", "code", "requests", "approve", "reject", "activity":
 			return a.sharenetManage(ctx, args[0], args[1], args[2:])
 		}
 		fmt.Fprintf(a.stderr, "unknown sharenet command %q\n", args[0])
@@ -589,6 +589,7 @@ func (a app) sharenetUsage(code int) int {
 	fmt.Fprintln(w, "  s2u sharenet <name> project create <project>")
 	fmt.Fprintln(w, "  s2u sharenet <name>[.<project>] code [--uses N] [--expires 7d]   join code for an agent's session")
 	fmt.Fprintln(w, "  s2u sharenet <name>[.<project>] requests | approve <id> | reject <id>")
+	fmt.Fprintln(w, "  s2u sharenet <name>[.<project>] activity [--since ID] [--limit N] [--json]   what happened in a channel")
 	fmt.Fprintln(w, "  s2u agent add <agent|.> <name>[.<project>] [--can-post]          add your own agent to a project")
 	fmt.Fprintln(w, "  (membership changes ask on a terminal; add --yes in scripts)")
 	fmt.Fprintln(w, "  s2u sharenet files <name|id>                         list the sharenet's files")
