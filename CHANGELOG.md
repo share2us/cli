@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126154246] - 2026-11-26
+
 ### Added
 
 - Owner approvals now cover Codex agents. When a task sent to a Codex agent runs
