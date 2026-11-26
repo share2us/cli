@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126130126] - 2026-11-26
+
 ### Fixed
 
 - When a delivered task's action is waiting for the target owner's approval, the result now
