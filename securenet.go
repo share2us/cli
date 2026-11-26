@@ -458,6 +458,8 @@ func (a app) sharenet(ctx context.Context, args []string) int {
 		return a.sharenetUsage(2)
 	}
 	switch args[0] {
+	case "list":
+		return a.sharenetList(ctx)
 	case "files", "ls":
 		return a.sharenetFiles(ctx, args[1:])
 	case "get", "download":
@@ -465,9 +467,106 @@ func (a app) sharenet(ctx context.Context, args []string) int {
 	case "help", "-h", "--help":
 		return a.sharenetUsage(0)
 	default:
+		// `s2u sharenet <name|id> [list|agents]`: that sharenet's projects and agents.
+		if len(args) == 1 || (len(args) == 2 && (args[1] == "list" || args[1] == "agents")) {
+			return a.sharenetShow(ctx, args[0])
+		}
 		fmt.Fprintf(a.stderr, "unknown sharenet command %q\n", args[0])
 		return a.sharenetUsage(2)
 	}
+}
+
+// resolveSharenet finds one of the caller's sharenets by name (case-insensitive) or id.
+func (a app) resolveSharenet(ctx context.Context, client *clicore.Client, q string) (clicore.SharenetSummary, error) {
+	nets, err := client.ListSharenets(ctx)
+	if err != nil {
+		return clicore.SharenetSummary{}, err
+	}
+	for _, n := range nets {
+		if n.ID == q || strings.EqualFold(n.Name, q) {
+			return n, nil
+		}
+	}
+	return clicore.SharenetSummary{}, fmt.Errorf("no sharenet %q (see `%s sharenet list`)", q, commandName)
+}
+
+func (a app) sharenetList(ctx context.Context) int {
+	client, _, ok := a.authClient()
+	if !ok {
+		fmt.Fprintf(a.stderr, "not logged in; run `%s login`\n", commandName)
+		return 1
+	}
+	nets, err := client.ListSharenets(ctx)
+	if err != nil {
+		return a.fail("sharenet list", err)
+	}
+	if len(nets) == 0 {
+		fmt.Fprintf(a.stdout, "You're in no sharenets. Create or join one in the portal: %s\n", portalSharenetsURL())
+		return 0
+	}
+	for _, n := range nets {
+		kind := ""
+		if n.Secure {
+			kind = "  Secure (E2E)"
+		}
+		projects := "?"
+		if ps, err := client.ListSharenetProjects(ctx, n.ID); err == nil {
+			names := make([]string, 0, len(ps))
+			for _, p := range ps {
+				names = append(names, p.Name)
+			}
+			projects = fmt.Sprintf("%d (%s)", len(ps), strings.Join(names, ", "))
+		}
+		fmt.Fprintf(a.stdout, "%-20s %-7s projects %s%s\n    id %s\n", n.Name, n.Role, projects, kind, n.ID)
+	}
+	fmt.Fprintf(a.stdout, "\nAgents in one: %s sharenet <name>. Send: %s agent send --to <sharenet>.<agent> --prompt \"...\"\n", commandName, commandName)
+	return 0
+}
+
+// sharenetShow lists a sharenet's projects and their member agents, with the address
+// `agent send --to` takes. Agents are visible only in projects where this device runs a
+// member agent (the server's rule).
+func (a app) sharenetShow(ctx context.Context, q string) int {
+	client, _, ok := a.authClient()
+	if !ok {
+		fmt.Fprintf(a.stderr, "not logged in; run `%s login`\n", commandName)
+		return 1
+	}
+	n, err := a.resolveSharenet(ctx, client, q)
+	if err != nil {
+		fmt.Fprintln(a.stderr, cliErrorMessage(err))
+		return 1
+	}
+	projects, err := client.ListSharenetProjects(ctx, n.ID)
+	if err != nil {
+		return a.fail("sharenet projects", err)
+	}
+	fmt.Fprintf(a.stdout, "%s  (%s, %d project(s))\n", n.Name, n.Role, len(projects))
+	config, _ := clicore.LoadConfig()
+	for _, p := range projects {
+		fmt.Fprintf(a.stdout, "\n  project %s\n", p.Name)
+		members, err := client.ListProjectAgents(ctx, p.ID)
+		if err != nil {
+			fmt.Fprintln(a.stdout, "    (agents hidden: no agent on this device is a member of this project)")
+			continue
+		}
+		if len(members) == 0 {
+			fmt.Fprintln(a.stdout, "    no agents online")
+			continue
+		}
+		for _, m := range members {
+			name := config.AgentDisplayName(m.AgentID, m.Function)
+			if name == "" {
+				name = m.AgentID
+			}
+			owner := ""
+			if m.Yours {
+				owner = "  (yours)"
+			}
+			fmt.Fprintf(a.stdout, "    %-32s %-8s %-10s %s%s\n", n.Name+"."+name, m.Tool, m.Status, m.AgentID, owner)
+		}
+	}
+	return 0
 }
 
 func (a app) sharenetUsage(code int) int {
@@ -476,8 +575,10 @@ func (a app) sharenetUsage(code int) int {
 		w = a.stdout
 	}
 	fmt.Fprintln(w, "usage:")
-	fmt.Fprintln(w, "  s2u sharenet files <sharenet-id>                     list the sharenet's files")
-	fmt.Fprintln(w, "  s2u sharenet get <sharenet-id> <file-id> [-o path]   download one (decrypting a Secure ShareNet's)")
+	fmt.Fprintln(w, "  s2u sharenet list                                    your sharenets and their projects")
+	fmt.Fprintln(w, "  s2u sharenet <name|id> [list]                        its projects and agents (send to them as <sharenet>.<agent>)")
+	fmt.Fprintln(w, "  s2u sharenet files <name|id>                         list the sharenet's files")
+	fmt.Fprintln(w, "  s2u sharenet get <name|id> <file-id> [-o path]       download one (decrypting a Secure ShareNet's)")
 	fmt.Fprintln(w, "Post with: s2u <file> --sharenet <id> (or --project <id>). Manage sharenets in the portal.")
 	return code
 }
@@ -492,7 +593,11 @@ func (a app) sharenetFiles(ctx context.Context, args []string) int {
 		fmt.Fprintf(a.stderr, "not logged in; run `%s login`\n", commandName)
 		return 1
 	}
-	files, err := client.ListSharenetFiles(ctx, args[0])
+	netID := args[0]
+	if n, rerr := a.resolveSharenet(ctx, client, args[0]); rerr == nil {
+		netID = n.ID
+	}
+	files, err := client.ListSharenetFiles(ctx, netID)
 	if err != nil {
 		return a.fail("list files", err)
 	}
