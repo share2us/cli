@@ -122,8 +122,8 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  allow <sender-device-id>                   ALWAYS-allow a device (standing access)\n")
 	fmt.Fprintf(a.stderr, "  revoke <sender-device-id>                  withdraw a device's standing access\n")
 	fmt.Fprintf(a.stderr, "  allowed                                    list devices with standing access\n")
-	fmt.Fprintf(a.stderr, "  bind <session-id> [PROJECT-NAME]           let this machine advertise that session (nothing\n")
-	fmt.Fprintf(a.stderr, "                                             is advertised until you bind it)\n")
+	fmt.Fprintf(a.stderr, "  bind [<session-id> [PROJECT-NAME]]         let this machine advertise that session (nothing\n")
+	fmt.Fprintf(a.stderr, "                                             is advertised until you bind it); with no id, the\n                                             session it is typed in (`! s2u agent bind`)\n")
 	fmt.Fprintf(a.stderr, "  unbind <session-id|--project DIR>          stop advertising it\n")
 	fmt.Fprintf(a.stderr, "  typed <on|off> [--project DIR]              allow or pause automatic Zellij typing for a Claude binding\n")
 	fmt.Fprintf(a.stderr, "  bindings                                   what this machine advertises\n")
@@ -188,21 +188,31 @@ func (a app) localSession(ctx context.Context, id string) (daemon.DiscoveredSess
 // (ADR-041 §1). Nothing is advertised until this runs: before bindings, starting
 // the bridge published every session on the machine, including unrelated work.
 func (a app) agentBind(ctx context.Context, args []string) int {
+	var s daemon.DiscoveredSession
+	pane := (*daemon.ZellijPane)(nil)
 	if len(args) == 0 {
-		fmt.Fprintf(a.stderr, "usage: %s agent bind <session-id> [PROJECT-NAME]\n", commandName)
-		fmt.Fprintf(a.stderr, "  session ids come from `claude agents`, or from this machine's running codex/gemini sessions\n")
-		return 2
-	}
-	s, ok := a.localSession(ctx, args[0])
-	if !ok {
-		fmt.Fprintf(a.stderr, "no single live session here matches %q; start it first, then bind it\n", args[0])
-		return 1
+		// No id: bind the agent session this runs in (`! s2u agent bind` typed inside
+		// Claude Code or Codex), found from the process tree like `agent join`.
+		found, err := daemon.FindOwnSession(ctx)
+		if err != nil {
+			fmt.Fprintf(a.stderr, "Run it inside the agent session you want to make reachable (type `! s2u agent bind` there), or name it: %s agent bind <session-id> [PROJECT-NAME]\n", commandName)
+			fmt.Fprintf(a.stderr, "  session ids come from `claude agents`, or from this machine's running codex/gemini sessions\n")
+			return 2
+		}
+		s, pane = found, daemon.CurrentZellijPane()
+	} else {
+		found, ok := a.localSession(ctx, args[0])
+		if !ok {
+			fmt.Fprintf(a.stderr, "no single live session here matches %q; start it first, then bind it\n", args[0])
+			return 1
+		}
+		s, pane = found, daemon.ProcessZellijPane(found.PID)
 	}
 	label := ""
 	if len(args) > 1 {
 		label = args[1]
 	}
-	b, created, err := daemon.BindSessionInPane(s.Project, s.Tool, label, s.SessionID, daemon.ProcessZellijPane(s.PID))
+	b, created, err := daemon.BindSessionInPane(s.Project, s.Tool, label, s.SessionID, pane)
 	if err != nil {
 		return a.fail("bind", err)
 	}
@@ -419,7 +429,7 @@ func (a app) agentList(ctx context.Context, args []string) int {
 		if hidden > 0 {
 			fmt.Fprintf(a.stdout, "No visible agent sessions (%d hidden; run `%s agent list --all`).\n", hidden, commandName)
 		} else {
-			fmt.Fprintln(a.stdout, "No reachable agent sessions. Start the daemon with --agent-bridge on your other devices.")
+			fmt.Fprintf(a.stdout, "No reachable agent sessions yet. On each machine, run `%s setup` (or `%s agent bind` inside the agent's session).\n", commandName, commandName)
 		}
 		if hasFlag(args, "--sharenets") {
 			a.printSharenetAgents(ctx, client)
@@ -659,7 +669,7 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	}
 	switch res.Status {
 	case "pending":
-		fmt.Fprintf(a.stdout, "Sent (%s). Waiting for approval on the target device. Track: %s agent status %s\n", res.RequestID, commandName, res.RequestID)
+		fmt.Fprintf(a.stdout, "Sent (%s). It waits for approval on the target device: there, run `%s agent pending` and `%s agent approve %s`. Track: %s agent status %s\n", res.RequestID, commandName, commandName, res.RequestID, commandName, res.RequestID)
 	default:
 		via := ""
 		if res.Transport != "" {
@@ -668,7 +678,6 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 		fmt.Fprintf(a.stdout, "Sent (%s)%s, queued for delivery. Track: %s agent status %s\n", res.RequestID, via, commandName, res.RequestID)
 	}
 	// The target picks the path when it delivers; it can't be known here.
-	fmt.Fprintln(a.stdout, "Delivery: the target device picks the path (its Claude channel if loaded, else typing into the open window, else a headless run); `agent status` names it once delivered.")
 	fmt.Fprintf(a.stdout, "Results: `%s agent results`. Cancel before it runs: %s agent cancel %s\n", commandName, commandName, res.RequestID)
 	_, _ = daemonctl.Query("agent-sent") // the daemon watches closely for this result
 	if waitFor > 0 {
@@ -1252,7 +1261,7 @@ func (a app) agentAllow(ctx context.Context, args []string) int {
 	if err := client.AgentAllow(ctx, args[0]); err != nil {
 		return a.fail("allow", err)
 	}
-	fmt.Fprintf(a.stdout, "Allowed. That device now has STANDING access — its prompts inject without further approval.\n")
+	fmt.Fprintf(a.stdout, "Allowed. (Your own signed-in devices already trust each other, so this is only needed for a device the server doesn't count as active.)\n")
 	fmt.Fprintf(a.stdout, "Withdraw it any time: %s agent revoke %s\n", commandName, args[0])
 	return 0
 }
@@ -1307,7 +1316,7 @@ func (a app) agentRevoke(ctx context.Context, args []string) int {
 	if err := client.AgentRevoke(ctx, args[0]); err != nil {
 		return a.fail("revoke", err)
 	}
-	fmt.Fprintln(a.stdout, "Revoked. That device can no longer inject without a fresh approval.")
+	fmt.Fprintln(a.stdout, "Revoked. Note: your own signed-in devices trust each other anyway; to cut a device off, sign it out (`share2us signout <device>`).")
 	return 0
 }
 

@@ -264,7 +264,7 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 	case "claude":
 		return a.claude(ctx, args[1:])
 	case "setup":
-		return a.setup(args[1:])
+		return a.setup(ctx, args[1:])
 	default:
 		// A bare Share2Us share link (`s2u https://s.share2.us/<code>`) is a quick
 		// download — route it to `get` rather than trying to upload a file named
@@ -385,6 +385,7 @@ func (a app) login(ctx context.Context, args []string) int {
 			return a.fail("save credential", err)
 		}
 		fmt.Fprintf(a.stdout, "Logged in as %s\n", email)
+		fmt.Fprintf(a.stdout, "Next: `%s setup` gets this machine's agents ready (background service, skills, and the agent session you run it in).\n", commandName)
 		a.maybePromptConsent(ctx, authClient)
 		return 0
 	}

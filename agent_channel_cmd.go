@@ -114,6 +114,7 @@ func (a app) agentHook(args []string) int {
 	switch args[0] {
 	case "session-start", daemon.SessionStartHookV2:
 		a.proveTerminalHook(in.SessionID)
+		a.followFolderAgent(in.SessionID)
 		if args[0] == daemon.SessionStartHookV2 {
 			a.proveTerminalPromptHook(in.SessionID)
 		}
@@ -255,6 +256,34 @@ func (a app) proveTerminalHook(sessionID string) {
 	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
 		_ = daemon.ProveTerminalHook(sessionID, s.PID, daemon.CurrentZellijPane())
 	}
+}
+
+// followFolderAgent: a window started with `s2u claude` in a folder whose Claude agent is
+// bound becomes that agent when the bound session is no longer open (a resume in another
+// tab, a new session after /clear), keeping the agent id (todo ZW-10). It never takes over
+// from a bound session that is still open in another window.
+func (a app) followFolderAgent(sessionID string) {
+	ctx := context.Background()
+	s, err := daemon.FindOwnSession(ctx)
+	if err != nil || s.Tool != "claude" || s.SessionID != sessionID {
+		return
+	}
+	list, err := daemon.LoadBindings()
+	if err != nil {
+		return
+	}
+	b, ok := daemon.BindingFor(list, s.Project, "claude")
+	if !ok || b.SessionID == "" || b.SessionID == sessionID {
+		return
+	}
+	if live, err := (daemon.ClaudeRunner{}).Discover(ctx); err == nil {
+		for _, d := range live {
+			if d.SessionID == b.SessionID && d.Live {
+				return // the agent's own window is still open: leave it
+			}
+		}
+	}
+	_, _, _ = daemon.BindSessionInPane(b.Project, "claude", b.Label, sessionID, daemon.CurrentZellijPane())
 }
 
 func (a app) proveTerminalPromptHook(sessionID string) {
