@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126070227] - 2026-11-26
+
 ### Fixed
 
 - A typed request's reply is the agent's FINAL message, not an earlier progress line: the
