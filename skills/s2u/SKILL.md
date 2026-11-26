@@ -15,8 +15,13 @@ matching row. With no command, or `help`, print this table and the output of
 | Command | What to do |
 |---|---|
 | **Agents** | |
-| `list` | Reachable agents: `list_agents` tool if present, else `s2u agent list`. |
+| `agents` (or `list`) | Every agent you can send to: `s2u agent list --sharenets` (your devices' agents, then sharenet agents as `sharenet.agent`). |
+| `agent` (no args) | Same list, shown as suggestions: print the names/addresses the user can put after `/s2u agent`, then ask which one and what to send. |
+| `agent <agent> <prompt>` | Same as `send <agent> <prompt>`. |
 | `send <agent> <task> [file]` | Hand a task (and optionally a file) to another agent (see "Sending"). |
+| `<sharenet>.<agent> send <task>` | Same as `send <sharenet>.<agent> <task>`. |
+| `agent pause` / `agent disable` | Do not disturb: hold incoming prompts for the agent bound in this folder until resumed: `s2u agent pause`. |
+| `agent resume` / `agent enable` | Deliver held prompts again: `s2u agent resume`. |
 | `ask <agent> <question>` | Same as send, phrased as a question that needs an answer back. |
 | `status <request-id>` | `request_status` tool, else `s2u agent status <id>` (status, timing: sent / delivered / finished, and the reply; `--json`). |
 | `wait <request-id>` | Block until it finishes and print the reply: `s2u agent wait <id>` (run in the background). |
@@ -39,7 +44,11 @@ matching row. With no command, or `help`, print this table and the output of
 | `help` | This table plus `s2u agent list`. |
 
 `<agent>` is the agent's name or alias, its device's name when that device runs one agent
-(e.g. `homelab`), or an agent id (a unique prefix is fine). If the user didn't use a command
+(e.g. `homelab`), or an agent id (a unique prefix is fine). An agent in a sharenet (another
+account's, or yours in a shared project) is `<sharenet>.<agent>`, where `<agent>` is the
+function it was invited with or your alias for it (e.g. `butterpos.reviewer`); if that is
+in several projects, `<sharenet>.<project>.<agent>`. `s2u agent send --to` takes all of
+these. If the user didn't use a command
 word but asked in plain language ("ask homelab to..."), do the same thing.
 
 ## Sending

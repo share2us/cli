@@ -49,6 +49,8 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentResults(ctx, args[1:])
 	case "wait":
 		return a.agentWait(ctx, args[1:])
+	case "pause", "disable", "resume", "enable":
+		return a.agentPause(args[0] == "pause" || args[0] == "disable", args[1:])
 	case "pending":
 		return a.agentPending(ctx)
 	case "approve":
@@ -101,7 +103,7 @@ func (a app) agent(ctx context.Context, args []string) int {
 
 func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "usage: %s agent <list|pin|hide|rename|send|status|hops|pending|approve|allow|revoke|allowed|bind|unbind|typed|bindings|skill|goal|rules|policy>\n", commandName)
-	fmt.Fprintf(a.stderr, "  list [--all]                               reachable agent sessions across your devices\n                                             (--all includes hidden ones)\n")
+	fmt.Fprintf(a.stderr, "  list [--all] [--sharenets]                 reachable agent sessions across your devices\n                                             (--all includes hidden ones; --sharenets adds the\n                                             agents in your sharenet projects, as sharenet.agent)\n")
 	fmt.Fprintf(a.stderr, "  pin|unpin <agent-id>                       pin an agent to the top of the list (or undo)\n")
 	fmt.Fprintf(a.stderr, "  hide|unhide <agent-id>                     hide an agent from the default list (or undo)\n")
 	fmt.Fprintf(a.stderr, "  rename <agent-id> [NAME]                   give an agent a local name (empty NAME clears it);\n                                             this is your label only, nobody else sees it\n")
@@ -112,6 +114,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  join <code>                                join a sharenet project with THIS session: type\n                                             !s2u agent join <code> in Claude Code or Codex\n")
 	fmt.Fprintf(a.stderr, "  project <project-id>                       a project's reachable member agents\n")
 	fmt.Fprintf(a.stderr, "  status <request-id> [--json]               status, timing and result of a sent request\n")
+	fmt.Fprintf(a.stderr, "  pause|resume [--project DIR]               do not disturb: hold incoming prompts for the agent\n                                             bound here (default: this folder) until resumed\n")
 	fmt.Fprintf(a.stderr, "  wait <request-id> [--timeout 9m]           block until it finishes, then print the result\n                                             (also: send ... --wait)\n")
 	fmt.Fprintf(a.stderr, "  hops                                       hops this machine ran, and the session each ran in\n")
 	fmt.Fprintf(a.stderr, "  pending                                    requests awaiting your approval (this device)\n")
@@ -323,6 +326,9 @@ func (a app) agentBindings(ctx context.Context) int {
 		} else if b.Zellij != nil {
 			where = "  [zellij pane " + b.Zellij.Pane + "]"
 		}
+		if b.Paused {
+			where += "  [PAUSED: prompts held until `" + commandName + " agent resume`]"
+		}
 		fmt.Fprintf(a.stdout, "%-8s  %-12s  %-10s  %-26s  %s%s\n", b.Tool, label, daemon.AgentPolicy(b.Project, false), id, b.Project, where)
 	}
 	return 0
@@ -415,6 +421,9 @@ func (a app) agentList(ctx context.Context, args []string) int {
 		} else {
 			fmt.Fprintln(a.stdout, "No reachable agent sessions. Start the daemon with --agent-bridge on your other devices.")
 		}
+		if hasFlag(args, "--sharenets") {
+			a.printSharenetAgents(ctx, client)
+		}
 		return 0
 	}
 	// Full ids only: everything printed here can be pasted into `agent send`.
@@ -429,7 +438,52 @@ func (a app) agentList(ctx context.Context, args []string) int {
 	if hidden > 0 {
 		fmt.Fprintf(a.stdout, "(%d hidden; run `%s agent list --all`)\n", hidden, commandName)
 	}
+	if hasFlag(args, "--sharenets") {
+		a.printSharenetAgents(ctx, client)
+	}
 	return 0
+}
+
+// printSharenetAgents lists the member agents of the caller's sharenet projects, each with
+// the address `agent send --to` takes: sharenet.agent.
+func (a app) printSharenetAgents(ctx context.Context, client *clicore.Client) {
+	nets, err := client.ListSharenets(ctx)
+	if err != nil {
+		fmt.Fprintf(a.stderr, "sharenets: %s\n", cliErrorMessage(err))
+		return
+	}
+	config, _ := clicore.LoadConfig()
+	shown := 0
+	for _, n := range nets {
+		projects, err := client.ListSharenetProjects(ctx, n.ID)
+		if err != nil {
+			continue
+		}
+		for _, p := range projects {
+			members, err := client.ListProjectAgents(ctx, p.ID)
+			if err != nil {
+				continue // only visible from a device running a member agent of the project
+			}
+			for _, m := range members {
+				name := config.AgentDisplayName(m.AgentID, m.Function)
+				if name == "" {
+					name = m.AgentID
+				}
+				if shown == 0 {
+					fmt.Fprintln(a.stdout, "\nSharenet agents (send with --to <address>):")
+				}
+				owner := ""
+				if m.Yours {
+					owner = "  (yours)"
+				}
+				fmt.Fprintf(a.stdout, "  %-32s %-8s %-10s project %s%s\n", n.Name+"."+name, m.Tool, m.Status, p.Name, owner)
+				shown++
+			}
+		}
+	}
+	if shown == 0 {
+		fmt.Fprintln(a.stdout, "\nNo sharenet agents reachable from this device (bind an agent here that is a member of a sharenet project).")
+	}
 }
 
 func (a app) agentSend(ctx context.Context, args []string) int {
@@ -509,6 +563,15 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	client, ok := a.agentClient()
 	if !ok {
 		return 1
+	}
+	// "sharenet.agent": find the project in that sharenet whose member agent matches.
+	if projectID == "" && deviceID == "" && sessionID == "" {
+		if pid, agent, ok, err := a.resolveSharenetAddress(ctx, client, agentID); err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		} else if ok {
+			projectID, agentID = pid, agent
+		}
 	}
 	// A project hop names the sending agent: the one bound to this directory,
 	// unless --as says otherwise. The server checks it really runs on this device.
@@ -613,6 +676,89 @@ func (a app) agentSend(ctx context.Context, args []string) int {
 	}
 	if note := staleDaemonNote(); note != "" {
 		fmt.Fprintln(a.stderr, note)
+	}
+	return 0
+}
+
+// resolveSharenetAddress turns "sharenet.agent" (or "sharenet.project.agent") into a
+// project id and an agent query. ok=false when the text before the first dot isn't one of
+// the caller's sharenets: it is then an ordinary agent name.
+func (a app) resolveSharenetAddress(ctx context.Context, client *clicore.Client, to string) (projectID, agent string, ok bool, err error) {
+	parts := strings.Split(strings.TrimSpace(to), ".")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[len(parts)-1] == "" {
+		return "", "", false, nil
+	}
+	nets, lerr := client.ListSharenets(ctx)
+	if lerr != nil {
+		return "", "", false, nil
+	}
+	var net *clicore.SharenetSummary
+	for i := range nets {
+		if strings.EqualFold(nets[i].Name, parts[0]) || nets[i].ID == parts[0] {
+			net = &nets[i]
+			break
+		}
+	}
+	if net == nil {
+		return "", "", false, nil
+	}
+	agent = parts[len(parts)-1]
+	projects, perr := client.ListSharenetProjects(ctx, net.ID)
+	if perr != nil {
+		return "", "", true, fmt.Errorf("sharenet %q: %s", net.Name, cliErrorMessage(perr))
+	}
+	var hits []string
+	for _, p := range projects {
+		if len(parts) == 3 && !strings.EqualFold(p.Name, parts[1]) && p.ID != parts[1] {
+			continue
+		}
+		members, merr := client.ListProjectAgents(ctx, p.ID)
+		if merr != nil {
+			continue // only a device running a member agent of the project may look
+		}
+		if _, terr := pickTarget(targetsFromProject(members), targetQuery{Agent: agent}); terr == nil {
+			hits = append(hits, p.ID+" ("+p.Name+")")
+			projectID = p.ID
+		}
+	}
+	switch len(hits) {
+	case 1:
+		return projectID, agent, true, nil
+	case 0:
+		return "", "", true, fmt.Errorf("no reachable agent %q in sharenet %q (your agent here must be a member of one of its projects; see `%s agent list --sharenets`)", agent, net.Name, commandName)
+	}
+	return "", "", true, fmt.Errorf("agent %q is in several projects of sharenet %q: name one, as %s.<project>.%s (%s)", agent, net.Name, parts[0], agent, strings.Join(hits, ", "))
+}
+
+// agentPause: do-not-disturb for the agent(s) bound in a folder. Prompts are held, not
+// dropped or run in the background, and delivered on resume.
+func (a app) agentPause(pause bool, args []string) int {
+	project := ""
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--project" && i+1 < len(args) {
+			project, i = args[i+1], i+1
+			continue
+		}
+		fmt.Fprintf(a.stderr, "usage: %s agent pause|resume [--project DIR]\n", commandName)
+		return 2
+	}
+	if project == "" {
+		project, _ = os.Getwd()
+	}
+	changed, err := daemon.SetPaused(project, pause)
+	if errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(a.stderr, "no agent is bound in %s (see `%s agent bindings`)\n", project, commandName)
+		return 1
+	}
+	if err != nil {
+		return a.fail("agent pause", err)
+	}
+	for _, b := range changed {
+		if pause {
+			fmt.Fprintf(a.stdout, "Paused %s agent %s: incoming prompts are held until `%s agent resume`.\n", b.Tool, b.AgentID, commandName)
+		} else {
+			fmt.Fprintf(a.stdout, "Resumed %s agent %s: held prompts are delivered now.\n", b.Tool, b.AgentID)
+		}
 	}
 	return 0
 }

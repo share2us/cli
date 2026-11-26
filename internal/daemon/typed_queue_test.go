@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,4 +70,37 @@ func TestDraftInTheInputIsNeverTypedOver(t *testing.T) {
 	if z.enters() != 0 {
 		t.Fatalf("pressed Enter over the owner's draft (%d)", z.enters())
 	}
+}
+
+// Do not disturb: a paused agent's prompts are held (never typed, never run headless) and
+// delivered once resumed.
+func TestPausedAgentHoldsPrompts(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	old := injectHoldPoll
+	injectHoldPoll = time.Millisecond
+	t.Cleanup(func() { injectHoldPoll = old })
+	runtime, z, dir := typedRuntime(t, "│ ❯  │", "│ ❯  │", "│ ❯ [Pasted text #1 +5 lines] │")
+	if _, err := SetPaused(dir, true); err != nil {
+		t.Fatal(err)
+	}
+	c := &fakeAgentClient{reportNotify: make(chan struct{}, 16)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runner := typedRunner(dir)
+	runtime.handleInject(ctx, c, runner, keyedDeps(),
+		signedReq(t, clicore.AgentRequest{ID: "req-dnd", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "ping"}))
+	waitForReport(t, c, "waiting", "paused deliveries")
+	time.Sleep(20 * time.Millisecond)
+	if z.enters() != 0 {
+		t.Fatalf("a paused agent was typed into (%d)", z.enters())
+	}
+	for _, r := range c.reportsSnapshot() {
+		if strings.Contains(r[1], "headless") {
+			t.Fatalf("a paused agent ran headless: %v", r)
+		}
+	}
+	if _, err := SetPaused(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	waitForReport(t, c, "running", "Delivered")
 }

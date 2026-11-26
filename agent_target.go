@@ -45,13 +45,17 @@ func targetsFromSessions(list []clicore.AgentSessionInfo) []agentTarget {
 }
 
 func targetsFromProject(list []clicore.ProjectAgentAddress) []agentTarget {
+	config, _ := clicore.LoadConfig()
 	out := make([]agentTarget, 0, len(list))
 	for _, s := range list {
+		// A project agent has no personal name on the server: it is addressed by the
+		// function it was invited with, or by the alias given it here.
+		names := []string{s.Function, config.AgentDisplayName(s.AgentID, "")}
 		// Cross-account project members have no LAN fingerprint here: a direct
 		// LAN transfer to another account's device is not offered, so it uses the
 		// relay. LANFingerprint stays empty.
 		out = append(out, agentTarget{
-			AgentID: s.AgentID, SessionID: s.SessionID, DeviceID: s.DeviceID,
+			AgentID: s.AgentID, SessionID: s.SessionID, DeviceID: s.DeviceID, Names: names,
 			Tool: s.Tool, Status: s.Status, PublicKey: s.DevicePublicKey, LastSeen: s.LastSeen,
 		})
 	}
