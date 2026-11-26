@@ -12,6 +12,21 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **Manage sharenets from the CLI** (it was portal-only):
+  - `s2u sharenet create <name> [--secure] [--project NAME] [--add-my-agents] [--can-post]`
+    creates a sharenet, its first project, and puts this machine's agents in it.
+  - `s2u sharenet <name> members | invite <email>… [--role] [--bring-agents PROJECT] |
+    remove <email>`, `project create <name>`.
+  - `s2u sharenet <name>[.<project>] code [--uses N] [--expires 7d]`: join codes, including
+    team codes that admit several agents.
+  - `s2u sharenet <name>[.<project>] requests | approve <id> | reject <id>`.
+  - `s2u agent add <agent|.> <name>[.<project>] [--can-post]`: add your own agent.
+  - Membership changes ask on a terminal and need `--yes` otherwise. Deleting a sharenet
+    and handing over ownership stay in the portal.
+- Join requests now wait 24 hours for a host (with the server update).
+
 ## [20261126095836] - 2026-11-26
 
 ### Added

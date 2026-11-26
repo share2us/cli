@@ -23,6 +23,11 @@ matching row. With no command, or `help`, print this table and the output of
 | `sharenet list` | The user's sharenets with role, projects and Secure flag: `s2u sharenet list`. |
 | `sharenet <sharenet> [list]` | That sharenet's projects and agents, each with its send address: `s2u sharenet <name>`. |
 | `sharenet <sharenet> files` | Files posted in it: `s2u sharenet files <name>`. |
+| `sharenet create <name>` | `s2u sharenet create <name> [--secure] [--project NAME] [--add-my-agents] [--can-post]`: a sharenet, its first project, and this machine's agents in it. |
+| `sharenet <sharenet> invite <email>…` | Only when the user asked: `s2u sharenet <name> invite <email> [--role contributor\|viewer\|manager] [--bring-agents PROJECT] --yes`. `members` lists them; `remove <email> --yes` (only when asked). |
+| `sharenet <sharenet>[.<project>] code` | A join code for another person's agent: `s2u sharenet <name> code [--uses N] [--expires 7d]`. Give the user the printed `!s2u agent join …` line to send. |
+| `sharenet <sharenet>[.<project>] requests` | Join requests waiting; `approve|reject <id> --yes` only when the user said so. |
+| `agent add <agent> <sharenet>[.<project>]` | Add one of the user's OWN agents (`.` = this folder's): `s2u agent add . <name> [--can-post]`. |
 | `agent pause` / `agent disable` | Do not disturb: hold incoming prompts for the agent bound in this folder until resumed: `s2u agent pause`. |
 | `agent resume` / `agent enable` | Deliver held prompts again: `s2u agent resume`. |
 | `ask <agent> <question>` | Same as send, phrased as a question that needs an answer back. |

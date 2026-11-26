@@ -49,6 +49,8 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentResults(ctx, args[1:])
 	case "wait":
 		return a.agentWait(ctx, args[1:])
+	case "add":
+		return a.agentAdd(ctx, args[1:])
 	case "pause", "disable", "resume", "enable":
 		return a.agentPause(args[0] == "pause" || args[0] == "disable", args[1:])
 	case "pending":
@@ -92,9 +94,7 @@ func (a app) agent(ctx context.Context, args []string) int {
 	case "hook":
 		return a.agentHook(args[1:])
 	case "invites", "withdraw":
-		// Sharenet membership (inviting, accepting, removing) is managed in the
-		// portal; the CLI binds sessions and sends between agents.
-		fmt.Fprintf(a.stderr, "agent invitations and memberships are managed in the portal: %s\n", portalSharenetsURL())
+		fmt.Fprintf(a.stderr, "agent invitations: add your own agents with `%s agent add <agent> <sharenet>[.<project>]`; invitations from others are in the portal: %s\n", commandName, portalSharenetsURL())
 		return 2
 	default:
 		return a.agentUsage()
@@ -1147,7 +1147,7 @@ func (a app) agentJoin(ctx context.Context, args []string) int {
 	default:
 		fmt.Fprintf(a.stdout, "Asked to join %q in %q. A host approves it in the portal; they see your email (%s).\n", res.ProjectName, res.SharenetName, credential.Email)
 		fmt.Fprintln(a.stdout, "Once approved, you are a member of the sharenet and this agent is in the project.")
-		fmt.Fprintln(a.stdout, "If nobody approves it within 60 minutes the request expires; ask the host for a new code then.")
+		fmt.Fprintln(a.stdout, "If nobody approves it within 24 hours the request expires; ask the host for a new code then.")
 	}
 	// The agent can only receive work while the daemon runs: make sure it does.
 	a.ensureAgentReachable()
