@@ -51,6 +51,10 @@ func (a app) agent(ctx context.Context, args []string) int {
 		return a.agentWait(ctx, args[1:])
 	case "add":
 		return a.agentAdd(ctx, args[1:])
+	case "approvals":
+		return a.agentApprovals()
+	case "grants":
+		return a.agentGrants(ctx, args[1:])
 	case "pause", "disable", "resume", "enable":
 		return a.agentPause(args[0] == "pause" || args[0] == "disable", args[1:])
 	case "pending":
@@ -114,6 +118,8 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "  join <code> [--wait]                       join a sharenet project with THIS session (--wait:\n                                             until a host approves); type\n                                             !s2u agent join <code> in Claude Code or Codex\n")
 	fmt.Fprintf(a.stderr, "  project <project-id>                       a project's reachable member agents\n")
 	fmt.Fprintf(a.stderr, "  status <request-id> [--json]               status, timing and result of a sent request\n")
+	fmt.Fprintf(a.stderr, "  approvals                                  where blocked actions are approved (the portal)\n")
+	fmt.Fprintf(a.stderr, "  grants [revoke <id>]                       permissions your agents on this device hold\n")
 	fmt.Fprintf(a.stderr, "  pause|resume [--project DIR]               do not disturb: hold incoming prompts for the agent\n                                             bound here (default: this folder) until resumed\n")
 	fmt.Fprintf(a.stderr, "  wait <request-id> [--timeout 9m]           block until it finishes, then print the result\n                                             (also: send ... --wait)\n")
 	fmt.Fprintf(a.stderr, "  hops                                       hops this machine ran, and the session each ran in\n")

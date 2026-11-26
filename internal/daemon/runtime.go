@@ -106,6 +106,10 @@ type Deps struct {
 // Runtime holds run state (start time, what it owns, the stop hook) so the
 // control server can answer status/owns-receiver and honour a stop request.
 type Runtime struct {
+	// Owner approvals (ADR-052): grant cache, parked requests, the bridge for continuations.
+	approvalsOnce  sync.Once
+	approvalsState *approvalState
+
 	// typedBlocks: why the last typed attempt per request didn't happen (for its status).
 	typedBlockMu sync.Mutex
 	typedBlocks  map[string]string
@@ -260,6 +264,9 @@ func Run(ctx context.Context, opts Options, deps Deps) error {
 func (rt *Runtime) control() func(daemonctl.Request) daemonctl.Response {
 	return func(req daemonctl.Request) daemonctl.Response {
 		if resp, ok := rt.hub().channelControl(req, rt.channelCaller.sessionPID); ok {
+			return resp
+		}
+		if resp, ok := rt.approvalControl(req); ok {
 			return resp
 		}
 		switch req.Op {

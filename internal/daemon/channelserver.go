@@ -322,8 +322,10 @@ func WriteChannelLaunchConfig(exe string) (mcpPath, settingsPath string, err err
 			map[string]any{"type": "command", "command": claudeHookCommand(exe, SessionStartHookV2)}}}},
 		"UserPromptSubmit": []any{map[string]any{"hooks": []any{
 			map[string]any{"type": "command", "command": claudeHookCommand(exe, "user-prompt-submit")}}}},
+		// The hook may hold a blocked command while its owner is asked (ADR-052): give it
+		// more than approvalHold before Claude cancels it.
 		"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{
-			map[string]any{"type": "command", "command": claudeHookCommand(exe, "pre-tool-use")}}}},
+			map[string]any{"type": "command", "command": claudeHookCommand(exe, "pre-tool-use"), "timeout": 240}}}},
 		"Stop": []any{map[string]any{"hooks": []any{
 			map[string]any{"type": "command", "command": claudeHookCommand(exe, "stop")}}}},
 		"SessionEnd": []any{map[string]any{"hooks": []any{

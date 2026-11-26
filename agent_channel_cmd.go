@@ -156,6 +156,15 @@ func (a app) agentHook(args []string) int {
 		}
 		_ = json.Unmarshal(resp.Data, &g)
 		if deny, reason := daemon.HookDecision(in.CWD, in.ToolName, in.ToolInput, g.Strict); deny {
+			// Anything but self-protection can be allowed by the agent's owner (ADR-052): a
+			// grant covers it, or the owner is asked and the command waits for the answer.
+			if !daemon.SelfProtected(in.CWD, in.ToolName, in.ToolInput) {
+				allowed, why := askOwner(in, reason, daemonctl.Call, time.Sleep)
+				if allowed {
+					return 0
+				}
+				reason = why
+			}
 			// The sender must learn its request hit a wall, not just read a vague "done".
 			_, _ = daemonctl.Call(daemonctl.Request{Op: "channel-denied", Args: map[string]string{
 				"session": in.SessionID, "what": daemon.DescribeToolUse(in.ToolName, in.ToolInput)}})
@@ -256,6 +265,54 @@ func (a app) proveTerminalHook(sessionID string) {
 	if err == nil && s.Tool == "claude" && s.SessionID == sessionID {
 		_ = daemon.ProveTerminalHook(sessionID, s.PID, daemon.CurrentZellijPane())
 	}
+}
+
+// approvalHold is how long a blocked command waits for its owner's answer before the agent
+// is told to carry on without it (Share2Us continues the task if it is allowed later). The
+// PreToolUse hook timeout (WriteChannelLaunchConfig) must stay above this.
+var (
+	approvalHold = 3 * time.Minute
+	approvalPoll = 2 * time.Second
+)
+
+// askOwner checks the agent's grants, else files an approval request and holds. It returns
+// whether to allow, and otherwise the refusal text for the agent.
+func askOwner(in hookInput, reason string, call func(daemonctl.Request) (daemonctl.Response, bool), sleep func(time.Duration)) (bool, string) {
+	text := daemon.ActionText(in.ToolName, in.ToolInput)
+	resp, ok := call(daemonctl.Request{Op: "approval-check", Args: map[string]string{
+		"session": in.SessionID, "tool": in.ToolName, "text": text, "reason": reason}})
+	var check struct {
+		Decision, ID, URL, Display string
+	}
+	if !ok || !resp.OK || json.Unmarshal(resp.Data, &check) != nil {
+		return false, reason
+	}
+	switch check.Decision {
+	case "allow":
+		return true, ""
+	case "pending":
+	default:
+		return false, reason
+	}
+	deadline := time.Now().Add(approvalHold)
+	for time.Now().Before(deadline) {
+		sleep(approvalPoll)
+		st, ok := call(daemonctl.Request{Op: "approval-status", Args: map[string]string{"id": check.ID}})
+		var s struct{ Status string }
+		if !ok || json.Unmarshal(st.Data, &s) != nil {
+			continue
+		}
+		switch s.Status {
+		case "approved":
+			return true, ""
+		case "denied":
+			return false, "Share2Us: the owner of this machine declined `" + check.Display + "`. Don't try it another way; finish what you can without it and say what you couldn't do."
+		case "expired", "used":
+			return false, reason
+		}
+	}
+	_, _ = call(daemonctl.Request{Op: "approval-park", Args: map[string]string{"id": check.ID, "session": in.SessionID}})
+	return false, "Share2Us: this needs the machine owner's approval, and they've been asked (by email and in the Share2Us portal) but haven't answered yet. Don't retry it another way: finish what you can, say it is waiting for the owner's approval, and end your turn. If they allow it, Share2Us continues this task here."
 }
 
 // followFolderAgent: a window started with `s2u claude` in a folder whose Claude agent is
