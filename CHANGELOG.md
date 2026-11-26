@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126120119] - 2026-11-26
+
 ### Fixed
 
 - Windows started before the approval feature (without the longer hook timeout) wait at
