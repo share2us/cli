@@ -421,6 +421,9 @@ func (rt *Runtime) agentReceiveLoop(ctx context.Context, client AgentClient, run
 	for _, r := range runners {
 		byTool[r.Tool()] = r
 	}
+	// Owner approvals (ADR-052): continuations after a late approval need these.
+	rt.setApprovalBridge(client, byTool, deps)
+	go rt.watchParkedApprovals(ctx)
 	// Hops held for an open window live only in memory: a restart asks the
 	// server for them back. An older server does not know the call; that is fine.
 	if n, err := client.AgentRequeueWaiting(ctx); err != nil {
@@ -515,6 +518,11 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 		return
 	}
 	prompt := env.Prompt
+	if name := strings.TrimSpace(env.SenderDeviceName); name != "" {
+		rt.noteHopSender(req.ID, name)
+	} else {
+		rt.noteHopSender(req.ID, req.SenderDeviceID)
+	}
 	cwd := ""
 	var binding Binding
 	bound := false

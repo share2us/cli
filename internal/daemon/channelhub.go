@@ -227,6 +227,16 @@ func (h *channelHub) poll(session string, claudePID int) []ChannelDelivery {
 
 const ChannelKindResult = "result"
 
+// activeRequest is a request in progress in session ("" when none).
+func (h *channelHub) activeRequest(session string) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for id := range h.active[session] {
+		return id
+	}
+	return ""
+}
+
 // recordDenied notes a refused tool use against every request in progress in session.
 func (h *channelHub) recordDenied(session, what string) {
 	h.mu.Lock()

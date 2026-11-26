@@ -12,6 +12,21 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **Ask the owner instead of failing** (with the server update): when an agent working on a
+  delivered task needs something its guard blocks (a command outside its rules, a network
+  call, a push…), Share2Us emails its owner and shows the request in the portal. The command
+  waits up to 3 minutes; if the owner allows it, it runs. If they answer later, Share2Us
+  continues the task in that session and the sender gets the result. The owner can allow it
+  once, allow that command (or commands starting with a prefix) for some minutes, allow
+  everything for some minutes, or always. Approving happens in the portal only; editing the
+  guard's own files and `.git` is never approvable.
+- `s2u agent grants [revoke <id>]` lists and takes back what your agents may do;
+  `s2u agent approvals` links to the portal page.
+- Windows started with `s2u claude` give the guard hook enough time to wait for the owner
+  (restart older windows with `s2u claude`).
+
 ## [20261126104837] - 2026-11-26
 
 ### Added
