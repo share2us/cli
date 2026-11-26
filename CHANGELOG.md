@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126095836] - 2026-11-26
+
 ### Added
 
 - **`s2u setup` is a guided first run**: signs in if needed, starts the background service,
