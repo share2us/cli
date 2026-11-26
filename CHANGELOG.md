@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126131233] - 2026-11-26
+
 ### Fixed
 
 - **A blocked command now really waits for the owner's approval** (cli-core v0.80.0): the
