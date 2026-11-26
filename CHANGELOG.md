@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- The receiving window now shows that the owner was asked: Claude's spinner reads "Share2Us
+  guard: if this needs approval, waiting for the owner (asked by email + portal)" while it
+  waits (windows started with `s2u claude`), a message says when the owner allowed it, and
+  the receiving machine shows a desktop notification with the approval link.
+
 ## [20261126132839] - 2026-11-26
 
 ### Fixed
