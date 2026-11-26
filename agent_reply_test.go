@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/share2us/cli/internal/daemon"
 )
@@ -47,5 +48,24 @@ func TestLaunchSettingsUseTheV2SessionHook(t *testing.T) {
 	b, _ := os.ReadFile(settings)
 	if !strings.Contains(string(b), "agent hook "+daemon.SessionStartHookV2) || !strings.Contains(string(b), "agent hook user-prompt-submit") {
 		t.Fatalf("settings = %s", b)
+	}
+}
+
+// A transcript that gains its final message after the Stop hook started: the later text
+// wins, not the progress line that was there first.
+func TestStopHookReplyWaitsForTheFinalMessage(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "t.jsonl")
+	head := `{"type":"user","message":{"role":"user","content":"[Share2Us] from device d, request r2:\n\nip?"}}` + "\n" +
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Checking the playbook."}]}}` + "\n"
+	_ = os.WriteFile(p, []byte(head), 0o600)
+	oldWait := stopReplyWait
+	stopReplyWait = 20 * time.Millisecond
+	defer func() { stopReplyWait = oldWait }()
+	go func() {
+		time.Sleep(25 * time.Millisecond)
+		_ = os.WriteFile(p, []byte(head+`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"LAN 192.0.2.10/24"}]}}`+"\n"), 0o600)
+	}()
+	if got := stopHookReply(hookInput{TranscriptPath: p}, "r2"); got != "LAN 192.0.2.10/24" {
+		t.Fatalf("got %q", got)
 	}
 }

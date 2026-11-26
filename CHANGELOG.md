@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- A typed request's reply is the agent's FINAL message, not an earlier progress line: the
+  Stop hook prefers the final message Claude passes it, and otherwise waits until the
+  transcript's last reply stops changing.
+
 ## [20261125212750] - 2026-11-25
 
 ### Added
