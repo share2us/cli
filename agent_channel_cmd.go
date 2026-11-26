@@ -327,15 +327,19 @@ func askOwner(in hookInput, reason string, hold time.Duration, call func(daemonc
 	for time.Now().Before(deadline) {
 		sleep(approvalPoll)
 		st, ok := call(daemonctl.Request{Op: "approval-status", Args: map[string]string{"id": check.ID}})
-		var s struct{ Status string }
+		var s struct{ Status, Note string }
 		if !ok || json.Unmarshal(st.Data, &s) != nil {
 			continue
 		}
+		note := ""
+		if n := strings.TrimSpace(s.Note); n != "" {
+			note = " The owner's note: " + n
+		}
 		switch s.Status {
 		case "approved":
-			return true, "Share2Us: the owner allowed `" + check.Display + "`.", ""
+			return true, "Share2Us: the owner allowed `" + check.Display + "`." + note, ""
 		case "denied":
-			return false, "Share2Us: the owner of this machine declined `" + check.Display + "`. Don't try it another way; finish what you can without it and say what you couldn't do.", ""
+			return false, "Share2Us: the owner of this machine declined `" + check.Display + "`." + note + " Don't try it another way; finish what you can without it and say what you couldn't do.", ""
 		case "expired", "used":
 			return false, reason, ""
 		}

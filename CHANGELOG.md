@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- Approvals in the chat: when the owner allows or declines a blocked action, the note they
+  add (in the portal or in the project's chat) reaches the agent with the decision, and with
+  the continuation after a late approval.
+
 ## [20261126222738] - 2026-11-26
 
 ### Added

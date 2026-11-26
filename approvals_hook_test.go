@@ -13,6 +13,7 @@ import (
 )
 
 type fakeApprovalDaemon struct {
+	note     string
 	decision string
 	statuses []string
 	calls    []string
@@ -29,7 +30,7 @@ func (f *fakeApprovalDaemon) call(req daemonctl.Request) (daemonctl.Response, bo
 		if len(f.statuses) > 0 {
 			st, f.statuses = f.statuses[0], f.statuses[1:]
 		}
-		v = map[string]string{"status": st}
+		v = map[string]string{"status": st, "note": f.note}
 	default:
 		v = map[string]string{}
 	}
@@ -50,8 +51,8 @@ func TestAskOwner(t *testing.T) {
 	if ok, _, _ := askOwner(in, "guard", approvalHold, (&fakeApprovalDaemon{decision: "pending", statuses: []string{"pending", "approved"}}).call, noSleep); !ok {
 		t.Fatal("an approval during the hold didn't allow")
 	}
-	ok, why, _ := askOwner(in, "guard", approvalHold, (&fakeApprovalDaemon{decision: "pending", statuses: []string{"denied"}}).call, noSleep)
-	if ok || !strings.Contains(why, "declined") {
+	ok, why, _ := askOwner(in, "guard", approvalHold, (&fakeApprovalDaemon{decision: "pending", statuses: []string{"denied"}, note: "not on prod"}).call, noSleep)
+	if ok || !strings.Contains(why, "declined") || !strings.Contains(why, "not on prod") {
 		t.Fatalf("deny: %v %q", ok, why)
 	}
 	f := &fakeApprovalDaemon{decision: "pending"}
