@@ -19,6 +19,7 @@ type fakeZellij struct {
 	screens  []string
 	pasted   []string
 	mu       sync.Mutex
+	keys     []string
 	entered  int
 	onPaste  func()
 	newTabs  []string // tab names opened via NewTab
@@ -63,6 +64,13 @@ func (f *fakeZellij) enters() int {
 	defer f.mu.Unlock()
 	return f.entered
 }
+func (f *fakeZellij) Key(_ context.Context, _, _, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keys = append(f.keys, key)
+	return nil
+}
+
 func (f *fakeZellij) NewTab(_ context.Context, _, name string) error {
 	f.newTabs = append(f.newTabs, name)
 	return nil
