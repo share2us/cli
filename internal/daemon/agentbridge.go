@@ -470,7 +470,7 @@ func (rt *Runtime) agentReceiveLoop(ctx context.Context, client AgentClient, run
 }
 
 func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest) {
-	rt.noteTaskProject(req.ID, req.ProjectID)
+	rt.noteTaskProject(req.ID, req.ProjectID, req.ProjectSecure)
 	if req.Tool != runner.Tool() {
 		deps.logf("agent-bridge: unsupported tool %q for request %s", req.Tool, req.ID)
 		_ = client.AgentReportResult(ctx, req.ID, "failed", "this daemon does not run "+req.Tool+" sessions")
