@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- Tasks from @mentions: when someone writes `@agent` in a sharenet project's chat, that
+  agent gets the message as a task and its reply is posted in the message's thread. These
+  tasks come from the chat, not from a device, so Share2Us vouches for who wrote them; they
+  run under the agent's guard like any delivered task, and the owner's approvals apply.
+  `s2u agent mentions off` (in the agent's folder) refuses them; mentioning the agent then
+  only notifies its owner.
+
 ## [20261126205938] - 2026-11-26
 
 ### Fixed

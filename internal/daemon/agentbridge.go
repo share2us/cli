@@ -476,41 +476,56 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 		_ = client.AgentReportResult(ctx, req.ID, "failed", "this daemon does not run "+req.Tool+" sessions")
 		return
 	}
-	// Authenticate the sender FIRST (ADR-041 §5), before anything is unsealed or
-	// run. The server checked this hop's signature too, but a compromised server
-	// could skip that check or queue a hop it wrote itself; this check, against a
-	// key the server cannot change after the fact, is the one that defends against
-	// it. Fail closed: with no pin store there is nothing to enforce against.
-	if deps.SenderPins == nil {
-		deps.logf("agent-bridge: refusing inject %s: sender verification is unavailable", req.ID)
-		_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device cannot verify who sent this, so it will not run it")
-		return
-	}
-	if verr := deps.SenderPins.VerifyDelivered(req, deps.DeviceSessionID, time.Now()); verr != nil {
-		deps.logf("agent-bridge: refusing inject %s from %s: %v", req.ID, req.SenderDeviceID, verr)
-		rt.notify("Share2Us", "Refused a prompt that could not be verified as coming from its sender")
-		_ = client.AgentReportResult(ctx, req.ID, "failed", "refused by the receiving device: "+verr.Error())
-		return
-	}
+	var env InjectEnvelope
+	if req.Kind == "channel" {
+		// An @mention in a sharenet project (ADR-053): no sending device to verify; the server
+		// vouches for the author, and the prompt is the message the project's members see.
+		// It runs under this agent's guard like any delivered prompt; its owner can refuse
+		// these tasks (s2u agent mentions off).
+		e, why := channelEnvelope(req)
+		if why != "" {
+			deps.logf("agent-bridge: refusing channel task %s: %s", req.ID, why)
+			_ = client.AgentReportResult(ctx, req.ID, "failed", why)
+			return
+		}
+		env = e
+	} else {
+		// Authenticate the sender FIRST (ADR-041 §5), before anything is unsealed or
+		// run. The server checked this hop's signature too, but a compromised server
+		// could skip that check or queue a hop it wrote itself; this check, against a
+		// key the server cannot change after the fact, is the one that defends against
+		// it. Fail closed: with no pin store there is nothing to enforce against.
+		if deps.SenderPins == nil {
+			deps.logf("agent-bridge: refusing inject %s: sender verification is unavailable", req.ID)
+			_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device cannot verify who sent this, so it will not run it")
+			return
+		}
+		if verr := deps.SenderPins.VerifyDelivered(req, deps.DeviceSessionID, time.Now()); verr != nil {
+			deps.logf("agent-bridge: refusing inject %s from %s: %v", req.ID, req.SenderDeviceID, verr)
+			rt.notify("Share2Us", "Refused a prompt that could not be verified as coming from its sender")
+			_ = client.AgentReportResult(ctx, req.ID, "failed", "refused by the receiving device: "+verr.Error())
+			return
+		}
 
-	// E2E (ADR-036 P4): the prompt is sealed to this device's key; unseal it before
-	// running. A decryption failure is fatal for the request (never run a garbled
-	// or unexpectedly-plaintext prompt). No key at all is fatal too: a prompt this
-	// device cannot unseal is a prompt whose author it cannot vouch for, and the
-	// runner executes it with edits pre-approved in the user's project. The old
-	// code ran req.SealedPrompt AS-IS when Unseal was nil (§AJ #8).
-	if deps.Unseal == nil {
-		deps.logf("agent-bridge: refusing inject %s: this device has no encryption key", req.ID)
-		_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device has no encryption key and will not run an unsealed prompt")
-		return
+		// E2E (ADR-036 P4): the prompt is sealed to this device's key; unseal it before
+		// running. A decryption failure is fatal for the request (never run a garbled
+		// or unexpectedly-plaintext prompt). No key at all is fatal too: a prompt this
+		// device cannot unseal is a prompt whose author it cannot vouch for, and the
+		// runner executes it with edits pre-approved in the user's project. The old
+		// code ran req.SealedPrompt AS-IS when Unseal was nil (§AJ #8).
+		if deps.Unseal == nil {
+			deps.logf("agent-bridge: refusing inject %s: this device has no encryption key", req.ID)
+			_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device has no encryption key and will not run an unsealed prompt")
+			return
+		}
+		raw, uerr := deps.Unseal(req.SealedPrompt)
+		if uerr != nil {
+			deps.logf("agent-bridge: cannot decrypt inject %s: %v", req.ID, uerr)
+			_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device could not decrypt the prompt")
+			return
+		}
+		env = ParseEnvelope(raw)
 	}
-	raw, uerr := deps.Unseal(req.SealedPrompt)
-	if uerr != nil {
-		deps.logf("agent-bridge: cannot decrypt inject %s: %v", req.ID, uerr)
-		_ = client.AgentReportResult(ctx, req.ID, "failed", "the receiving device could not decrypt the prompt")
-		return
-	}
-	env := ParseEnvelope(raw)
 	if env.Deliver != "" && env.Deliver != "run" && env.Deliver != "inbox" {
 		_ = client.AgentReportResult(ctx, req.ID, "failed", "unknown file delivery mode")
 		return
