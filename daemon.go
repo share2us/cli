@@ -146,6 +146,8 @@ func (a app) daemonRun(ctx context.Context, args []string) int {
 		CheckUpdate:    a.daemonUpdateCheck,
 		Cleanup:        func(c context.Context) error { return cleanupStaging(destDir) },
 		SyncSecureKeys: a.daemonSyncSecureKeys,
+		SealTaskReply:  a.sealTaskReply,
+		OpenTaskReply:  a.openTaskReply,
 		Logf: func(format string, args ...any) {
 			fmt.Fprintf(logw, format+"\n", args...)
 		},
