@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126071634] - 2026-11-26
+
 ### Fixed
 
 - **`privileged` now applies to prompts typed into a window.** The guard kept those on
