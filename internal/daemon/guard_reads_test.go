@@ -5,6 +5,7 @@ package daemon
 
 import (
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -12,8 +13,8 @@ import (
 // project; outside paths, writing flags and clock changes stay refused.
 func TestGuardAllowsEverydayReadsInsideTheProject(t *testing.T) {
 	dir := t.TempDir()
-	in := filepath.Join(dir, "docs")
-	for cmd, wantDeny := range map[string]bool{
+	in := "docs" // project-relative: a Windows temp path has backslashes, which the guard refuses
+	cases := map[string]bool{
 		`grep -rniE "gateway|wan ip" ` + in:         false,
 		`grep -rni -e gateway -e "public ip" ` + in: false,
 		`grep -rni gateway`:                         false, // recursive over the project
@@ -23,14 +24,17 @@ func TestGuardAllowsEverydayReadsInsideTheProject(t *testing.T) {
 		`date -u +%H:%M`:                            false,
 		`uname -a`:                                  false,
 		`uptime`:                                    false,
-		`cat /etc/timezone`:                         true, // outside the project
-		`grep -rni gateway /etc`:                    true,
-		`grep -f /etc/shadow ` + in:                 true,
 		`date -s 2020-01-01`:                        true,
 		`ls -la --color=always ` + in:               true,
 		`ip -4 addr`:                                true, // network identity: privileged only
 		`curl -s ifconfig.me`:                       true,
-	} {
+	}
+	if runtime.GOOS != "windows" { // "/etc" is a POSIX absolute path
+		cases[`cat /etc/timezone`] = true // outside the project
+		cases[`grep -rni gateway /etc`] = true
+		cases[`grep -f /etc/shadow `+in] = true
+	}
+	for cmd, wantDeny := range cases {
 		if deny, reason := HookDecision(dir, "Bash", map[string]any{"command": cmd}, false); deny != wantDeny {
 			t.Errorf("%q: deny=%v (%s), want %v", cmd, deny, reason, wantDeny)
 		}
