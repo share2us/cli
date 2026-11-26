@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126171734] - 2026-11-26
+
 ### Added
 
 - `s2u sharenet <name>[.<project>] activity [--since ID] [--limit N] [--json]`: a sharenet
