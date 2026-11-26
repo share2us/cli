@@ -53,6 +53,7 @@ type channelHub struct {
 	channel   map[string]bool              // request -> requires an explicit report, never Stop
 	reported  map[string]string            // request -> result, held until the guarded turn ends
 	denied    map[string][]string          // request -> tool uses the guard refused during it
+	awaiting  map[string][]string          // request -> refused uses its owner is still deciding (with the approval page)
 }
 
 func newChannelHub() *channelHub {
@@ -61,7 +62,7 @@ func newChannelHub() *channelHub {
 		picked: map[string]chan struct{}{}, result: map[string]chan string{}, aborted: map[string]chan struct{}{},
 		active: map[string]map[string]bool{}, activePID: map[string]int{}, owner: map[string]string{},
 		guard: map[string]bool{}, guardPID: map[string]int{}, proven: map[string]bool{}, channel: map[string]bool{},
-		reported: map[string]string{}, denied: map[string][]string{},
+		reported: map[string]string{}, denied: map[string][]string{}, awaiting: map[string][]string{},
 	}
 }
 
@@ -237,11 +238,18 @@ func (h *channelHub) activeRequest(session string) string {
 	return ""
 }
 
-// recordDenied notes a refused tool use against every request in progress in session.
-func (h *channelHub) recordDenied(session, what string) {
+// recordDenied notes a refused tool use against every request in progress in session;
+// approval is the owner's approval page when they're still deciding (ADR-052).
+func (h *channelHub) recordDenied(session, what, approval string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for id := range h.active[session] {
+		if approval != "" {
+			if len(h.awaiting[id]) < 10 {
+				h.awaiting[id] = append(h.awaiting[id], what+" (approve: "+approval+")")
+			}
+			continue
+		}
 		if len(h.denied[id]) < 10 {
 			h.denied[id] = append(h.denied[id], what)
 		}
@@ -250,12 +258,17 @@ func (h *channelHub) recordDenied(session, what string) {
 
 // annotateDenied puts the guard's refusals first, so a turn that was blocked never reads
 // as a plain success to its sender.
-func annotateDenied(out string, denied []string) string {
-	if len(denied) == 0 {
-		return out
+func annotateDenied(out string, denied, awaiting []string) string {
+	prefix := ""
+	if len(awaiting) > 0 {
+		prefix += "Waiting for the target owner's approval: " + strings.Join(awaiting, "; ") +
+			". They were asked by email and in the Share2Us portal. If they allow it, the task continues on the target and the sender gets a new result automatically; nothing needs to be resent.\n\n"
 	}
-	return "Blocked on the target: its Share2Us guard refused " + strings.Join(denied, "; ") +
-		". The result below may be incomplete; the target's owner can run it, or allow it in that project's rules.\n\n" + out
+	if len(denied) > 0 {
+		prefix += "Blocked on the target: its Share2Us guard refused " + strings.Join(denied, "; ") +
+			". The result below may be incomplete; the target's owner can run it, or allow it in that project's rules.\n\n"
+	}
+	return prefix + out
 }
 
 // DescribeToolUse is a short, single-line name for a tool call ("`share2us agent hops`").
@@ -349,7 +362,7 @@ func (h *channelHub) turnEndedForCaller(session, requestID string, verifyTyped b
 			out = replyForSender(reply)
 		}
 		if r, ok := h.result[id]; ok {
-			r <- annotateDenied(out, h.denied[id])
+			r <- annotateDenied(out, h.denied[id], h.awaiting[id])
 		}
 		h.forget(id)
 	}
@@ -385,6 +398,7 @@ func (h *channelHub) forget(requestID string) {
 	delete(h.aborted, requestID)
 	delete(h.reported, requestID)
 	delete(h.denied, requestID)
+	delete(h.awaiting, requestID)
 	delete(h.activePID, requestID)
 	if s, ok := h.owner[requestID]; ok {
 		delete(h.active[s], requestID)
@@ -455,7 +469,7 @@ func (h *channelHub) channelControl(req daemonctl.Request, callerSessionPID func
 		session := req.Args["session"]
 		return daemonctl.Response{OK: h.guardRegistered(session, callerPID(session))}, true
 	case "channel-denied":
-		h.recordDenied(req.Args["session"], req.Args["what"])
+		h.recordDenied(req.Args["session"], req.Args["what"], req.Args["approval"])
 		return daemonctl.Response{OK: true}, true
 	case "channel-guarded":
 		active, strict := h.guarded(req.Args["session"])

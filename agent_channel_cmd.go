@@ -158,20 +158,22 @@ func (a app) agentHook(args []string) int {
 		if deny, reason := daemon.HookDecision(in.CWD, in.ToolName, in.ToolInput, g.Strict); deny {
 			// Anything but self-protection can be allowed by the agent's owner (ADR-052): a
 			// grant covers it, or the owner is asked and the command waits for the answer.
+			awaiting := ""
 			if !daemon.SelfProtected(in.CWD, in.ToolName, in.ToolInput) {
 				hold := approvalHoldShort
 				if args[0] == daemon.PreToolUseHookV2 {
 					hold = approvalHold
 				}
-				allowed, why := askOwner(in, reason, hold, daemonctl.Call, time.Sleep)
+				allowed, why, url := askOwner(in, reason, hold, daemonctl.Call, time.Sleep)
 				if allowed {
 					return 0
 				}
-				reason = why
+				reason, awaiting = why, url
 			}
-			// The sender must learn its request hit a wall, not just read a vague "done".
+			// The sender must learn its request hit a wall, not just read a vague "done" — and,
+			// when the owner is still deciding, that it continues by itself if allowed.
 			_, _ = daemonctl.Call(daemonctl.Request{Op: "channel-denied", Args: map[string]string{
-				"session": in.SessionID, "what": daemon.DescribeToolUse(in.ToolName, in.ToolInput)}})
+				"session": in.SessionID, "what": daemon.DescribeToolUse(in.ToolName, in.ToolInput), "approval": awaiting}})
 			fmt.Fprintln(a.stdout, hookDeny(reason))
 		}
 	case "stop":
@@ -284,22 +286,26 @@ var (
 
 // askOwner checks the agent's grants, else files an approval request and holds. It returns
 // whether to allow, and otherwise the refusal text for the agent.
-func askOwner(in hookInput, reason string, hold time.Duration, call func(daemonctl.Request) (daemonctl.Response, bool), sleep func(time.Duration)) (bool, string) {
+// The third result is the approval page when the owner hasn't decided yet (the request is
+// parked and continues if allowed).
+func askOwner(in hookInput, reason string, hold time.Duration, call func(daemonctl.Request) (daemonctl.Response, bool), sleep func(time.Duration)) (bool, string, string) {
 	text := daemon.ActionText(in.ToolName, in.ToolInput)
+	// The guard's message speaks to the agent ("run it yourself"); the owner sees the why only.
+	ownerReason := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(reason, "Share2Us: "), " Run it yourself if you want it."))
 	resp, ok := call(daemonctl.Request{Op: "approval-check", Args: map[string]string{
-		"session": in.SessionID, "tool": in.ToolName, "text": text, "reason": reason}})
+		"session": in.SessionID, "tool": in.ToolName, "text": text, "reason": ownerReason}})
 	var check struct {
 		Decision, ID, URL, Display string
 	}
 	if !ok || !resp.OK || json.Unmarshal(resp.Data, &check) != nil {
-		return false, reason
+		return false, reason, ""
 	}
 	switch check.Decision {
 	case "allow":
-		return true, ""
+		return true, "", ""
 	case "pending":
 	default:
-		return false, reason
+		return false, reason, ""
 	}
 	deadline := time.Now().Add(hold)
 	for time.Now().Before(deadline) {
@@ -311,15 +317,15 @@ func askOwner(in hookInput, reason string, hold time.Duration, call func(daemonc
 		}
 		switch s.Status {
 		case "approved":
-			return true, ""
+			return true, "", ""
 		case "denied":
-			return false, "Share2Us: the owner of this machine declined `" + check.Display + "`. Don't try it another way; finish what you can without it and say what you couldn't do."
+			return false, "Share2Us: the owner of this machine declined `" + check.Display + "`. Don't try it another way; finish what you can without it and say what you couldn't do.", ""
 		case "expired", "used":
-			return false, reason
+			return false, reason, ""
 		}
 	}
 	_, _ = call(daemonctl.Request{Op: "approval-park", Args: map[string]string{"id": check.ID, "session": in.SessionID}})
-	return false, "Share2Us: this needs the machine owner's approval, and they've been asked (by email and in the Share2Us portal) but haven't answered yet. Don't retry it another way: finish what you can, say it is waiting for the owner's approval, and end your turn. If they allow it, Share2Us continues this task here."
+	return false, "Share2Us: this needs the machine owner's approval, and they've been asked (by email and in the Share2Us portal) but haven't answered yet. Don't retry it another way: finish what you can, say it is waiting for the owner's approval, and end your turn. If they allow it, Share2Us continues this task here.", check.URL
 }
 
 // followFolderAgent: a window started with `s2u claude` in a folder whose Claude agent is

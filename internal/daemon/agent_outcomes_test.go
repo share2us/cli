@@ -214,9 +214,17 @@ func TestGuardDenialsAreReportedToTheSender(t *testing.T) {
 	c := &fakeAgentClient{reportNotify: make(chan struct{}, 8)}
 	runtime.handleInject(context.Background(), c, typedRunner(dir), keyedDeps(),
 		signedReq(t, clicore.AgentRequest{ID: "req-blocked", Tool: "claude", TargetSessionID: "win-1", SealedPrompt: "run agent hops"}))
-	runtime.hub().recordDenied("win-1", DescribeToolUse("Bash", map[string]any{"command": "share2us   agent hops"}))
+	runtime.hub().recordDenied("win-1", DescribeToolUse("Bash", map[string]any{"command": "share2us   agent hops"}), "")
 	runtime.hub().turnEndedForCaller("win-1", "req-blocked", false, 0, "I couldn't run it.")
 	waitIdle(t, runtime)
 	waitForReport(t, c, "done", "Blocked on the target: its Share2Us guard refused `share2us agent hops`")
 	waitForReport(t, c, "done", "I couldn't run it.")
+}
+
+// A refusal the owner is still deciding tells the sender it continues by itself if allowed.
+func TestAwaitingApprovalIsReportedWithTheLink(t *testing.T) {
+	got := annotateDenied("I couldn't run it yet.", nil, []string{"`ip -4 addr` (approve: https://portal.example/approvals/a1/)"})
+	if !strings.HasPrefix(got, "Waiting for the target owner's approval: `ip -4 addr`") || !strings.Contains(got, "nothing needs to be resent") || strings.Contains(got, "Blocked on the target") {
+		t.Fatalf("got %q", got)
+	}
 }
