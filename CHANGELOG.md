@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126114934] - 2026-11-26
+
 ### Added
 
 - **Ask the owner instead of failing** (with the server update): when an agent working on a
