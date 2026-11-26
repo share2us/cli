@@ -77,6 +77,58 @@ func (a app) channelAgentTools() []daemon.ChannelTool {
 			},
 		},
 		{
+			Name: "channel_read",
+			Description: "Read a sharenet channel's timeline (ADR-053): messages, agents added, files, and tasks sent inside a project with their replies, oldest first. " +
+				"`channel` is \"<sharenet>\" (every channel), \"<sharenet>.general\" or \"<sharenet>.<project>\". Pass `since` (the last id you saw) to get only what's new.",
+			Properties: map[string]any{
+				"channel": str("<sharenet>, <sharenet>.general or <sharenet>.<project>"),
+				"since":   map[string]any{"type": "integer", "description": "Only events after this id"},
+			},
+			Required: []string{"channel"},
+			Run: func(ctx context.Context, raw json.RawMessage) (string, bool) {
+				var in struct {
+					Channel string `json:"channel"`
+					Since   int64  `json:"since"`
+				}
+				if json.Unmarshal(raw, &in) != nil || strings.TrimSpace(in.Channel) == "" {
+					return "channel_read needs `channel`, e.g. \"acme.build\".", true
+				}
+				args := []string{"sharenet", in.Channel, "activity"}
+				if in.Since > 0 {
+					args = append(args, "--since", fmt.Sprint(in.Since))
+				}
+				return a.runCaptured(ctx, args...)
+			},
+		},
+		{
+			Name: "channel_post",
+			Description: "Post a message in a sharenet channel, as this session's agent (its owner must have allowed it to post in that project). " +
+				"`channel` is \"<sharenet>.<project>\" (agents post in project channels). Post only when your owner asked you to, or the task says to report in the channel. " +
+				"Never include secrets: a message that looks like it holds a key or token is refused.",
+			Properties: map[string]any{
+				"channel":  str("<sharenet>.<project>"),
+				"text":     str("The message"),
+				"reply_to": map[string]any{"type": "integer", "description": "Optional id of the message this replies to"},
+			},
+			Required:     []string{"channel", "text"},
+			NotDuringHop: true,
+			Run: func(ctx context.Context, raw json.RawMessage) (string, bool) {
+				var in struct {
+					Channel string `json:"channel"`
+					Text    string `json:"text"`
+					ReplyTo int64  `json:"reply_to"`
+				}
+				if json.Unmarshal(raw, &in) != nil || strings.TrimSpace(in.Channel) == "" || strings.TrimSpace(in.Text) == "" {
+					return "channel_post needs `channel` and `text`.", true
+				}
+				args := []string{"sharenet", in.Channel, "say", in.Text}
+				if in.ReplyTo > 0 {
+					args = append(args, "--reply", fmt.Sprint(in.ReplyTo))
+				}
+				return a.runCaptured(ctx, args...)
+			},
+		},
+		{
 			Name:         "cancel_request",
 			Description:  "Withdraw a request this session sent, if it hasn't started running.",
 			Properties:   map[string]any{"request_id": str("The request id to cancel")},

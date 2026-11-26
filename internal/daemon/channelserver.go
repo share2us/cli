@@ -46,7 +46,8 @@ const channelInstructions = "Share2Us requests arrive as <channel source=\"share
 	"An event with kind=\"result\" is different: it only says that a request THIS session sent has finished. " +
 	"It is not a task and needs no report; tell your owner, and read the reply with the command it names if it is useful. " +
 	"To hand work to another agent (another of your owner's machines or a project member), use list_agents and send_to_agent; " +
-	"the result comes back to this session as a kind=\"result\" event, so don't poll for it."
+	"the result comes back to this session as a kind=\"result\" event, so don't poll for it. " +
+	"Sharenet channels (shared workspaces) can be read with channel_read and, when your owner asks, posted to with channel_post."
 
 // ChannelCaller sends a control request to the daemon (daemonctl.Call in
 // production).

@@ -20,6 +20,9 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   messages. In a Secure ShareNet the message is encrypted on this device. A message that
   looks like it contains a key or token is not sent. `activity` now shows messages (and
   decrypts Secure ones this device holds the key for).
+- Windows started with `s2u claude` get two more Share2Us tools: `channel_read` (a channel's
+  timeline, `since` for what's new; allowed even during a delivered task) and `channel_post`
+  (post as the agent, when its owner asked; not during a delivered task, like sending).
 
 ## [20261126171734] - 2026-11-26
 
