@@ -12,6 +12,25 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **`s2u setup` is a guided first run**: signs in if needed, starts the background service,
+  installs the /s2u skill for the agent tools found, makes the agent session it runs in
+  reachable, and shows which of your agents it can reach, with a ✓ per step. The old
+  starter-rules behaviour is `s2u setup --rules [--global]`.
+- `s2u agent bind` with no id binds the agent session it is typed in (`! s2u agent bind`).
+- A window started with `s2u claude` becomes the folder's agent when the bound session is
+  no longer open (a resume in another tab, a new session), keeping the agent id.
+
+### Changed
+
+- **Your own signed-in devices trust each other** (with the server update): a prompt
+  between two of your devices no longer waits for `s2u agent allow`/`approve`. Signing a
+  device out still cuts it off. `agent allow` and `revoke` say so.
+- `s2u login` ends with the next step (`s2u setup`); `agent send` names the exact approve
+  commands when a request does wait for approval; the stale `--agent-bridge` hint and the
+  generic "Delivery:" line are gone.
+
 ## [20261126083708] - 2026-11-26
 
 ### Added

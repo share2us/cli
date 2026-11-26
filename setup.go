@@ -4,6 +4,8 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -36,16 +38,108 @@ don't touch the payment code
 
 // setup writes a starter .s2u.rules for this project (or --global for the home
 // one). It never overwrites an existing file.
-func (a app) setup(args []string) int {
-	global := false
+// setup is the guided first run: one command takes a machine from nothing to "my agents
+// can reach each other", printing a ✓ per step and what (if anything) is left. Each step
+// is idempotent, so running it again only reports. `--rules [--global]` keeps the old
+// behaviour of writing a starter .s2u.rules.
+func (a app) setup(ctx context.Context, args []string) int {
+	rules, global := false, false
 	for _, arg := range args {
-		if arg == "--global" {
-			global = true
-		} else {
-			fmt.Fprintf(a.stderr, "unknown flag %q\n", arg)
+		switch arg {
+		case "--rules":
+			rules = true
+		case "--global":
+			rules, global = true, true
+		default:
+			fmt.Fprintf(a.stderr, "unknown flag %q (usage: %s setup [--rules [--global]])\n", arg, commandName)
 			return 2
 		}
 	}
+	if rules {
+		return a.setupRules(global)
+	}
+	ok := func(format string, v ...any) { fmt.Fprintf(a.stdout, "✓ "+format+"\n", v...) }
+	todo := func(format string, v ...any) { fmt.Fprintf(a.stdout, "• "+format+"\n", v...) }
+
+	// 1. Signed in.
+	client, credential, signedIn := a.authClient()
+	if !signedIn {
+		if a.stdinIsTTY == nil || !a.stdinIsTTY(a.stdin) {
+			todo("Sign in first: %s login   (then run %s setup again)", commandName, commandName)
+			return 1
+		}
+		fmt.Fprintln(a.stdout, "Signing in (a browser opens to approve this device)…")
+		if code := a.login(ctx, nil); code != 0 {
+			return code
+		}
+		if client, credential, signedIn = a.authClient(); !signedIn {
+			return 1
+		}
+	}
+	ok("Signed in as %s", credential.Email)
+
+	// 2. Background service (receives prompts, collects replies).
+	a.ensureAgentReachable()
+	if daemonRunning() {
+		ok("Background service running")
+	} else {
+		todo("Background service isn't running: %s daemon start", commandName)
+	}
+
+	// 3. /s2u skill for the agent tools on this machine.
+	installed := []string{}
+	for _, t := range skillTargets {
+		if !skillPresent(t) {
+			continue
+		}
+		if _, err := installSkill(t); err == nil {
+			installed = append(installed, t.Label)
+		}
+	}
+	if len(installed) > 0 {
+		ok("/s2u skill installed for %s", strings.Join(installed, ", "))
+	}
+
+	// 4. The agent session this runs in, if any.
+	if sess, err := daemon.FindOwnSession(ctx); err == nil {
+		var out bytes.Buffer
+		quiet := a
+		quiet.stdout = &out
+		if code := quiet.agentBind(ctx, nil); code == 0 {
+			ok("This %s session is reachable as an agent (details: %s agent bindings)", sess.Tool, commandName)
+			// Bind explains when prompts can't appear live; that part matters here.
+			for _, line := range strings.Split(out.String(), "\n") {
+				if strings.Contains(line, "wait") || strings.Contains(line, "s2u claude") {
+					fmt.Fprintln(a.stdout, "  "+line)
+				}
+			}
+		} else {
+			fmt.Fprint(a.stdout, out.String())
+		}
+	} else {
+		todo("To make an agent reachable, type `! %s setup` inside its Claude Code or Codex session (best started with `%s claude`).", commandName, commandName)
+	}
+
+	// 5. Who it can talk to.
+	if sessions, err := client.ListAgentSessions(ctx); err == nil {
+		others := 0
+		for _, s := range sessions {
+			if s.DeviceID != credential.DeviceSessionID {
+				others++
+			}
+		}
+		if others > 0 {
+			ok("%d agent(s) on your other machines can be reached", others)
+			fmt.Fprintf(a.stdout, "\nTry it: %s agent send --to <name> --prompt \"ping: reply with pong\" --wait   (names: %s agent list)\n", commandName, commandName)
+		} else {
+			todo("No agents on your other machines yet: run `%s setup` there too.", commandName)
+		}
+	}
+	fmt.Fprintf(a.stdout, "Sharenets (agents of other people): %s sharenet list\n", commandName)
+	return 0
+}
+
+func (a app) setupRules(global bool) int {
 	path, err := rulesPath(global)
 	if err != nil {
 		return a.fail("resolve rules path", err)

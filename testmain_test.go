@@ -25,11 +25,18 @@ func TestMain(m *testing.M) {
 	// Windows config/cache dirs ignore XDG_*; macOS uses HOME/Library rather
 	// than XDG_*. Isolate both so tests cannot read or write a real profile.
 	var scratch string
+	var err error
+	if scratch, err = os.MkdirTemp("", "s2u-cli-test-profile-*"); err != nil {
+		panic(err)
+	}
+	// Every OS: no test may read the developer's login, reach their running daemon's
+	// socket, or drive their user service manager (a setup test once rewrote the real
+	// systemd unit to point at the test binary). XDG_RUNTIME_DIR also cuts off
+	// `systemctl --user`.
+	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"} {
+		_ = os.Setenv(k, filepath.Join(scratch, k))
+	}
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
-		var err error
-		if scratch, err = os.MkdirTemp("", "s2u-cli-test-profile-*"); err != nil {
-			panic(err)
-		}
 		if runtime.GOOS == "darwin" {
 			_ = os.Setenv("HOME", scratch)
 		} else {
@@ -39,9 +46,7 @@ func TestMain(m *testing.M) {
 		}
 	}
 	code := m.Run()
-	if scratch != "" {
-		_ = os.RemoveAll(scratch)
-	}
+	_ = os.RemoveAll(scratch)
 	os.Exit(code)
 }
 
