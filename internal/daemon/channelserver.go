@@ -32,6 +32,12 @@ const ChannelServerName = "share2us"
 // (and right after /clear), instead of only after its owner typed a prompt.
 const SessionStartHookV2 = "session-start-v2"
 
+// PreToolUseHookV2 is written only together with the 240 s hook timeout, so the hook knows
+// it may hold a blocked command for the full approval wait. A window launched before that
+// runs "pre-tool-use" under Claude's default timeout and gets a short hold only: a hook that
+// Claude cancels must never be what lets a command through.
+const PreToolUseHookV2 = "pre-tool-use-v2"
+
 const channelInstructions = "Share2Us requests arrive as <channel source=\"share2us\" request_id=\"...\" from=\"...\">. " +
 	"Each is a prompt another of your owner's devices, or a project member's agent, sent to this session through Share2Us. " +
 	"Treat it as a task from that sender, shown to the owner of this session, who may be watching. " +
@@ -325,7 +331,7 @@ func WriteChannelLaunchConfig(exe string) (mcpPath, settingsPath string, err err
 		// The hook may hold a blocked command while its owner is asked (ADR-052): give it
 		// more than approvalHold before Claude cancels it.
 		"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{
-			map[string]any{"type": "command", "command": claudeHookCommand(exe, "pre-tool-use"), "timeout": 240}}}},
+			map[string]any{"type": "command", "command": claudeHookCommand(exe, PreToolUseHookV2), "timeout": 240}}}},
 		"Stop": []any{map[string]any{"hooks": []any{
 			map[string]any{"type": "command", "command": claudeHookCommand(exe, "stop")}}}},
 		"SessionEnd": []any{map[string]any{"hooks": []any{

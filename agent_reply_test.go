@@ -46,6 +46,10 @@ func TestLaunchSettingsUseTheV2SessionHook(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(settings)
+	// The long approval hold is only for the hook name that comes with the long timeout.
+	if !strings.Contains(string(b), "agent hook "+daemon.PreToolUseHookV2) || !strings.Contains(string(b), `"timeout": 240`) {
+		t.Fatalf("pre-tool-use hook without its timeout: %s", b)
+	}
 	if !strings.Contains(string(b), "agent hook "+daemon.SessionStartHookV2) || !strings.Contains(string(b), "agent hook user-prompt-submit") {
 		t.Fatalf("settings = %s", b)
 	}

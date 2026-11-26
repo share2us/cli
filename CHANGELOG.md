@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows started before the approval feature (without the longer hook timeout) wait at
+  most 40 seconds for the owner's answer, so Claude never cancels the guard mid-wait; restart
+  them with `s2u claude` for the full 3-minute wait.
+
 ## [20261126114934] - 2026-11-26
 
 ### Added

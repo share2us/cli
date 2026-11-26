@@ -127,7 +127,7 @@ func (a app) agentHook(args []string) int {
 			a.proveTerminalPromptHook(in.SessionID)
 		}
 		_ = daemon.BindTypedPromptID(in.SessionID, in.Prompt, in.PromptID)
-	case "pre-tool-use":
+	case "pre-tool-use", daemon.PreToolUseHookV2:
 		if daemon.TypedHopNotStarted(in.SessionID, in.TranscriptPath) {
 			return 0 // the owner's own turn; the queued hop hasn't been submitted yet
 		}
@@ -159,7 +159,11 @@ func (a app) agentHook(args []string) int {
 			// Anything but self-protection can be allowed by the agent's owner (ADR-052): a
 			// grant covers it, or the owner is asked and the command waits for the answer.
 			if !daemon.SelfProtected(in.CWD, in.ToolName, in.ToolInput) {
-				allowed, why := askOwner(in, reason, daemonctl.Call, time.Sleep)
+				hold := approvalHoldShort
+				if args[0] == daemon.PreToolUseHookV2 {
+					hold = approvalHold
+				}
+				allowed, why := askOwner(in, reason, hold, daemonctl.Call, time.Sleep)
 				if allowed {
 					return 0
 				}
@@ -272,12 +276,15 @@ func (a app) proveTerminalHook(sessionID string) {
 // PreToolUse hook timeout (WriteChannelLaunchConfig) must stay above this.
 var (
 	approvalHold = 3 * time.Minute
-	approvalPoll = 2 * time.Second
+	// approvalHoldShort is for windows whose hook runs under Claude's default timeout
+	// (older launches): safely below the 60 s some Claude versions use.
+	approvalHoldShort = 40 * time.Second
+	approvalPoll      = 2 * time.Second
 )
 
 // askOwner checks the agent's grants, else files an approval request and holds. It returns
 // whether to allow, and otherwise the refusal text for the agent.
-func askOwner(in hookInput, reason string, call func(daemonctl.Request) (daemonctl.Response, bool), sleep func(time.Duration)) (bool, string) {
+func askOwner(in hookInput, reason string, hold time.Duration, call func(daemonctl.Request) (daemonctl.Response, bool), sleep func(time.Duration)) (bool, string) {
 	text := daemon.ActionText(in.ToolName, in.ToolInput)
 	resp, ok := call(daemonctl.Request{Op: "approval-check", Args: map[string]string{
 		"session": in.SessionID, "tool": in.ToolName, "text": text, "reason": reason}})
@@ -294,7 +301,7 @@ func askOwner(in hookInput, reason string, call func(daemonctl.Request) (daemonc
 	default:
 		return false, reason
 	}
-	deadline := time.Now().Add(approvalHold)
+	deadline := time.Now().Add(hold)
 	for time.Now().Before(deadline) {
 		sleep(approvalPoll)
 		st, ok := call(daemonctl.Request{Op: "approval-status", Args: map[string]string{"id": check.ID}})
