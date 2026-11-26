@@ -19,8 +19,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   edit, and anything it refuses asks the owner (email + portal) and waits up to 3 minutes,
   exactly as for Claude. Approving later continues the task. Codex's sandbox still applies
   underneath: an approved command that needs the network or writes outside the project is
-  blocked unless the agent is `privileged`. Needs Codex CLI 0.172 or later; older versions
-  keep the sandbox-only guard.
+  blocked unless the agent is `privileged`. Linux and macOS, Codex CLI 0.172 or later; on
+  Windows and older Codex versions the sandbox alone guards, as before.
 
 ### Changed
 
