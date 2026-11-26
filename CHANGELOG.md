@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126083708] - 2026-11-26
+
 ### Added
 
 - `s2u sharenet list`: your sharenets with role, projects and whether they're Secure.
