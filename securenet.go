@@ -460,6 +460,8 @@ func (a app) sharenet(ctx context.Context, args []string) int {
 	switch args[0] {
 	case "list":
 		return a.sharenetList(ctx)
+	case "create":
+		return a.sharenetCreate(ctx, args[1:])
 	case "files", "ls":
 		return a.sharenetFiles(ctx, args[1:])
 	case "get", "download":
@@ -470,6 +472,11 @@ func (a app) sharenet(ctx context.Context, args []string) int {
 		// `s2u sharenet <name|id> [list|agents]`: that sharenet's projects and agents.
 		if len(args) == 1 || (len(args) == 2 && (args[1] == "list" || args[1] == "agents")) {
 			return a.sharenetShow(ctx, args[0])
+		}
+		// `s2u sharenet <name>[.<project>] <command> ...`: management.
+		switch args[1] {
+		case "members", "invite", "remove", "project", "projects", "code", "requests", "approve", "reject":
+			return a.sharenetManage(ctx, args[0], args[1], args[2:])
 		}
 		fmt.Fprintf(a.stderr, "unknown sharenet command %q\n", args[0])
 		return a.sharenetUsage(2)
@@ -577,9 +584,16 @@ func (a app) sharenetUsage(code int) int {
 	fmt.Fprintln(w, "usage:")
 	fmt.Fprintln(w, "  s2u sharenet list                                    your sharenets and their projects")
 	fmt.Fprintln(w, "  s2u sharenet <name|id> [list]                        its projects and agents (send to them as <sharenet>.<agent>)")
+	fmt.Fprintln(w, "  s2u sharenet create <name> [--secure] [--project NAME] [--add-my-agents] [--can-post]")
+	fmt.Fprintln(w, "  s2u sharenet <name> members | invite <email>... [--role R] [--bring-agents PROJECT] | remove <email>")
+	fmt.Fprintln(w, "  s2u sharenet <name> project create <project>")
+	fmt.Fprintln(w, "  s2u sharenet <name>[.<project>] code [--uses N] [--expires 7d]   join code for an agent's session")
+	fmt.Fprintln(w, "  s2u sharenet <name>[.<project>] requests | approve <id> | reject <id>")
+	fmt.Fprintln(w, "  s2u agent add <agent|.> <name>[.<project>] [--can-post]          add your own agent to a project")
+	fmt.Fprintln(w, "  (membership changes ask on a terminal; add --yes in scripts)")
 	fmt.Fprintln(w, "  s2u sharenet files <name|id>                         list the sharenet's files")
 	fmt.Fprintln(w, "  s2u sharenet get <name|id> <file-id> [-o path]       download one (decrypting a Secure ShareNet's)")
-	fmt.Fprintln(w, "Post with: s2u <file> --sharenet <id> (or --project <id>). Manage sharenets in the portal.")
+	fmt.Fprintln(w, "Post with: s2u <file> --sharenet <id> (or --project <id>). Deleting a sharenet and handing over ownership are in the portal.")
 	return code
 }
 
