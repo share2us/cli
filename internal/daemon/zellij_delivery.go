@@ -54,8 +54,19 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		return false
 	}
 	before, err := z.Dump(ctx, pane.Session, pane.Pane)
-	if err != nil || !safeClaudeInput(before) {
+	if err != nil {
 		return false
+	}
+	queued := false
+	if !safeClaudeInput(before) {
+		// A turn is running but the input is empty: after a short wait, type it anyway and
+		// let Claude queue it behind the turn (owner, 2026-11-26). Text in the input is
+		// never typed over: Enter would send the owner's draft too.
+		if waited < typedQueueAfter || !queueableClaudeInput(before) {
+			rt.noteTypedBlock(req.ID, typedBlockReason(before))
+			return false
+		}
+		queued = true
 	}
 	strict := false
 	if cr, ok := runner.(ClaudeRunner); ok {
@@ -65,7 +76,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	if !accepted {
 		return false
 	}
-	if err := BeginTypedGuard(req.TargetSessionID, req.ID, session.PID); err != nil {
+	if err := beginTypedGuard(req.TargetSessionID, req.ID, session.PID, queued); err != nil {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
 		return false // no persistent fail-closed marker: type nothing
 	}
@@ -123,7 +134,11 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 	}
 	// Claim "running" BEFORE Enter: the server refuses it once the sender cancelled, and
 	// refuses a cancel once it is running, so the two can never both win.
-	if isCancelledErr(client.AgentReportResult(ctx, req.ID, "running", typedDeliveredMsg(req.Tool))) {
+	running := typedDeliveredMsg(req.Tool)
+	if queued {
+		running = "Typed into the open " + req.Tool + " window while it was working: it runs right after the current turn."
+	}
+	if isCancelledErr(client.AgentReportResult(ctx, req.ID, "running", running)) {
 		rt.dropCancelledPaste(req, deps)
 		return true
 	}
@@ -427,6 +442,31 @@ func (rt *Runtime) dropCancelledPaste(req clicore.AgentRequest, deps Deps) {
 	rt.notify("Share2Us", "A prompt in your "+req.Tool+" input was cancelled by its sender and was NOT submitted. You can clear it.")
 	_ = AppendHop(HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 		Target: req.TargetSessionID, Mode: "typed", Status: "cancelled"})
+}
+
+// typedQueueAfter: how long a busy window (empty input) is waited for before the prompt is
+// typed anyway and queued behind the running turn.
+var typedQueueAfter = 10 * time.Second
+
+func (rt *Runtime) noteTypedBlock(id, reason string) {
+	if reason == "" {
+		return
+	}
+	rt.typedBlockMu.Lock()
+	defer rt.typedBlockMu.Unlock()
+	if rt.typedBlocks == nil {
+		rt.typedBlocks = map[string]string{}
+	}
+	rt.typedBlocks[id] = reason
+}
+
+// takeTypedBlock returns (and clears) why the last typed attempt for id didn't happen.
+func (rt *Runtime) takeTypedBlock(id string) string {
+	rt.typedBlockMu.Lock()
+	defer rt.typedBlockMu.Unlock()
+	r := rt.typedBlocks[id]
+	delete(rt.typedBlocks, id)
+	return r
 }
 
 // typedReplyNote closes a typed prompt. Without it the agent saw a bare message, decided

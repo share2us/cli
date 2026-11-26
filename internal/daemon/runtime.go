@@ -106,6 +106,10 @@ type Deps struct {
 // Runtime holds run state (start time, what it owns, the stop hook) so the
 // control server can answer status/owns-receiver and honour a stop request.
 type Runtime struct {
+	// typedBlocks: why the last typed attempt per request didn't happen (for its status).
+	typedBlockMu sync.Mutex
+	typedBlocks  map[string]string
+
 	// sentMu guards the fast result-polling window after this device sends.
 	sentMu        sync.Mutex
 	sentFastUntil time.Time
