@@ -331,7 +331,10 @@ func WriteChannelLaunchConfig(exe string) (mcpPath, settingsPath string, err err
 		// The hook may hold a blocked command while its owner is asked (ADR-052): give it
 		// more than approvalHold before Claude cancels it.
 		"PreToolUse": []any{map[string]any{"matcher": "*", "hooks": []any{
-			map[string]any{"type": "command", "command": claudeHookCommand(exe, PreToolUseHookV2), "timeout": 240}}}},
+			map[string]any{"type": "command", "command": claudeHookCommand(exe, PreToolUseHookV2), "timeout": 240,
+				// Shown in Claude's spinner while the hook runs: during an approval wait that is
+				// the only sign in this window that the owner has been asked.
+				"statusMessage": "Share2Us guard: if this needs approval, waiting for the owner (asked by email + portal)"}}}},
 		"Stop": []any{map[string]any{"hooks": []any{
 			map[string]any{"type": "command", "command": claudeHookCommand(exe, "stop")}}}},
 		"SessionEnd": []any{map[string]any{"hooks": []any{

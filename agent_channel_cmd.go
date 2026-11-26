@@ -166,6 +166,10 @@ func (a app) agentHook(args []string) int {
 				}
 				allowed, why, url := askOwner(in, reason, hold, daemonctl.Call, time.Sleep)
 				if allowed {
+					if why != "" { // allowed by the owner just now: say so in the window
+						out, _ := json.Marshal(map[string]any{"systemMessage": why})
+						fmt.Fprintln(a.stdout, string(out))
+					}
 					return 0
 				}
 				reason, awaiting = why, url
@@ -317,7 +321,7 @@ func askOwner(in hookInput, reason string, hold time.Duration, call func(daemonc
 		}
 		switch s.Status {
 		case "approved":
-			return true, "", ""
+			return true, "Share2Us: the owner allowed `" + check.Display + "`.", ""
 		case "denied":
 			return false, "Share2Us: the owner of this machine declined `" + check.Display + "`. Don't try it another way; finish what you can without it and say what you couldn't do.", ""
 		case "expired", "used":

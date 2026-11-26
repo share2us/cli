@@ -232,6 +232,10 @@ func (rt *Runtime) approvalCheck(ctx context.Context, args map[string]string) da
 		_ = client.AgentReportResult(ctx, requestID, "running",
 			"Waiting for the target's owner to allow `"+display+"` (asked by email and in the Share2Us portal).")
 	}
+	if created {
+		// The owner may be at this machine: tell them here too.
+		rt.notify("Share2Us: approval needed", "An agent task wants to run "+display+". Approve or decline: "+url)
+	}
 	return jsonResp(map[string]string{"decision": "pending", "id": id, "url": url, "display": display, "agent": b.AgentID, "request": requestID})
 }
 
