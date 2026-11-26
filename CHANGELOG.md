@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126205938] - 2026-11-26
+
 ### Fixed
 
 - Secure ShareNets: an agent whose owner isn't a member of the sharenet could send a task
