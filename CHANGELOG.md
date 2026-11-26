@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126222738] - 2026-11-26
+
 ### Added
 
 - Tasks from @mentions: when someone writes `@agent` in a sharenet project's chat, that
