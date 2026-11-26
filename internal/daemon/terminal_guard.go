@@ -23,6 +23,9 @@ type terminalGuardRecord struct {
 	Request    string      `json:"request,omitempty"`
 	PromptID   string      `json:"prompt_id,omitempty"`
 	PromptHook bool        `json:"prompt_hook,omitempty"`
+	// Queued: typed while Claude was busy, so it sits in Claude's queue until the current
+	// (owner's) turn ends. Until it is submitted, that turn is not the hop's.
+	Queued bool `json:"queued,omitempty"`
 }
 
 func terminalGuardPath(session, kind string) (string, error) {
@@ -148,10 +151,30 @@ func EndTerminalSession(session string, pid int) {
 // BeginTypedGuard persists the active hop before any remote text is pasted.
 // If the daemon dies, the hook can still deny tool use until the turn ends.
 func BeginTypedGuard(session, request string, pid int) error {
+	return beginTypedGuard(session, request, pid, false)
+}
+
+func beginTypedGuard(session, request string, pid int, queued bool) error {
 	if request == "" || pid <= 1 {
 		return os.ErrInvalid
 	}
-	return writeTerminalGuard(session, "active", terminalGuardRecord{Session: session, Request: request, PID: pid})
+	return writeTerminalGuard(session, "active", terminalGuardRecord{Session: session, Request: request, PID: pid, Queued: queued})
+}
+
+// TypedHopNotStarted: the typed hop was queued behind the owner's turn and Claude hasn't
+// submitted it yet (no prompt id bound, and its header isn't in the transcript). The turn
+// running now is the owner's: the hop's restrictions and turn-end checks don't apply yet.
+// An unreadable transcript counts as started (fail closed).
+func TypedHopNotStarted(session, transcriptPath string) bool {
+	record, ok := readTerminalGuard(session, "active")
+	if !ok || !record.Queued || record.PromptID != "" || record.Request == "" || transcriptPath == "" {
+		return false
+	}
+	b, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		return false
+	}
+	return !strings.Contains(string(b), ", request "+record.Request+":")
 }
 
 func TypedGuardRequest(session string) string {

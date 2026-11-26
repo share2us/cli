@@ -714,6 +714,9 @@ func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runn
 	if !waitingReported {
 		deps.logf("agent-bridge: inject %s waits: session %s is open in a window", req.ID, req.TargetSessionID)
 		notice, status := holdMessages(req, livePID(ctx, runner, req.TargetSessionID))
+		if why := rt.takeTypedBlock(req.ID); why != "" && strings.Contains(status, "is busy") {
+			status = "Waiting: " + why + ". Share2Us types it in as soon as it can; a busy window with an empty input gets it queued after " + typedQueueAfter.String() + "."
+		}
 		rt.notify("Share2Us", notice)
 		_ = client.AgentReportResult(ctx, req.ID, "waiting", status)
 	}
@@ -727,6 +730,7 @@ func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runn
 	// after injectPaneRebindTimeout, without abandoning the hop.
 	var paneBlockedSince time.Time
 	rebindReported := false
+	lastBlock := ""
 	go func() {
 		defer rt.holding.Add(-1)
 		t := time.NewTicker(injectHoldPoll)
@@ -755,6 +759,10 @@ func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runn
 						for _, session := range sessions {
 							if session.SessionID == req.TargetSessionID && session.Live && rt.tryTypedInject(ctx, client, runner, deps, req, binding, session, shown, prompt, senderName, cwd, time.Since(began)) {
 								return
+							}
+							if why := rt.takeTypedBlock(req.ID); why != "" && why != lastBlock {
+								lastBlock = why
+								_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: "+why+". Share2Us types it in as soon as it can.")
 							}
 						}
 					}

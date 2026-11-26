@@ -251,9 +251,38 @@ func safeClaudeInput(screen string) bool {
 	return claudeUIReady(screen) && !s.Busy && !s.Dialog && s.InputEmpty
 }
 
+// queueableClaudeInput: Claude is working but its input is empty and no dialog is open, so
+// a typed prompt is queued for after the current turn (owner, 2026-11-26).
+func queueableClaudeInput(screen string) bool {
+	s := parseClaudeScreen(screen)
+	return claudeUIReady(screen) && s.Busy && !s.Dialog && s.InputEmpty
+}
+
+// typedBlockReason says why the window can't take a typed prompt right now, for the
+// sender's status. The input text is quoted (briefly) so a misread screen is visible.
+func typedBlockReason(screen string) string {
+	s := parseClaudeScreen(screen)
+	switch {
+	case !claudeUIReady(screen):
+		return "Claude's input box isn't on screen (another view is open)"
+	case s.Dialog:
+		return "Claude is showing a dialog that needs an answer"
+	case !s.InputEmpty:
+		in := strings.Join(strings.Fields(s.Input), " ")
+		if r := []rune(in); len(r) > 40 {
+			in = string(r[:40]) + "…"
+		}
+		return fmt.Sprintf("its input holds unsent text (%q); typing would merge with it", in)
+	case s.Busy:
+		return "Claude is working on a turn"
+	}
+	return ""
+}
+
 func pastedClaudeInput(screen, prompt string) bool {
 	s := parseClaudeScreen(screen)
-	if !claudeUIReady(screen) || s.Busy || s.Dialog || s.Input == "" {
+	// Busy is fine: a prompt typed during a turn is queued behind it.
+	if !claudeUIReady(screen) || s.Dialog || s.Input == "" {
 		return false
 	}
 	if withoutWhitespace(s.Input) == withoutWhitespace(prompt) {

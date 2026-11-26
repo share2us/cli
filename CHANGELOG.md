@@ -12,6 +12,17 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Changed
+
+- **A busy Claude window no longer holds a prompt back indefinitely.** After 10 seconds,
+  if Claude is working but its input is empty, Share2Us types the prompt anyway and Claude
+  queues it, so it runs right after the current turn. While it waits in the queue, the
+  owner's running turn keeps its normal permissions, and the delivered-prompt guard takes
+  over once Claude submits the prompt.
+- A held prompt's status now says exactly what blocks it: Claude is working, a dialog needs
+  an answer, another view is open, or the input holds unsent text (quoted). Unsent text is
+  never typed over, because Enter would send it too.
+
 ## [20261126071634] - 2026-11-26
 
 ### Fixed

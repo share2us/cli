@@ -127,6 +127,9 @@ func (a app) agentHook(args []string) int {
 		}
 		_ = daemon.BindTypedPromptID(in.SessionID, in.Prompt, in.PromptID)
 	case "pre-tool-use":
+		if daemon.TypedHopNotStarted(in.SessionID, in.TranscriptPath) {
+			return 0 // the owner's own turn; the queued hop hasn't been submitted yet
+		}
 		activeRequest := daemon.TypedGuardRequest(in.SessionID)
 		if activeRequest != "" {
 			bound := daemon.TypedGuardPromptID(in.SessionID)
@@ -168,6 +171,8 @@ func (a app) agentHook(args []string) int {
 					}
 					request = ""
 				}
+			} else if daemon.TypedHopNotStarted(in.SessionID, in.TranscriptPath) {
+				request = "" // the owner's turn ended; the queued hop runs next
 			} else {
 				matches, known := daemon.TranscriptRequestState(in.TranscriptPath, request)
 				if known && !matches {
