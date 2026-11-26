@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126163652] - 2026-11-26
+
 ### Added
 
 - `s2u codex`: start Codex with Share2Us, and tasks sent to its agent show up in that window
