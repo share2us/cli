@@ -58,7 +58,9 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		return false
 	}
 	queued := false
-	if !safeClaudeInput(before) {
+	if !safeClaudeInput(before) && rt.inputIsOnlySuggestion(ctx, z, pane, req.TargetSessionID, before) {
+		before = "" // Claude's ghost-text suggestion, not anyone's draft: typing replaces it
+	} else if !safeClaudeInput(before) {
 		// A turn is running but the input is empty: after a short wait, type it anyway and
 		// let Claude queue it behind the turn (owner, 2026-11-26). Text in the input is
 		// never typed over: Enter would send the owner's draft too.
@@ -443,6 +445,48 @@ func (rt *Runtime) dropCancelledPaste(req clicore.AgentRequest, deps Deps) {
 	_ = AppendHop(HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 		Target: req.TargetSessionID, Mode: "typed", Status: "cancelled"})
 }
+
+// inputIsOnlySuggestion tells Claude's Tab-to-accept suggestion from a real draft. They look
+// the same in a screen dump (no dim attribute survives), so it asks the input: one typed
+// character replaces a suggestion but is appended to a draft. The character is removed at once
+// either way, so a draft is left exactly as it was. Probed only when the text has not changed
+// since the last look (nobody is typing) and never twice for the same draft.
+func (rt *Runtime) inputIsOnlySuggestion(ctx context.Context, z zellijDriver, pane resolvedZellijPane, session, screen string) bool {
+	st := parseClaudeScreen(screen)
+	if !claudeUIReady(screen) || st.Busy || st.Dialog || st.InputEmpty || st.Input == "" {
+		return false
+	}
+	text := strings.TrimSpace(st.Input)
+	rt.typedBlockMu.Lock()
+	if rt.inputSeen == nil {
+		rt.inputSeen, rt.draftKnown = map[string]string{}, map[string]string{}
+	}
+	stable := rt.inputSeen[session] == text
+	rt.inputSeen[session] = text
+	knownDraft := rt.draftKnown[session] == text
+	rt.typedBlockMu.Unlock()
+	if !stable || knownDraft {
+		return false
+	}
+	if z.Key(ctx, pane.Session, pane.Pane, "x") != nil {
+		return false
+	}
+	time.Sleep(suggestionProbeWait)
+	after, err := z.Dump(ctx, pane.Session, pane.Pane)
+	_ = z.Key(ctx, pane.Session, pane.Pane, "Backspace")
+	if err != nil {
+		return false
+	}
+	if strings.TrimSpace(parseClaudeScreen(after).Input) == "x" {
+		return true
+	}
+	rt.typedBlockMu.Lock()
+	rt.draftKnown[session] = text
+	rt.typedBlockMu.Unlock()
+	return false
+}
+
+var suggestionProbeWait = 300 * time.Millisecond
 
 // typedQueueAfter: how long a busy window (empty input) is waited for before the prompt is
 // typed anyway and queued behind the running turn.

@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Prompts are typed into a Claude window that shows a Tab suggestion.** Claude's grey
+  suggestion looks exactly like typed text on screen, so the daemon thought someone had an
+  unsent draft and waited, often forever. It now tells them apart by typing one character
+  and removing it at once: a suggestion is replaced (and the prompt typed), a real draft is
+  left exactly as it was. It only probes when the text hasn't changed since its last look,
+  and only once per draft.
+
 ## [20261126131233] - 2026-11-26
 
 ### Fixed

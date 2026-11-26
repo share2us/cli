@@ -113,6 +113,9 @@ type Runtime struct {
 	// typedBlocks: why the last typed attempt per request didn't happen (for its status).
 	typedBlockMu sync.Mutex
 	typedBlocks  map[string]string
+	// inputSeen / draftKnown: per session, the input text last seen and the text found to be
+	// a real draft (inputIsOnlySuggestion).
+	inputSeen, draftKnown map[string]string
 
 	// sentMu guards the fast result-polling window after this device sends.
 	sentMu        sync.Mutex
