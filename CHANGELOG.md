@@ -12,6 +12,27 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u codex`: start Codex with Share2Us, and tasks sent to its agent show up in that window
+  (handed over with Codex's own `codex queue`, no typing into the terminal). Only those
+  turns are guarded, blocked actions ask the owner (email + portal) as for Claude, and the
+  window's final answer goes back to the sender by itself. `s2u codex resume <id>` reopens a
+  session this way. Linux and macOS, Codex CLI 0.172 or later.
+- Setup tips for Codex: `s2u setup` and `s2u agent bind` explain that the skill is `$s2u` in
+  Codex (not `/s2u`), and how to get tasks in the window with `s2u codex`.
+- The `/s2u` skill now guides the agent through onboarding: it checks what's set up
+  (`s2u status --json`, agents, bindings), then walks the user one step at a time through
+  connecting their machines, sharenets (create, invite, join codes) and live windows, and
+  says what only the user can do. New `/s2u guide` command. An `s2u codex` window also tells
+  its model about Share2Us when it starts.
+
+### Fixed
+
+- A task for a Codex session open in a plain `codex` window failed with Codex's "already has
+  an active writer" error. It now says to restart that window with `s2u codex resume <id>`
+  or close it.
+
 ## [20261126154246] - 2026-11-26
 
 ### Added

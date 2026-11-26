@@ -196,7 +196,17 @@ func RunCodexInject(ctx context.Context, sessionID, cwd, prompt string, forceRes
 	SetAgentEnv(cmd, cwd) // also strips an inherited value when cwd is empty
 	cmd.Env = codexGuardEnv(cmd.Env, cwd, sessionID, forceRestricted)
 	out, err := cmd.CombinedOutput()
+	if err != nil && strings.Contains(string(out), "already has an active writer") {
+		return codexOpenWindowMsg(sessionID), err
+	}
 	return string(out), err
+}
+
+// codexOpenWindowMsg: the session is open in a plain `codex` window, which owns it; a
+// background run can't join it (Codex refuses a second writer).
+func codexOpenWindowMsg(sessionID string) string {
+	return "This Codex session is open in a window that wasn't started with `s2u codex`, so the task couldn't run beside it. " +
+		"On that machine, restart the window with `s2u codex resume " + sessionID + "` (tasks then arrive in it live), or close it, then send again."
 }
 
 // buildCodexInjectArgs assembles the codex args. The sandbox is the hard gate;

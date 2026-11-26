@@ -69,3 +69,47 @@ func TestCodexHook(t *testing.T) {
 		t.Fatalf("no trusted project, still allowed: %q", out)
 	}
 }
+
+func TestCodexWindowGuardsOnlyTheDeliveredTurn(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	project := t.TempDir()
+	t.Setenv(daemon.CodexGuardProjectEnv, project)
+	t.Setenv(daemon.CodexLiveEnv, "1")
+	ip := func(turn string) hookInput {
+		return hookInput{SessionID: "cx", TurnID: turn, ToolName: "Bash", ToolInput: map[string]any{"command": "ip -4 addr"}}
+	}
+	run := func(in hookInput, f *fakeApprovalDaemon) string {
+		var out bytes.Buffer
+		(app{stdout: &out}).codexPreToolUse(in, f.call, func(time.Duration) {})
+		return out.String()
+	}
+	f := &fakeApprovalDaemon{decision: "deny"}
+	if out := run(ip("turn-0"), f); out != "" || len(f.calls) != 0 {
+		t.Fatalf("the owner's own turn was guarded: %q %v", out, f.calls)
+	}
+	if err := daemon.BeginTypedGuard("cx", "r1", 4242); err != nil {
+		t.Fatal(err)
+	}
+	if !daemon.BindTypedPromptID("cx", "[Share2Us] from device laptop, request r1:\n\ncheck", "turn-1") {
+		t.Fatal("bind")
+	}
+	if out := run(ip("turn-1"), &fakeApprovalDaemon{decision: "deny"}); !strings.Contains(out, `"permissionDecision":"deny"`) {
+		t.Fatalf("the delivered turn wasn't guarded: %q", out)
+	}
+	if out := run(ip("turn-2"), &fakeApprovalDaemon{decision: "deny"}); out != "" {
+		t.Fatalf("a later owner turn was guarded: %q", out)
+	}
+
+	stop := func(turn string) (string, []string) {
+		var out bytes.Buffer
+		f := &fakeApprovalDaemon{}
+		(app{stdout: &out}).codexWindowHook(daemon.CodexStopHook, hookInput{SessionID: "cx", TurnID: turn, LastAssistantMessage: "done"}, f.call)
+		return strings.TrimSpace(out.String()), f.calls
+	}
+	if out, calls := stop("turn-2"); out != "{}" || len(calls) != 0 {
+		t.Fatalf("owner turn stop: %q %v", out, calls)
+	}
+	if out, calls := stop("turn-1"); out != "{}" || len(calls) != 1 || calls[0] != "codex-turn-done" {
+		t.Fatalf("hop turn stop: %q %v", out, calls)
+	}
+}

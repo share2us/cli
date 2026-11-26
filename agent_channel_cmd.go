@@ -52,6 +52,7 @@ type hookInput struct {
 	ToolName       string         `json:"tool_name"`
 	ToolUseID      string         `json:"tool_use_id"`
 	ToolInput      map[string]any `json:"tool_input"`
+	TurnID         string         `json:"turn_id"` // Codex
 	// LastAssistantMessage: newer Claude Code passes the turn's final text to Stop hooks.
 	LastAssistantMessage string `json:"last_assistant_message"`
 }
@@ -100,8 +101,11 @@ func (a app) agentHook(args []string) int {
 	}
 	var in hookInput
 	if err := json.NewDecoder(io.LimitReader(os.Stdin, 8<<20)).Decode(&in); err != nil || in.SessionID == "" {
-		if args[0] == "headless-pre-tool-use" || args[0] == daemon.CodexPreToolUseHook {
-			fmt.Fprintln(a.stdout, hookDeny("Share2Us: the headless Git guard could not identify this tool call."))
+		switch args[0] {
+		case "headless-pre-tool-use", daemon.CodexPreToolUseHook:
+			fmt.Fprintln(a.stdout, hookDeny("Share2Us: the guard could not identify this tool call."))
+		case daemon.CodexStopHook:
+			fmt.Fprintln(a.stdout, "{}")
 		}
 		return 0
 	}
@@ -111,8 +115,12 @@ func (a app) agentHook(args []string) int {
 		}
 		return 0
 	}
-	if args[0] == daemon.CodexPreToolUseHook {
+	switch args[0] {
+	case daemon.CodexPreToolUseHook:
 		a.codexPreToolUse(in, daemonctl.Call, time.Sleep)
+		return 0
+	case daemon.CodexSessionStartHook, daemon.CodexPromptHook, daemon.CodexStopHook:
+		a.codexWindowHook(args[0], in, daemonctl.Call)
 		return 0
 	}
 	switch args[0] {
@@ -383,6 +391,11 @@ func (a app) endTerminalSession(sessionID string) {
 // come from the run's environment, which the delivered prompt can't change. Every way out
 // that isn't an allow prints a deny: Codex runs the tool on a hook error.
 func (a app) codexPreToolUse(in hookInput, call func(daemonctl.Request) (daemonctl.Response, bool), sleep func(time.Duration)) {
+	// In an `s2u codex` window only a delivered hop's turn is guarded; the owner's own turns
+	// run under their own Codex settings.
+	if os.Getenv(daemon.CodexLiveEnv) == "1" && !daemon.CodexTurnGuarded(in.SessionID, in.TurnID, in.TranscriptPath) {
+		return
+	}
 	project := os.Getenv(daemon.CodexGuardProjectEnv)
 	if project == "" {
 		fmt.Fprintln(a.stdout, hookDeny("Share2Us: the Codex guard has no trusted project path; tool use is blocked."))
@@ -478,6 +491,10 @@ func (a app) claude(ctx context.Context, args []string) int {
 // channelHint reports the available delivery path. A verified Zellij pane can
 // receive guarded prompts even when this organisation disables Claude channels.
 func (a app) channelHint(sess daemon.DiscoveredSession) {
+	if sess.Tool == "codex" {
+		a.codexHint(sess)
+		return
+	}
 	if sess.Tool != "claude" {
 		return
 	}
