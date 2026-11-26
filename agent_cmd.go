@@ -111,7 +111,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "       --inbox --file PATH                   drop a file in the agent's inbox without running it\n")
 	fmt.Fprintf(a.stderr, "       [--device ID] [--session ID]         or name the session instead; any id may be a\n                                             unique prefix, as `agent list` prints it\n")
 	fmt.Fprintf(a.stderr, "       [--project ID [--as AGENT-ID]]       to an agent in another account: both agents must\n                                             be members of that project. The sending agent is\n                                             the one bound to this directory unless --as names it.\n")
-	fmt.Fprintf(a.stderr, "  join <code>                                join a sharenet project with THIS session: type\n                                             !s2u agent join <code> in Claude Code or Codex\n")
+	fmt.Fprintf(a.stderr, "  join <code> [--wait]                       join a sharenet project with THIS session (--wait:\n                                             until a host approves); type\n                                             !s2u agent join <code> in Claude Code or Codex\n")
 	fmt.Fprintf(a.stderr, "  project <project-id>                       a project's reachable member agents\n")
 	fmt.Fprintf(a.stderr, "  status <request-id> [--json]               status, timing and result of a sent request\n")
 	fmt.Fprintf(a.stderr, "  pause|resume [--project DIR]               do not disturb: hold incoming prompts for the agent\n                                             bound here (default: this folder) until resumed\n")
@@ -772,6 +772,29 @@ func (a app) agentPause(pause bool, args []string) int {
 	return 0
 }
 
+var joinWaitPoll = 3 * time.Second
+
+// waitForAdmission returns once agentID is a member of the project: a device sees a
+// project's agents only when one of its own agents is in it.
+func (a app) waitForAdmission(ctx context.Context, client *clicore.Client, projectID, agentID string, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if agents, err := client.ListProjectAgents(ctx, projectID); err == nil {
+			for _, m := range agents {
+				if m.AgentID == agentID {
+					return true
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(joinWaitPoll):
+		}
+	}
+	return false
+}
+
 // defaultAgentWait stays under a coding agent's 10-minute shell limit.
 const defaultAgentWait = 9 * time.Minute
 
@@ -1058,8 +1081,11 @@ func portalURLFor(apiBase string) string {
 // portal-only sharenet management: it binds and asks; it decides nothing.
 func (a app) agentJoin(ctx context.Context, args []string) int {
 	code, sessionArg := "", ""
+	waitJoin := false
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--wait":
+			waitJoin = true
 		case "--session":
 			i++
 			if i < len(args) {
@@ -1145,9 +1171,18 @@ func (a app) agentJoin(ctx context.Context, args []string) int {
 	case "admitted":
 		fmt.Fprintf(a.stdout, "Joined %q in %q. Other agents in the project can now reach this one.\n", res.ProjectName, res.SharenetName)
 	default:
-		fmt.Fprintf(a.stdout, "Asked to join %q in %q. A host approves it in the portal; they see your email (%s).\n", res.ProjectName, res.SharenetName, credential.Email)
+		fmt.Fprintf(a.stdout, "Asked to join %q in %q. A host approves it (portal or CLI); they see your email (%s).\n", res.ProjectName, res.SharenetName, credential.Email)
 		fmt.Fprintln(a.stdout, "Once approved, you are a member of the sharenet and this agent is in the project.")
 		fmt.Fprintln(a.stdout, "If nobody approves it within 24 hours the request expires; ask the host for a new code then.")
+		if waitJoin && res.ProjectID != "" {
+			if a.waitForAdmission(ctx, client, res.ProjectID, binding.AgentID, defaultAgentWait) {
+				fmt.Fprintf(a.stdout, "✓ Approved: this agent is in %q now.\n", res.ProjectName)
+			} else {
+				fmt.Fprintf(a.stdout, "Still waiting for a host after %s; you'll get a notification when it's decided.\n", defaultAgentWait)
+			}
+		} else if res.ProjectID != "" {
+			fmt.Fprintf(a.stdout, "Wait here until it's approved: %s agent join %s --wait (or watch your notifications)\n", commandName, code)
+		}
 	}
 	// The agent can only receive work while the daemon runs: make sure it does.
 	a.ensureAgentReachable()
