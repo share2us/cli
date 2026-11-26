@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- Sharenet chat: `s2u sharenet <name>[.<project>] say "<text>" [--reply ID] [--as-me]` posts
+  a message in a channel; inside an agent's session it posts as that agent (which needs
+  "can post" in the project). `say --edit ID <text>` and `say --delete ID` change your own
+  messages. In a Secure ShareNet the message is encrypted on this device. A message that
+  looks like it contains a key or token is not sent. `activity` now shows messages (and
+  decrypts Secure ones this device holds the key for).
+
 ## [20261126171734] - 2026-11-26
 
 ### Added

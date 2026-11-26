@@ -229,6 +229,8 @@ func (a app) sharenetManage(ctx context.Context, target, cmd string, args []stri
 		return a.sharenetCode(ctx, client, n, projectName, args)
 	case "activity":
 		return a.sharenetActivity(ctx, client, n, projectName, args)
+	case "say":
+		return a.sharenetSay(ctx, client, n, projectName, args)
 	case "requests", "approve", "reject":
 		p, err := a.resolveProject(ctx, client, n, projectName)
 		if err != nil {
