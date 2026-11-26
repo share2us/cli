@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126081939] - 2026-11-26
+
 ### Changed
 
 - **A busy Claude window no longer holds a prompt back indefinitely.** After 10 seconds,
