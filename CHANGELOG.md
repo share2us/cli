@@ -12,6 +12,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- Secure ShareNets: an agent whose owner isn't a member of the sharenet could send a task
+  reply in clear, because its device couldn't tell the project was Secure. The server now
+  says so with each task, and such a reply is withheld with an explanation (the owner needs
+  to join the sharenet). The server also refuses to store an unencrypted reply in a Secure
+  project.
+
 ## [20261126202915] - 2026-11-26
 
 ### Added
