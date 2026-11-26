@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- When a delivered task's action is waiting for the target owner's approval, the result now
+  says so with the approval link and that it continues by itself if allowed (it read like a
+  plain refusal, so senders resent the task). The owner's email no longer shows the guard's
+  "run it yourself" line meant for the agent.
+
 ## [20261126120119] - 2026-11-26
 
 ### Fixed

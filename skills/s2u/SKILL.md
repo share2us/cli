@@ -88,6 +88,10 @@ it. Use that only when the user asks for a plain file transfer to a device.
   `Blocked on the target:` (its guard refused a command) means the request did NOT fully
   work. Tell the user plainly what broke and what would fix it; don't report success.
 
+- A result starting with `Waiting for the target owner's approval:` means the target asked its
+  owner (the link is in the text). Give the user that link; when they approve, the task
+  continues on the target and a new result arrives by itself. Don't suggest resending or
+  editing the target's rules.
 - `running: waiting for the target's owner to allow …`: the target agent hit an action its
   guard blocks; its owner was asked by email and in the portal and the task resumes when they
   allow it. Tell the user it's waiting on the target owner's approval (link: `s2u agent

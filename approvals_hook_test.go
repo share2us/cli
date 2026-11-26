@@ -44,22 +44,24 @@ func TestAskOwner(t *testing.T) {
 	approvalHold = 50 * time.Millisecond
 	defer func() { approvalHold = old }()
 
-	if ok, _ := askOwner(in, "guard", approvalHold, (&fakeApprovalDaemon{decision: "allow"}).call, noSleep); !ok {
+	if ok, _, _ := askOwner(in, "guard", approvalHold, (&fakeApprovalDaemon{decision: "allow"}).call, noSleep); !ok {
 		t.Fatal("a grant didn't allow")
 	}
-	if ok, _ := askOwner(in, "guard", approvalHold, (&fakeApprovalDaemon{decision: "pending", statuses: []string{"pending", "approved"}}).call, noSleep); !ok {
+	if ok, _, _ := askOwner(in, "guard", approvalHold, (&fakeApprovalDaemon{decision: "pending", statuses: []string{"pending", "approved"}}).call, noSleep); !ok {
 		t.Fatal("an approval during the hold didn't allow")
 	}
-	ok, why := askOwner(in, "guard", approvalHold, (&fakeApprovalDaemon{decision: "pending", statuses: []string{"denied"}}).call, noSleep)
+	ok, why, _ := askOwner(in, "guard", approvalHold, (&fakeApprovalDaemon{decision: "pending", statuses: []string{"denied"}}).call, noSleep)
 	if ok || !strings.Contains(why, "declined") {
 		t.Fatalf("deny: %v %q", ok, why)
 	}
 	f := &fakeApprovalDaemon{decision: "pending"}
-	ok, why = askOwner(in, "guard", approvalHold, f.call, func(time.Duration) { time.Sleep(10 * time.Millisecond) })
+	var url string
+	ok, why, url = askOwner(in, "guard", approvalHold, f.call, func(time.Duration) { time.Sleep(10 * time.Millisecond) })
+	_ = url
 	if ok || !strings.Contains(why, "haven't answered yet") || f.calls[len(f.calls)-1] != "approval-park" {
 		t.Fatalf("timeout: %v %q %v", ok, why, f.calls)
 	}
-	if ok, why := askOwner(in, "guard", approvalHold, (&fakeApprovalDaemon{decision: "deny"}).call, noSleep); ok || why != "guard" {
+	if ok, why, _ := askOwner(in, "guard", approvalHold, (&fakeApprovalDaemon{decision: "deny"}).call, noSleep); ok || why != "guard" {
 		t.Fatalf("no binding: %v %q", ok, why)
 	}
 }
