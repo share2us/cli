@@ -76,6 +76,11 @@ func HookDecision(cwd, tool string, input map[string]any, forceRestricted bool) 
 			}
 		}
 		return false, ""
+	case tool == "Bash" && priv == PrivilegePrivileged:
+		// The owner set this agent to privileged (network and pushes, for deploying):
+		// only the deny rules above apply, as in a headless privileged hop. It used to
+		// stay on the read-only list here, so privileged changed nothing for typed hops.
+		return false, ""
 	case tool == "Bash":
 		allowed := policy.AllowedTools
 		if priv == PrivilegeRestricted {
@@ -87,7 +92,11 @@ func HookDecision(cwd, tool string, input map[string]any, forceRestricted bool) 
 		if unsafeReadShell(cmd) {
 			return true, "Share2Us: delivered prompts may run only plain read commands without shell expansion, substitution, backgrounding or redirection."
 		}
-		for _, part := range splitShell(cmd) {
+		parts, ok := splitShellQuoted(cmd)
+		if !ok {
+			return true, "Share2Us: delivered prompts may run only plain read commands; this one has an unbalanced quote."
+		}
+		for _, part := range parts {
 			if !anyRuleMatches(allowed, "Bash", map[string]any{"command": part}) || !readCommandInside(cwd, part) {
 				return true, "Share2Us: a delivered prompt may run only read-only commands (ls, cat, grep, git status and similar); `" + part + "` would need your approval. Run it yourself if you want it."
 			}
@@ -397,6 +406,42 @@ func splitShell(cmd string) []string {
 		}
 	}
 	return out
+}
+
+// splitShellQuoted splits on ; | & and newlines OUTSIDE quotes, so a quoted search pattern
+// like "gateway|wan" stays one argument. Only the allow path uses it: deny matching keeps
+// splitShell, which splitting more makes stricter. ok=false on an unbalanced quote.
+func splitShellQuoted(cmd string) ([]string, bool) {
+	var out []string
+	var b strings.Builder
+	var quote rune
+	flush := func() {
+		if p := strings.TrimSpace(b.String()); p != "" {
+			out = append(out, p)
+		}
+		b.Reset()
+	}
+	for _, r := range cmd {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+			b.WriteRune(r)
+		case r == '\'' || r == '"':
+			quote = r
+			b.WriteRune(r)
+		case r == ';' || r == '|' || r == '&' || r == '\n':
+			flush()
+		default:
+			b.WriteRune(r)
+		}
+	}
+	if quote != 0 {
+		return nil, false
+	}
+	flush()
+	return out, true
 }
 
 // globMatch matches a path against a pattern where ** spans directories and *

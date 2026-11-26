@@ -72,7 +72,7 @@ func readCommandInside(cwd, part string) bool {
 	}
 	peelFlags := func(allowed map[string]bool) ([]string, bool) {
 		for len(args) > 0 && strings.HasPrefix(args[0], "-") && args[0] != "-" {
-			if !allowed[args[0]] {
+			if !allowed[args[0]] && !shortFlagsAllowed(args[0], allowed) {
 				return nil, false
 			}
 			args = args[1:]
@@ -84,8 +84,23 @@ func readCommandInside(cwd, part string) bool {
 		return len(args) == 0
 	case "which":
 		return len(args) == 1 && args[0] != "" && !strings.ContainsAny(args[0], "/-~*?[]{}")
+	case "date":
+		// Reading the clock only: -s / --set (which change it) are not accepted.
+		for _, a := range args {
+			if a != "-u" && a != "--utc" && a != "-R" && !strings.HasPrefix(a, "-I") && !strings.HasPrefix(a, "+") {
+				return false
+			}
+		}
+		return true
+	case "uname":
+		_, ok := peelFlags(map[string]bool{"-a": true, "-s": true, "-r": true, "-m": true, "-n": true, "-v": true, "-o": true})
+		return ok && len(args) == 0
+	case "uptime":
+		return len(args) == 0
 	case "ls":
-		files, ok := peelFlags(map[string]bool{"-l": true, "-a": true, "-h": true, "-la": true, "-al": true, "-lah": true, "-1": true})
+		files, ok := peelFlags(map[string]bool{"-l": true, "-a": true, "-A": true, "-h": true, "-1": true, "-t": true, "-r": true,
+			"-S": true, "-R": true, "-d": true, "-F": true, "-i": true, "--full-time": true,
+			"--time-style=full-iso": true, "--time-style=long-iso": true, "--time-style=iso": true})
 		return ok && paths(files)
 	case "cat":
 		files, ok := peelFlags(map[string]bool{"-n": true})
@@ -104,14 +119,30 @@ func readCommandInside(cwd, part string) bool {
 		}
 		return paths(args)
 	case "grep":
-		flags := map[string]bool{"-n": true, "-i": true, "-F": true, "-E": true, "-v": true, "-w": true, "-x": true, "-c": true, "-l": true}
-		for len(args) > 0 && flags[args[0]] {
-			args = args[1:]
-		}
-		if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		// Search flags only. -r/-R recurse, but every path (default: the project) is still
+		// checked; -f (patterns from a file) and anything that writes are not accepted.
+		flags := map[string]bool{"-n": true, "-i": true, "-F": true, "-E": true, "-v": true, "-w": true, "-x": true,
+			"-c": true, "-l": true, "-L": true, "-r": true, "-R": true, "-h": true, "-H": true, "-o": true, "-s": true, "-q": true}
+		patterns := 0
+		for len(args) > 0 && strings.HasPrefix(args[0], "-") && args[0] != "-" {
+			switch {
+			case args[0] == "-e" && len(args) > 1:
+				patterns++
+				args = args[2:]
+				continue
+			case flags[args[0]] || shortFlagsAllowed(args[0], flags):
+				args = args[1:]
+				continue
+			}
 			return false
 		}
-		return paths(args[1:])
+		if patterns == 0 {
+			if len(args) == 0 {
+				return false
+			}
+			args = args[1:] // the pattern
+		}
+		return paths(args)
 	case "git":
 		if len(args) == 0 {
 			return false
@@ -127,4 +158,17 @@ func readCommandInside(cwd, part string) bool {
 		}
 	}
 	return false
+}
+
+// shortFlagsAllowed accepts a bundle like "-rni" when every letter is an allowed flag.
+func shortFlagsAllowed(arg string, allowed map[string]bool) bool {
+	if len(arg) < 3 || arg[0] != '-' || arg[1] == '-' {
+		return false
+	}
+	for _, r := range arg[1:] {
+		if !allowed["-"+string(r)] {
+			return false
+		}
+	}
+	return true
 }
