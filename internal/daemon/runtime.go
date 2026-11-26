@@ -109,6 +109,8 @@ type Runtime struct {
 	// Owner approvals (ADR-052): grant cache, parked requests, the bridge for continuations.
 	approvalsOnce  sync.Once
 	approvalsState *approvalState
+	codexLiveOnce  sync.Once
+	codexLiveSt    *codexLiveState
 
 	// typedBlocks: why the last typed attempt per request didn't happen (for its status).
 	typedBlockMu sync.Mutex
@@ -271,6 +273,9 @@ func (rt *Runtime) control() func(daemonctl.Request) daemonctl.Response {
 		}
 		if resp, ok := rt.approvalControl(req); ok {
 			return resp
+		}
+		if req.Op == "codex-turn-done" {
+			return daemonctl.Response{OK: rt.codexTurnFinished(req.Args["session"], req.Args["turn"], req.Args["reply"])}
 		}
 		switch req.Op {
 		case "ping":

@@ -933,8 +933,18 @@ func sessionHeld(ctx context.Context, runner AgentRunner, sessionID string) bool
 	return false
 }
 
-// runInject runs the hop in the target session itself and reports the result.
+// runInject runs the hop in the target session itself and reports the result: in its open
+// `s2u codex` window when there is one, else headless.
 func (rt *Runtime) runInject(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, waited time.Duration) {
+	if req.Tool == "codex" && CodexLiveReady(req.TargetSessionID) > 0 {
+		rt.startCodexLive(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, waited)
+		return
+	}
+	rt.runHeadless(ctx, client, runner, deps, req, shown, prompt, senderName, cwd, waited)
+}
+
+// runHeadless resumes the session without a window (codex exec resume, claude -p).
+func (rt *Runtime) runHeadless(ctx context.Context, client AgentClient, runner AgentRunner, deps Deps, req clicore.AgentRequest, shown, prompt, senderName, cwd string, waited time.Duration) {
 	rt.hopMu.Lock()
 	defer rt.hopMu.Unlock()
 	rt.notify("Share2Us", "Running a prompt in your "+req.Tool+" session")

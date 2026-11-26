@@ -128,16 +128,28 @@ var (
 	}
 )
 
-// codexHookConfig is the `-c hooks.PreToolUse=...` value running exe's guard hook. The
-// values are JSON strings, which TOML reads as basic strings.
+// codexHookConfig is the `-c hooks.PreToolUse=...` value running exe's guard hook.
 func codexHookConfig(exe string) string {
+	return codexHookEntry(exe, "PreToolUse", codexHookMatcher, CodexPreToolUseHook, codexHookTimeout,
+		"Share2Us guard: if this needs approval, waiting for the owner (asked by email + portal)")
+}
+
+// codexHookEntry is one `-c hooks.<event>=...` value. The values are JSON strings, which
+// TOML reads as basic strings. An empty matcher matches everything.
+func codexHookEntry(exe, event, matcher, mode string, timeout int, status string) string {
 	q := func(s string) string {
 		b, _ := json.Marshal(s)
 		return string(b)
 	}
-	return "hooks.PreToolUse=[{matcher=" + q(codexHookMatcher) + ",hooks=[{type=\"command\",command=" +
-		q(claudeHookCommand(exe, CodexPreToolUseHook)) + ",timeout=" + strconv.Itoa(codexHookTimeout) +
-		",statusMessage=" + q("Share2Us guard: if this needs approval, waiting for the owner (asked by email + portal)") + "}]}]"
+	group := "{"
+	if matcher != "" {
+		group += "matcher=" + q(matcher) + ","
+	}
+	hook := "type=\"command\",command=" + q(claudeHookCommand(exe, mode)) + ",timeout=" + strconv.Itoa(timeout)
+	if status != "" {
+		hook += ",statusMessage=" + q(status)
+	}
+	return "hooks." + event + "=[" + group + "hooks=[{" + hook + "}]}]"
 }
 
 // codexGuardEnv sets the hook's trusted context: the project, the session and strict mode.

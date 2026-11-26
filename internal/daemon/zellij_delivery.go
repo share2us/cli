@@ -89,14 +89,7 @@ func (rt *Runtime) tryTypedInject(ctx context.Context, client AgentClient, runne
 		deps.logf("agent-bridge: typed delivery paused for %s: %s %v", req.TargetSessionID, limitReason, limitErr)
 		return false
 	}
-	sender := req.SenderDeviceID
-	if name := strings.TrimSpace(senderName); name != "" {
-		sender = fmt.Sprintf("%q (%s)", name, req.SenderDeviceID)
-	}
-	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s", sender, req.ID, prompt)
-	if !strings.Contains(prompt, "returns your final message to them automatically") {
-		visible += "\n\n" + typedReplyNote // an older sender didn't add its own reply instruction
-	}
+	visible := deliveredPromptText(req, senderName, prompt)
 	if visible, safe = safeTerminalText(visible); !safe {
 		rt.hub().withdraw(req.TargetSessionID, req.ID)
 		_ = EndTypedGuard(req.TargetSessionID, req.ID)
@@ -549,6 +542,20 @@ func ourInputExactly(screen, visible string, early bool) bool {
 func isCancelledErr(err error) bool {
 	var apiErr *clicore.APIError
 	return errors.As(err, &apiErr) && apiErr.Status == 409 && apiErr.Code == "cancelled"
+}
+
+// deliveredPromptText is a hop as the receiving session sees it: the header the guard hooks
+// recognise (request id), then the prompt and the reply instruction.
+func deliveredPromptText(req clicore.AgentRequest, senderName, prompt string) string {
+	sender := req.SenderDeviceID
+	if name := strings.TrimSpace(senderName); name != "" {
+		sender = fmt.Sprintf("%q (%s)", name, req.SenderDeviceID)
+	}
+	visible := fmt.Sprintf("[Share2Us] from device %s, request %s:\n\n%s", sender, req.ID, prompt)
+	if !strings.Contains(prompt, "returns your final message to them automatically") {
+		visible += "\n\n" + typedReplyNote // an older sender didn't add its own reply instruction
+	}
+	return visible
 }
 
 func typedDeliveredMsg(tool string) string {

@@ -36,6 +36,15 @@ never commit
 don't touch the payment code
 `
 
+// codexSetupTips: Codex differs from Claude in ways users trip over (owner, 2026-11-26).
+const codexSetupTips = `  Codex tips:
+    - The skill is $s2u in Codex (type $s2u, not /s2u): e.g. $s2u agents, $s2u send homelab "check disk space".
+    - Start Codex with "s2u codex" (or "s2u codex resume <id>") so tasks from other agents show up in
+      the window. Otherwise they run in the background and only their replies are visible.
+    - Make a Codex session reachable: type "! s2u agent bind" inside it.
+    - Blocked actions ask you (email + portal) before they run, as with Claude.
+`
+
 // setup writes a starter .s2u.rules for this project (or --global for the home
 // one). It never overwrites an existing file.
 // setup is the guided first run: one command takes a machine from nothing to "my agents
@@ -99,6 +108,11 @@ func (a app) setup(ctx context.Context, args []string) int {
 	if len(installed) > 0 {
 		ok("/s2u skill installed for %s", strings.Join(installed, ", "))
 	}
+	for _, label := range installed {
+		if label == "Codex" {
+			fmt.Fprint(a.stdout, codexSetupTips)
+		}
+	}
 
 	// 4. The agent session this runs in, if any.
 	if sess, err := daemon.FindOwnSession(ctx); err == nil {
@@ -109,7 +123,8 @@ func (a app) setup(ctx context.Context, args []string) int {
 			ok("This %s session is reachable as an agent (details: %s agent bindings)", sess.Tool, commandName)
 			// Bind explains when prompts can't appear live; that part matters here.
 			for _, line := range strings.Split(out.String(), "\n") {
-				if strings.Contains(line, "wait") || strings.Contains(line, "s2u claude") {
+				if strings.Contains(line, "wait") || strings.Contains(line, "s2u claude") ||
+					strings.Contains(line, "codex") || strings.Contains(line, "$s2u") || strings.Contains(line, "background") {
 					fmt.Fprintln(a.stdout, "  "+line)
 				}
 			}
@@ -117,7 +132,7 @@ func (a app) setup(ctx context.Context, args []string) int {
 			fmt.Fprint(a.stdout, out.String())
 		}
 	} else {
-		todo("To make an agent reachable, type `! %s setup` inside its Claude Code or Codex session (best started with `%s claude`).", commandName, commandName)
+		todo("To make an agent reachable, type `! %s setup` inside its Claude Code or Codex session (best started with `%s claude` or `%s codex`, so tasks show up in the window).", commandName, commandName, commandName)
 	}
 
 	// 5. Who it can talk to.

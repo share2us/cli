@@ -263,6 +263,8 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 		return a.sharenet(ctx, args[1:])
 	case "claude":
 		return a.claude(ctx, args[1:])
+	case "codex":
+		return a.codex(ctx, args[1:])
 	case "setup":
 		return a.setup(ctx, args[1:])
 	default:
