@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A blocked command now really waits for the owner's approval** (cli-core v0.80.0): the
+  hook's call to the background service timed out after 0.4 s, so it refused at once while the
+  request (and email) still went out.
+
 ## [20261126130126] - 2026-11-26
 
 ### Fixed
