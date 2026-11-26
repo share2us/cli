@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126102106] - 2026-11-26
+
 ### Added
 
 - **Manage sharenets from the CLI** (it was portal-only):
