@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261126235134] - 2026-11-26
+
 ### Added
 
 - Approvals in the chat: when the owner allows or declines a blocked action, the note they
