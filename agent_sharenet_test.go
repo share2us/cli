@@ -4,6 +4,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -59,5 +60,19 @@ func TestResolveSharenetAddress(t *testing.T) {
 	}
 	if _, _, ok, _ := a.resolveSharenetAddress(ctx, c, "other.reviewer"); ok {
 		t.Fatal("an unknown sharenet prefix must fall back to an ordinary name")
+	}
+}
+
+func TestSharenetShowListsAgentsWithAddresses(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	c := sharenetServer(t)
+	var out bytes.Buffer
+	a := app{stdout: &out, stderr: &out}
+	n, err := a.resolveSharenet(context.Background(), c, "BUTTERPOS")
+	if err != nil || n.ID != "net-1" {
+		t.Fatalf("resolve by name: %+v %v", n, err)
+	}
+	if _, err := a.resolveSharenet(context.Background(), c, "nope"); err == nil {
+		t.Fatal("unknown sharenet resolved")
 	}
 }

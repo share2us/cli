@@ -12,6 +12,14 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u sharenet list`: your sharenets with role, projects and whether they're Secure.
+- `s2u sharenet <name>`: a sharenet's projects and their agents, each with the address
+  `agent send --to` takes (`<sharenet>.<agent>`). `sharenet files|get` accept a name too.
+  `/s2u sharenet list` and `/s2u sharenet <name>` in agents. (Managing sharenets stays in
+  the portal.)
+
 ## [20261126082951] - 2026-11-26
 
 ### Added

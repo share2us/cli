@@ -20,6 +20,9 @@ matching row. With no command, or `help`, print this table and the output of
 | `agent <agent> <prompt>` | Same as `send <agent> <prompt>`. |
 | `send <agent> <task> [file]` | Hand a task (and optionally a file) to another agent (see "Sending"). |
 | `<sharenet>.<agent> send <task>` | Same as `send <sharenet>.<agent> <task>`. |
+| `sharenet list` | The user's sharenets with role, projects and Secure flag: `s2u sharenet list`. |
+| `sharenet <sharenet> [list]` | That sharenet's projects and agents, each with its send address: `s2u sharenet <name>`. |
+| `sharenet <sharenet> files` | Files posted in it: `s2u sharenet files <name>`. |
 | `agent pause` / `agent disable` | Do not disturb: hold incoming prompts for the agent bound in this folder until resumed: `s2u agent pause`. |
 | `agent resume` / `agent enable` | Deliver held prompts again: `s2u agent resume`. |
 | `ask <agent> <question>` | Same as send, phrased as a question that needs an answer back. |
