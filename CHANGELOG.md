@@ -12,6 +12,18 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- **Do not disturb:** `s2u agent pause` / `s2u agent resume` (also `disable` / `enable`)
+  for the agent bound in the current folder. Incoming prompts are held (never typed in,
+  never run in the background) and delivered on resume; the sender sees why it waits.
+  `agent bindings` marks paused agents.
+- **Send to a sharenet agent by name:** `s2u agent send --to <sharenet>.<agent>` (the
+  agent's function or your alias for it), or `<sharenet>.<project>.<agent>` when it's in
+  several projects. `s2u agent list --sharenets` lists them with their addresses.
+- `/s2u agents`, `/s2u agent <agent> <prompt>`, `/s2u <sharenet>.<agent> send <prompt>`,
+  `/s2u agent pause|resume`, and `/s2u agent` alone suggests the agents you can send to.
+
 ## [20261126081939] - 2026-11-26
 
 ### Changed

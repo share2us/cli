@@ -612,6 +612,11 @@ func (rt *Runtime) handleInject(ctx context.Context, client AgentClient, runner 
 		_ = client.AgentReportResult(ctx, req.ID, "done", filePath)
 		return
 	}
+	if bound && binding.Paused {
+		// The owner asked not to be disturbed: hold it (never headless) until resumed.
+		rt.holdInject(ctx, client, runner, deps, req, env.Prompt, prompt, env.SenderDeviceName, cwd)
+		return
+	}
 	if live {
 		if discovered.Status == "available" && rt.hub().channelReady(req.TargetSessionID) {
 			rt.deliverViaChannel(ctx, client, runner, deps, req, env.Prompt, prompt, env.SenderDeviceName, cwd, 0, false)
@@ -672,6 +677,8 @@ func holdMessages(req clicore.AgentRequest, pid int) (notice, status string) {
 	list, err := LoadBindings()
 	b, ok := BindingForSession(list, req.TargetSessionID)
 	switch {
+	case ok && b.Paused:
+		return "A prompt for your " + tool + " session is held: you paused deliveries there (s2u agent resume).", pausedStatus
 	case err != nil || !ok || b.Zellij == nil:
 		return "A prompt is waiting for your " + tool + " session. " + exitNote,
 			"Waiting: the " + tool + " session is open in a window. " + exitNote
@@ -686,6 +693,8 @@ func holdMessages(req clicore.AgentRequest, pid int) (notice, status string) {
 	return "A prompt is waiting for your " + tool + " session. Share2Us types it in when the window is idle.",
 		"Waiting: the " + tool + " session is busy (or its input holds other text). Share2Us types the prompt in as soon as it is idle."
 }
+
+const pausedStatus = "Waiting: the target's owner paused deliveries to this agent (do not disturb). It is delivered when they resume."
 
 // livePID is the process holding a session now, 0 when none is known.
 func livePID(ctx context.Context, runner AgentRunner, session string) int {
@@ -731,6 +740,9 @@ func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runn
 	var paneBlockedSince time.Time
 	rebindReported := false
 	lastBlock := ""
+	if SessionPaused(req.TargetSessionID) {
+		lastBlock = "paused" // holdMessages already said so
+	}
 	go func() {
 		defer rt.holding.Add(-1)
 		t := time.NewTicker(injectHoldPoll)
@@ -746,6 +758,17 @@ func (rt *Runtime) holdInjectState(ctx context.Context, client AgentClient, runn
 				_ = AppendHop(HopRecord{Time: time.Now().UTC(), RequestID: req.ID, Tool: req.Tool, From: req.SenderDeviceID,
 					Target: req.TargetSessionID, Mode: "waiting", Status: "cancelled"})
 				return
+			}
+			if SessionPaused(req.TargetSessionID) {
+				if lastBlock != "paused" {
+					lastBlock = "paused"
+					_ = client.AgentReportResult(ctx, req.ID, "waiting", pausedStatus)
+				}
+				continue
+			}
+			if lastBlock == "paused" {
+				lastBlock = ""
+				_ = client.AgentReportResult(ctx, req.ID, "waiting", "Waiting: its owner resumed deliveries; it is delivered next.")
 			}
 			// Prefer a proven channel; if the organisation blocks it, a verified
 			// Zellij pane and hook proof provide the local fallback.

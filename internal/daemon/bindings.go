@@ -56,6 +56,9 @@ type Binding struct {
 	// is only a hint: every delivery re-proves the process, pane, command and
 	// project before typing anything. Nil means live typing is unavailable.
 	Zellij *ZellijPane `json:"zellij,omitempty"`
+	// Paused: the owner asked not to be disturbed. Incoming prompts for this agent are
+	// held (not dropped, not run headless) until it is resumed.
+	Paused bool `json:"paused,omitempty"`
 	// TypedDeliveryDisabled is the owner's switch for automatic Zellij paste.
 	// Channel and headless delivery remain available when this is true.
 	TypedDeliveryDisabled bool `json:"typed_delivery_disabled,omitempty"`
@@ -181,6 +184,36 @@ func SetTypedDelivery(project string, enabled bool) (Binding, error) {
 		}
 	}
 	return Binding{}, os.ErrNotExist
+}
+
+// SetPaused pauses or resumes deliveries to every agent bound in project.
+func SetPaused(project string, paused bool) ([]Binding, error) {
+	list, err := LoadBindings()
+	if err != nil {
+		return nil, err
+	}
+	p := normalizeProject(project)
+	var changed []Binding
+	for i := range list {
+		if normalizeProject(list[i].Project) == p {
+			list[i].Paused = paused
+			changed = append(changed, list[i])
+		}
+	}
+	if len(changed) == 0 {
+		return nil, os.ErrNotExist
+	}
+	return changed, saveBindings(list)
+}
+
+// SessionPaused reports whether the agent bound to session is paused by its owner.
+func SessionPaused(session string) bool {
+	list, err := LoadBindings()
+	if err != nil {
+		return false
+	}
+	b, ok := BindingForSession(list, session)
+	return ok && b.Paused
 }
 
 // bindingsFile is the on-disk shape, versioned so the format can move.
