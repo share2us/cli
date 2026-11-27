@@ -41,7 +41,7 @@ func TestGeminiSessionOfFindsTheWindowsChat(t *testing.T) {
 	}
 	writeChat(t, named, "session-old.json", "11111111-old", "main", started.Add(-time.Hour))      // an earlier run
 	writeChat(t, named, "session-now.json", "22222222-now", "main", time.Now().Add(-time.Second)) // this window
-	writeChat(t, named, "session-sub.json", "33333333-sub", "subagent", time.Now())                // not a main chat
+	writeChat(t, named, "session-sub.json", "33333333-sub", "subagent", time.Now())               // not a main chat
 
 	readGeminiProc = func(pid int) (geminiProc, bool) {
 		switch pid {
