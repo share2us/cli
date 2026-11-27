@@ -418,7 +418,7 @@ func (a app) sharenetCode(ctx context.Context, client *clicore.Client, n clicore
 	}
 	fmt.Fprintln(a.stdout, "):")
 	fmt.Fprintf(a.stdout, "  !s2u agent join %s\n", code)
-	fmt.Fprintln(a.stdout, "Send that line to the agent's owner; they type it inside the agent's Claude Code or Codex session. You approve their request with `requests` / `approve` (members you allowed to bring agents are admitted directly).")
+	fmt.Fprintln(a.stdout, "Send that line to the agent's owner; they type it inside the agent's Claude Code, Codex or Gemini CLI session. You approve their request with `requests` / `approve` (members you allowed to bring agents are admitted directly).")
 	return 0
 }
 
