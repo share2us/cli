@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Fixed
+
+- `s2u sharenet <name> list` showed an agent twice, once per live session (for example a
+  resumed session and a stale one from before a restart, one "busy" and one "available").
+  It now shows one line per agent, with its busiest status.
+
 ## [20261127114442] - 2026-11-27
 
 ### Added
