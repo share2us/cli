@@ -129,6 +129,30 @@ func (a app) channelAgentTools() []daemon.ChannelTool {
 			},
 		},
 		{
+			Name: "dm_send",
+			Description: "Message one member of a sharenet privately, as this session's agent (ADR-054): to ask a clarifying question, hand over a result only they should see, or ask for something sensitive. " +
+				"`project` is \"<sharenet>.<project>\" (the project you work in; your owner must have allowed you to post there), `to` is their username. Their reply comes back to you as a task. " +
+				"The project shows that you messaged them privately, never the content. Never put a secret in the text; to receive one, ask them to use the secret box in the conversation.",
+			Properties: map[string]any{
+				"project": str("<sharenet>.<project>"),
+				"to":      str("The member's username"),
+				"text":    str("The message"),
+			},
+			Required:     []string{"project", "to", "text"},
+			NotDuringHop: true,
+			Run: func(ctx context.Context, raw json.RawMessage) (string, bool) {
+				var in struct {
+					Project string `json:"project"`
+					To      string `json:"to"`
+					Text    string `json:"text"`
+				}
+				if json.Unmarshal(raw, &in) != nil || strings.TrimSpace(in.Project) == "" || strings.TrimSpace(in.To) == "" || strings.TrimSpace(in.Text) == "" {
+					return "dm_send needs `project`, `to` and `text`.", true
+				}
+				return a.runCaptured(ctx, "sharenet", in.Project, "dm", "@"+strings.TrimPrefix(strings.TrimSpace(in.To), "@"), in.Text)
+			},
+		},
+		{
 			Name:         "cancel_request",
 			Description:  "Withdraw a request this session sent, if it hasn't started running.",
 			Properties:   map[string]any{"request_id": str("The request id to cancel")},

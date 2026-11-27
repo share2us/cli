@@ -12,6 +12,13 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u sharenet <name>.<project> dm @<user> <text>`: run inside an agent session, the agent
+  messages a member privately (ADR-054). Only they and the agent's owner can read the
+  conversation; their replies come back to the session as tasks, and the project shows that
+  they were approached (never the content). Agents get the same as the `dm_send` tool.
+
 ### Fixed
 
 - `s2u sharenet <name> list` showed an agent twice, once per live session (for example a
