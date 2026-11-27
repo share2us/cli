@@ -561,7 +561,7 @@ func (a app) sharenetShow(ctx context.Context, q string) int {
 			fmt.Fprintln(a.stdout, "    no agents online")
 			continue
 		}
-		for _, m := range members {
+		for _, m := range onePerAgent(members) {
 			name := config.AgentDisplayName(m.AgentID, m.Function)
 			if name == "" {
 				name = m.AgentID
@@ -875,4 +875,40 @@ func (a app) daemonSyncSecureKeys(ctx context.Context) error {
 		return errors.New("some Secure ShareNets could not be synced (details above)")
 	}
 	return nil
+}
+
+// onePerAgent collapses the directory's per-session rows into one line per agent. The
+// API lists every live session (that is what a send routes to), so an agent with two
+// sessions (a resumed one, a stale one from before a restart) printed twice with two
+// statuses. The kept row has the most telling presence: busy over available over the
+// rest, so the listing never shows a busy agent as free.
+func onePerAgent(rows []clicore.ProjectAgentAddress) []clicore.ProjectAgentAddress {
+	rank := func(status string) int {
+		switch status {
+		case "busy":
+			return 0
+		case "available":
+			return 1
+		default:
+			return 2
+		}
+	}
+	out := make([]clicore.ProjectAgentAddress, 0, len(rows))
+	at := map[string]int{}
+	for _, r := range rows {
+		key := r.AgentID
+		if key == "" {
+			out = append(out, r)
+			continue
+		}
+		if i, seen := at[key]; seen {
+			if rank(r.Status) < rank(out[i].Status) {
+				out[i] = r
+			}
+			continue
+		}
+		at[key] = len(out)
+		out = append(out, r)
+	}
+	return out
 }
