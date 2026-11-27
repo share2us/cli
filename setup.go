@@ -132,7 +132,7 @@ func (a app) setup(ctx context.Context, args []string) int {
 			fmt.Fprint(a.stdout, out.String())
 		}
 	} else {
-		todo("To make an agent reachable, type `! %s setup` inside its Claude Code or Codex session (best started with `%s claude` or `%s codex`, so tasks show up in the window).", commandName, commandName, commandName)
+		todo("To make an agent reachable, type `! %s setup` inside its Claude Code, Codex or Gemini CLI session (best started with `%s claude` or `%s codex`, so tasks show up in the window).", commandName, commandName, commandName)
 	}
 
 	// 5. Who it can talk to.

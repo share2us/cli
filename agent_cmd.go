@@ -117,7 +117,7 @@ func (a app) agentUsage() int {
 	fmt.Fprintf(a.stderr, "       --inbox --file PATH                   drop a file in the agent's inbox without running it\n")
 	fmt.Fprintf(a.stderr, "       [--device ID] [--session ID]         or name the session instead; any id may be a\n                                             unique prefix, as `agent list` prints it\n")
 	fmt.Fprintf(a.stderr, "       [--project ID [--as AGENT-ID]]       to an agent in another account: both agents must\n                                             be members of that project. The sending agent is\n                                             the one bound to this directory unless --as names it.\n")
-	fmt.Fprintf(a.stderr, "  join <code> [--wait]                       join a sharenet project with THIS session (--wait:\n                                             until a host approves); type\n                                             !s2u agent join <code> in Claude Code or Codex\n")
+	fmt.Fprintf(a.stderr, "  join <code> [--wait]                       join a sharenet project with THIS session (--wait:\n                                             until a host approves); type\n                                             !s2u agent join <code> in Claude Code, Codex or Gemini CLI\n")
 	fmt.Fprintf(a.stderr, "  project <project-id>                       a project's reachable member agents\n")
 	fmt.Fprintf(a.stderr, "  status <request-id> [--json]               status, timing and result of a sent request\n")
 	fmt.Fprintf(a.stderr, "  approvals                                  where blocked actions are approved (the portal)\n")
@@ -1167,7 +1167,7 @@ func (a app) agentJoin(ctx context.Context, args []string) int {
 		found, err := daemon.FindOwnSession(ctx)
 		if err != nil {
 			// The line people paste is s2u (the installed alias), whatever this binary is called.
-			fmt.Fprintf(a.stderr, "Could not find the agent session this is running in. Paste it into the Claude Code or Codex session you want to add:\n  !s2u agent join %s\n", code)
+			fmt.Fprintf(a.stderr, "Could not find the agent session this is running in. Paste it into the Claude Code, Codex or Gemini CLI session you want to add:\n  !s2u agent join %s\n", code)
 			a.printJoinCandidates(ctx, code)
 			return 1
 		}

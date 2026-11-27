@@ -24,7 +24,9 @@ import (
 //
 //   - Claude: an ancestor whose pid `claude agents --json` reports;
 //   - Codex: an ancestor that holds its session's rollout file open
-//     (~/.codex/sessions/.../rollout-*.jsonl), whose header names the session.
+//     (~/.codex/sessions/.../rollout-*.jsonl), whose header names the session;
+//   - Gemini: an ancestor running the gemini program; its session is the project's
+//     newest chat file since it started (selfsession_gemini.go).
 //
 // Nothing is looked up by name or directory, and nothing has to be copied: the
 // process tree is the proof of which session asked.
@@ -49,7 +51,10 @@ func FindOwnSession(ctx context.Context) (DiscoveredSession, error) {
 		if s, ok := claude[pid]; ok {
 			return s, true
 		}
-		return codexSessionOf(pid)
+		if s, ok := codexSessionOf(pid); ok {
+			return s, true
+		}
+		return geminiSessionOf(pid)
 	}
 	return ownSession(os.Getpid(), match, parentPID)
 }

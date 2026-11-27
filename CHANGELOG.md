@@ -12,6 +12,12 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+- `! s2u agent join <code>`, `! s2u agent bind` and `! s2u setup` now find a **Gemini CLI** session
+  they're typed into, like Claude Code and Codex: no `--session` id needed. (Gemini doesn't tell
+  shell commands its session, so the CLI takes the Gemini process's project folder and the chat it
+  wrote to most recently since it started.) Linux and macOS.
+
 ## [20261126235134] - 2026-11-26
 
 ### Added
