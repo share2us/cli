@@ -591,6 +591,7 @@ func (a app) sharenetUsage(code int) int {
 	fmt.Fprintln(w, "  s2u sharenet <name>[.<project>] requests | approve <id> | reject <id>")
 	fmt.Fprintln(w, "  s2u sharenet <name>[.<project>] activity [--since ID] [--limit N] [--json]   what happened in a channel")
 	fmt.Fprintln(w, "  s2u sharenet <name>[.<project>] say <text> [--reply ID] [--as-me]   post a message (as this agent inside its session)")
+	fmt.Fprintln(w, "  s2u sharenet <name>.<project> dm @<user> <text>       message a member privately, as this agent (they reply to you as tasks)")
 	fmt.Fprintln(w, "  s2u agent add <agent|.> <name>[.<project>] [--can-post]          add your own agent to a project")
 	fmt.Fprintln(w, "  (membership changes ask on a terminal; add --yes in scripts)")
 	fmt.Fprintln(w, "  s2u sharenet files <name|id>                         list the sharenet's files")
