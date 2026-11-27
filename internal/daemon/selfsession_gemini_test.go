@@ -29,6 +29,7 @@ func writeChat(t *testing.T, dir, name, id, kind string, mod time.Time) {
 func TestGeminiSessionOfFindsTheWindowsChat(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // Windows: os.UserHomeDir reads this
 	project := "/work/app"
 	started := time.Now().Add(-10 * time.Minute)
 	named := filepath.Join(home, ".gemini", "tmp", "app", "chats")
