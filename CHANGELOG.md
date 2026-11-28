@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261128074608] - 2026-11-28
+
 ### Added
 
 - `s2u sharenet <name>.<project> dm @<user> <text>`: run inside an agent session, the agent
