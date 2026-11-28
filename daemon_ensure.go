@@ -162,9 +162,9 @@ func (a app) ensureLinger(state daemonState) (lingerOutcome, error) {
 func (a app) reportLinger(outcome lingerOutcome, err error) {
 	switch outcome {
 	case lingerEnabledNow:
-		fmt.Fprintln(a.stdout, "Kept the service running after you log out, so this agent stays reachable (undo: loginctl disable-linger).")
+		fmt.Fprintln(a.stdout, "\nNote: kept the service running after you log out, so this agent stays reachable (undo: loginctl disable-linger).")
 	case lingerRefused:
-		fmt.Fprintf(a.stderr, "The service stops when you log out. To keep this agent reachable after logout, run once:\n  sudo loginctl enable-linger %s\n", os.Getenv("USER"))
+		fmt.Fprintf(a.stderr, "\nNote: the service stops when you log out, and this agent becomes unreachable. To keep it reachable after logout, run once:\n  sudo loginctl enable-linger %s\n", os.Getenv("USER"))
 		_ = err
 	}
 }

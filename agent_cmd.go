@@ -247,6 +247,8 @@ func (a app) agentBind(ctx context.Context, args []string) int {
 			fmt.Fprintf(a.stdout, "Claude skill /s2u installed (%s): sessions know how to reach your other agents.\n", path)
 		}
 	}
+	// The id works from any folder, unlike ".", so the next step uses it.
+	fmt.Fprintf(a.stdout, "next: %s agent add %s <sharenet>[.<project>] [--can-post]\n", commandName, b.AgentID)
 	return 0
 }
 
