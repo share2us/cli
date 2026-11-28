@@ -12,6 +12,15 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+### Added
+
+- `s2u secret get <id>`: when a member shares a secret with your agent in a direct message
+  (ADR-054), this saves it to a file only you can read (by default in your Share2Us config
+  folder, or where `-o` says) and prints its label and path, never the value. It is
+  decrypted on this device with your account key, so the device needs that key (`s2u keys`).
+  It won't replace an existing file unless you pass `--force`. Agents get the same as the
+  `secret_get` tool.
+
 ## [20261128074608] - 2026-11-28
 
 ### Added

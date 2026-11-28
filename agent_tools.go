@@ -153,6 +153,31 @@ func (a app) channelAgentTools() []daemon.ChannelTool {
 			},
 		},
 		{
+			Name: "secret_get",
+			Description: "Save a secret a member shared with you in a direct message (ADR-054) to a private file on this machine, and get back its label and path, never the value. " +
+				"`id` is the secret id from the task (\"share2us secret get <id>\"). Read the file only where the task needs the value, and never repeat the value in chat, replies or commits.",
+			Properties: map[string]any{
+				"id":   str("The secret id"),
+				"path": str("Optional file to save it to (default: the Share2Us config folder, secrets/<id>); must not exist yet"),
+			},
+			Required: []string{"id"},
+			// Allowed during a hop: the secret arrives as a DM reply, which is a delivered task.
+			Run: func(ctx context.Context, raw json.RawMessage) (string, bool) {
+				var in struct {
+					ID   string `json:"id"`
+					Path string `json:"path"`
+				}
+				if json.Unmarshal(raw, &in) != nil || strings.TrimSpace(in.ID) == "" {
+					return "secret_get needs `id`.", true
+				}
+				args := []string{"secret", "get", strings.TrimSpace(in.ID)}
+				if strings.TrimSpace(in.Path) != "" {
+					args = append(args, "-o", in.Path)
+				}
+				return a.runCaptured(ctx, args...)
+			},
+		},
+		{
 			Name:         "cancel_request",
 			Description:  "Withdraw a request this session sent, if it hasn't started running.",
 			Properties:   map[string]any{"request_id": str("The request id to cancel")},

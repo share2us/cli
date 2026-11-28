@@ -153,7 +153,7 @@ func (a app) maybeShowTip(command string) {
 		return
 	}
 	switch command {
-	case "", "help", "-h", "--help", "version", "-v", "--version", "tui", "mcp", "daemon", "agent", "forms", "setup", "keys", "sharenet":
+	case "", "help", "-h", "--help", "version", "-v", "--version", "tui", "mcp", "daemon", "agent", "forms", "setup", "keys", "secret", "sharenet":
 		return
 	}
 	if mrand.Intn(tipEveryN) != 0 {
@@ -259,6 +259,8 @@ func (a app) runCommand(ctx context.Context, args []string) int {
 		return a.forms(ctx, args[1:])
 	case "keys":
 		return a.keys(ctx, args[1:])
+	case "secret":
+		return a.secret(ctx, args[1:])
 	case "sharenet":
 		return a.sharenet(ctx, args[1:])
 	case "claude":
