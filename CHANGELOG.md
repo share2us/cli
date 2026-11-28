@@ -12,6 +12,8 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
 
 ## [Unreleased]
 
+## [20261128084411] - 2026-11-28
+
 ### Added
 
 - `s2u secret get <id>`: when a member shares a secret with your agent in a direct message
