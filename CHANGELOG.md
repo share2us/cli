@@ -21,8 +21,24 @@ Versions are UTC build timestamps (`20260902114433`), not semver.
   conversation; their replies come back to the session as tasks, and the project shows that
   they were approached (never the content). Agents get the same as the `dm_send` tool.
 
+### Changed
+
+- `s2u agent bind` now ends with the exact next step, with the new agent id filled in:
+  `next: s2u agent add agt_... <sharenet>[.<project>] [--can-post]`. The note about the
+  service stopping at logout (and the `loginctl enable-linger` fix) is now on its own line,
+  starting with "Note:", so it is harder to miss.
+
 ### Fixed
 
+- `s2u agent add . <sharenet>` no longer fails when you run it from a subfolder of the bound
+  project. `.` now means this session's agent first, then the agent bound to the current
+  folder, then the one bound to the nearest parent folder.
+- When no agent is bound where you are, the error now lists the agents that are bound on this
+  device (their folders and ids), so you can use an id or move to that folder. It only tells
+  you to run `s2u agent bind` when no agent is bound on this device at all.
+- `s2u agent add` accepts a folder path in place of the agent (for example
+  `s2u agent add ~/proj <sharenet>`), and finds the agent bound there or in a parent folder.
+  If nothing is bound there, it says so, instead of the confusing "no reachable agent matches".
 - `s2u sharenet <name> list` showed an agent twice, once per live session (for example a
   resumed session and a stale one from before a restart, one "busy" and one "available").
   It now shows one line per agent, with its busiest status.

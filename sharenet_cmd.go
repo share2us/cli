@@ -453,12 +453,13 @@ func (a app) sharenetRequests(ctx context.Context, client *clicore.Client, n cli
 }
 
 // agentAdd: `s2u agent add <agent|.> <net>[.<project>] [--can-post]` adds your own agent
-// (`.` = the one bound in this folder) to a sharenet project.
+// (`.` = this session's agent, or the one bound to this folder or a parent; a folder
+// path works the same way) to a sharenet project.
 func (a app) agentAdd(ctx context.Context, args []string) int {
 	canPost := hasFlag(args, "--can-post")
 	args = withoutFlags(args, "--can-post")
 	if len(args) != 2 {
-		fmt.Fprintf(a.stderr, "usage: %s agent add <agent|.> <sharenet>[.<project>] [--can-post]\n", commandName)
+		fmt.Fprintf(a.stderr, "usage: %s agent add <agent|.|path> <sharenet>[.<project>] [--can-post]\n  .  = this session's agent (or the one bound to this folder or a parent)\n", commandName)
 		return 2
 	}
 	client, ok := a.manageClient()
@@ -484,16 +485,12 @@ func (a app) agentAdd(ctx context.Context, args []string) int {
 	return a.addAgents(ctx, client, n, p, []string{agentID}, canPost)
 }
 
-// ownAgentID resolves "." (this folder's agent), an agent id, or a name of one of the
-// caller's own agents.
+// ownAgentID resolves "." (this session's agent, or the one bound to this folder or a
+// parent), a folder path (the agent bound there or in a parent), an agent id, or a
+// name of one of the caller's own agents.
 func (a app) ownAgentID(ctx context.Context, client *clicore.Client, q string) (string, error) {
-	if q == "." {
-		list, _ := daemon.LoadBindings()
-		cwd, _ := os.Getwd()
-		if id, ok := daemon.AgentIDForProject(list, cwd); ok {
-			return id, nil
-		}
-		return "", fmt.Errorf("no agent is bound in this folder; run `%s agent bind` inside its session", commandName)
+	if isAgentPathArg(q) {
+		return resolveLocalAgent(ctx, q)
 	}
 	if strings.HasPrefix(q, "agt_") && len(q) > 10 {
 		return q, nil
@@ -504,7 +501,17 @@ func (a app) ownAgentID(ctx context.Context, client *clicore.Client, q string) (
 	}
 	t, err := pickTarget(targets, targetQuery{Agent: q})
 	if err != nil {
+		// A bare name that is also a folder here: say what is bound there, rather
+		// than calling a folder an agent that does not match.
+		if errors.Is(err, errNoTarget) && isDir(q) {
+			return resolveLocalAgent(ctx, q)
+		}
 		return "", err
 	}
 	return t.AgentID, nil
+}
+
+func isDir(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
 }

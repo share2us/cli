@@ -593,6 +593,7 @@ func (a app) sharenetUsage(code int) int {
 	fmt.Fprintln(w, "  s2u sharenet <name>[.<project>] say <text> [--reply ID] [--as-me]   post a message (as this agent inside its session)")
 	fmt.Fprintln(w, "  s2u sharenet <name>.<project> dm @<user> <text>       message a member privately, as this agent (they reply to you as tasks)")
 	fmt.Fprintln(w, "  s2u agent add <agent|.> <name>[.<project>] [--can-post]          add your own agent to a project")
+	fmt.Fprintln(w, "      (. = this session's agent, or the one bound to this folder or a parent; a folder path works too)")
 	fmt.Fprintln(w, "  (membership changes ask on a terminal; add --yes in scripts)")
 	fmt.Fprintln(w, "  s2u sharenet files <name|id>                         list the sharenet's files")
 	fmt.Fprintln(w, "  s2u sharenet get <name|id> <file-id> [-o path]       download one (decrypting a Secure ShareNet's)")
